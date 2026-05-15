@@ -24,6 +24,15 @@ const latestRelated = (events: GenerationEvent[]) =>
 const latestEvidence = (events: GenerationEvent[]) =>
   [...events].reverse().find((event) => event.data?.evidence?.length)?.data?.evidence ?? []
 
+const orbitSlots = [
+  { x: -390, y: -235 },
+  { x: 0, y: -350 },
+  { x: 390, y: -235 },
+  { x: -390, y: 235 },
+  { x: 0, y: 350 },
+  { x: 390, y: 235 },
+]
+
 export const GenerationFlow = ({ market, activeStep, events }: GenerationFlowProps) => {
   const relatedMarkets = latestRelated(events)
   const evidence = latestEvidence(events)
@@ -54,7 +63,12 @@ export const GenerationFlow = ({ market, activeStep, events }: GenerationFlowPro
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: index * 0.08 }}
-              style={{ '--node-angle': `${index * 60}deg` } as CSSProperties}
+              style={
+                {
+                  '--node-x': `${orbitSlots[index]?.x ?? 0}px`,
+                  '--node-y': `${orbitSlots[index]?.y ?? 0}px`,
+                } as CSSProperties
+              }
             >
               <strong>{Math.round(item.price * 100)}%</strong>
               <span>{item.question}</span>
