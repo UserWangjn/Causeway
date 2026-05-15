@@ -22,6 +22,11 @@ GAMMA_BASE_URL = os.getenv("POLYMARKET_GAMMA_BASE_URL", "https://gamma-api.polym
 AI_BASE_URL = os.getenv("AI_BASE_URL", "https://apigpt.cc/v1").rstrip("/")
 AI_MODEL = os.getenv("AI_MODEL", "gpt-5.4-mini")
 AI_API_KEY = os.getenv("AI_API_KEY", "")
+FRONTEND_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("FRONTEND_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",")
+    if origin.strip()
+]
 
 Outcome = Literal["YES", "NO"]
 Direction = Literal["up", "down", "uncertain"]
@@ -204,7 +209,7 @@ UNIVERSE_CACHE: tuple[float, list[dict[str, Any]]] | None = None
 app = FastAPI(title="Polymarket Event Propagation Engine", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+    allow_origins=FRONTEND_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
