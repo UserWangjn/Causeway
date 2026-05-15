@@ -11,7 +11,7 @@ export const fetchScenarioPresets = async (): Promise<ScenarioPreset[]> => {
 }
 
 export const fetchMarketUniverse = async (): Promise<UniverseMarket[]> => {
-  const response = await fetch(`${API_BASE_URL}/api/markets/universe?limit=48`)
+  const response = await fetch(`${API_BASE_URL}/api/markets/universe?limit=32`)
   if (!response.ok) {
     throw new Error(`Market universe API failed: ${response.status}`)
   }
