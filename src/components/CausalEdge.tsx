@@ -17,9 +17,9 @@ export type CausalEdgeData = GraphEdge & {
 export type CausalFlowEdge = Edge<CausalEdgeData, 'causalEdge'>
 
 const strokeFor = (direction: GraphEdge['direction']) => {
-  if (direction === 'up') return '#1fbd6a'
-  if (direction === 'down') return '#ef4444'
-  return '#d7ae2f'
+  if (direction === 'up') return '#1452f0'
+  if (direction === 'down') return '#d92d20'
+  return '#8a6f12'
 }
 
 const widthFor = (strength: GraphEdge['strength']) => {
