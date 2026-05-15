@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { CheckCircle2, Loader2, Newspaper, Radio, Sparkles } from 'lucide-react'
-import type { CSSProperties } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import type { GenerationEvent, UniverseMarket } from '../types'
 
 type GenerationFlowProps = {
@@ -25,17 +25,23 @@ const latestEvidence = (events: GenerationEvent[]) =>
   [...events].reverse().find((event) => event.data?.evidence?.length)?.data?.evidence ?? []
 
 const orbitSlots = [
-  { x: -390, y: -235 },
-  { x: 0, y: -350 },
-  { x: 390, y: -235 },
-  { x: -390, y: 235 },
-  { x: 0, y: 350 },
-  { x: 390, y: 235 },
+  { x: -390, y: -260 },
+  { x: 390, y: -260 },
+  { x: -390, y: 0 },
+  { x: 390, y: 0 },
+  { x: -390, y: 260 },
+  { x: 390, y: 260 },
 ]
 
 export const GenerationFlow = ({ market, activeStep, events }: GenerationFlowProps) => {
   const relatedMarkets = latestRelated(events)
   const evidence = latestEvidence(events)
+  const logRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!logRef.current) return
+    logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [events.length])
 
   return (
     <section className="generation-screen">
@@ -91,7 +97,7 @@ export const GenerationFlow = ({ market, activeStep, events }: GenerationFlowPro
             <Radio size={16} />
             Live work log
           </div>
-          <div className="generation-event-list">
+          <div className="generation-event-list" ref={logRef}>
             {events.length === 0 && <div className="generation-event">Waiting for backend stream...</div>}
             {events.map((event, index) => (
               <motion.div

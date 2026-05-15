@@ -575,10 +575,12 @@ button {
 }
 
 .generation-screen {
+  height: calc(100vh - 64px);
   display: grid;
   grid-template-columns: minmax(0, 1fr) 430px;
   gap: 24px;
   padding: 32px;
+  overflow: hidden;
 }
 
 .generation-core {
@@ -690,13 +692,18 @@ button {
   right: auto;
   bottom: auto;
   width: auto;
-  overflow-y: auto;
+  height: calc(100vh - 128px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .generation-steps {
+  flex: 0 0 auto;
   display: grid;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: 0;
 }
 
 .generation-step {
@@ -733,6 +740,10 @@ button {
 }
 
 .generation-live {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   margin-top: 18px;
   margin-bottom: 16px;
   padding: 12px;
@@ -742,6 +753,7 @@ button {
 }
 
 .generation-live-title {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -753,12 +765,15 @@ button {
 }
 
 .generation-event-list {
+  flex: 1 1 auto;
   max-height: none;
   min-height: 0;
-  overflow: visible;
+  overflow-y: auto;
   display: grid;
+  align-content: start;
   gap: 9px;
   padding-right: 0;
+  scrollbar-width: thin;
 }
 
 .generation-event {
