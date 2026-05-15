@@ -729,8 +729,11 @@ button {
 
 .generation-live {
   margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid rgba(32, 229, 143, 0.16);
+  border-radius: 10px;
+  background: rgba(6, 18, 15, 0.42);
 }
 
 .generation-live-title {
@@ -745,8 +748,8 @@ button {
 }
 
 .generation-event-list {
-  max-height: calc(100vh - 520px);
-  min-height: 150px;
+  max-height: 300px;
+  min-height: 126px;
   overflow-y: auto;
   display: grid;
   gap: 9px;
@@ -949,6 +952,7 @@ button {
 
 .graph-shell {
   grid-row: 1 / -1;
+  width: calc(100% - 454px);
   min-height: 0;
   height: 100%;
   position: relative;
@@ -1469,6 +1473,10 @@ button {
   .canvas-area {
     min-height: 72vh;
     height: 72vh;
+  }
+
+  .graph-shell {
+    width: 100%;
   }
 
   .side-panel {

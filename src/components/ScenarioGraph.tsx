@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import {
   Background,
   Controls,
@@ -10,7 +10,6 @@ import {
 import '@xyflow/react/dist/style.css'
 import { MarketNode, type MarketNodeData } from './MarketNode'
 import { CausalEdge, type CausalEdgeData } from './CausalEdge'
-import { layoutGraph } from '../utils/layout'
 import { useScenarioStore } from '../store/scenarioStore'
 import type { GraphEdge, GraphNode, ImpactDirection, ScenarioPreset } from '../types'
 
@@ -51,11 +50,31 @@ const buildNodeStatus = (
   return 'idle'
 }
 
+const getStablePosition = (node: GraphNode, index: number, scenario: ScenarioPreset) => {
+  if (node.id === scenario.rootNodeId) {
+    return { x: 0, y: 260 }
+  }
+
+  const incoming = scenario.edges.find((edge) => edge.target === node.id)
+  const level = incoming?.source === scenario.rootNodeId ? 1 : 2
+  const levelNodes = scenario.nodes.filter((candidate) => {
+    if (candidate.id === scenario.rootNodeId) return false
+    const candidateIncoming = scenario.edges.find((edge) => edge.target === candidate.id)
+    return level === 1 ? candidateIncoming?.source === scenario.rootNodeId : candidateIncoming?.source !== scenario.rootNodeId
+  })
+  const levelIndex = Math.max(0, levelNodes.findIndex((candidate) => candidate.id === node.id))
+  const slots = level === 1 ? [80, 260, 440, 620] : [140, 320, 500, 680]
+
+  return {
+    x: level * 390,
+    y: slots[levelIndex % slots.length] + Math.floor(levelIndex / slots.length) * 150 + index * 0.01,
+  }
+}
+
 export const ScenarioGraph = ({ scenario }: ScenarioGraphProps) => {
   const activeStepIndex = useScenarioStore((state) => state.activeStepIndex)
   const setStep = useScenarioStore((state) => state.setStep)
   const play = useScenarioStore((state) => state.play)
-  const [laidOutNodes, setLaidOutNodes] = useState<Node<MarketNodeData>[]>([])
 
   const activeEdgeIds = useMemo(
     () => new Set(scenario.steps.slice(0, activeStepIndex + 1).flatMap((step) => step.edgeIds)),
@@ -84,7 +103,7 @@ export const ScenarioGraph = ({ scenario }: ScenarioGraphProps) => {
       return {
         id: node.id,
         type: 'marketNode',
-        position: { x: (index % 3) * 360, y: Math.floor(index / 3) * 220 },
+        position: getStablePosition(node, index, scenario),
         data: {
           ...node,
           status: buildNodeStatus(node, scenario, activeStepIndex),
@@ -111,31 +130,19 @@ export const ScenarioGraph = ({ scenario }: ScenarioGraphProps) => {
     }))
   }, [activeEdgeIds, scenario.edges])
 
-  useEffect(() => {
-    let mounted = true
-
-    layoutGraph(nodes, edges).then((layouted) => {
-      if (mounted) setLaidOutNodes(layouted)
-    })
-
-    return () => {
-      mounted = false
-    }
-  }, [edges, nodes])
-
   return (
     <ReactFlowProvider>
       <div className="graph-shell">
         <ReactFlow
-          nodes={laidOutNodes.length ? laidOutNodes : nodes}
+          nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           fitView
-          fitViewOptions={{ padding: 0.18 }}
+          fitViewOptions={{ padding: 0.2, maxZoom: 0.95 }}
           minZoom={0.35}
           maxZoom={1.35}
-          nodesDraggable={false}
+          nodesDraggable
           proOptions={{ hideAttribution: true }}
         >
           <Background color="#273244" gap={28} size={1} />

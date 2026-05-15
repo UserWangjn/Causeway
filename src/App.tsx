@@ -100,7 +100,14 @@ function App() {
     if (!selectedMarket) return
     setMode('generating')
     setGenerationStep(0)
-    setGenerationEvents([])
+    setGenerationEvents([
+      {
+        type: 'root',
+        step: 0,
+        message: `Preparing live PM root: ${selectedMarket.question}`,
+        data: { root: selectedMarket },
+      },
+    ])
     try {
       const generated = await generateScenarioStream(selectedMarket.id, (event) => {
         setGenerationStep(event.step)

@@ -57,6 +57,7 @@ export const MarketUniverse = ({
   const cloudRef = useRef<HTMLDivElement>(null)
   const [cloudSize, setCloudSize] = useState({ width: 0, height: 0 })
   const [draggedPositions, setDraggedPositions] = useState<Record<string, { x: number; y: number }>>({})
+  const [raisedMarketId, setRaisedMarketId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!cloudRef.current) return
@@ -124,12 +125,18 @@ export const MarketUniverse = ({
                   x: position.x - size / 2,
                   y: position.y - size / 2,
                   animationDelay: `${(index % 9) * 0.27}s`,
+                  zIndex: raisedMarketId === market.id ? 30 : selected ? 20 : 1,
                 } as CSSProperties}
+                onPointerDown={() => {
+                  setRaisedMarketId(market.id)
+                  onSelect(market)
+                }}
                 onClick={() => onSelect(market)}
                 drag
                 dragConstraints={cloudRef}
                 dragElastic={0.08}
                 dragMomentum={false}
+                whileDrag={{ scale: 1.1 }}
                 onDragEnd={(event) => {
                   if (!cloudRef.current) return
                   const nodeRect = (event.currentTarget as HTMLElement).getBoundingClientRect()

@@ -71,24 +71,6 @@ export const GenerationFlow = ({ market, activeStep, events }: GenerationFlowPro
           AI refinement status. Current run has {relatedMarkets.length} related markets and {evidence.length} evidence
           items staged.
         </p>
-        <div className="generation-steps">
-          {steps.map((step, index) => {
-            const done = index < activeStep
-            const active = index === activeStep
-            return (
-              <motion.div
-                key={step}
-                className={active ? 'generation-step generation-step--active' : done ? 'generation-step generation-step--done' : 'generation-step'}
-                initial={{ opacity: 0, x: 16 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.05 }}
-              >
-                {done ? <CheckCircle2 size={17} /> : active ? <Loader2 className="spin" size={17} /> : <span />}
-                {step}
-              </motion.div>
-            )
-          })}
-        </div>
 
         <div className="generation-live">
           <div className="generation-live-title">
@@ -96,6 +78,7 @@ export const GenerationFlow = ({ market, activeStep, events }: GenerationFlowPro
             Live work log
           </div>
           <div className="generation-event-list">
+            {events.length === 0 && <div className="generation-event">Waiting for backend stream...</div>}
             {events.map((event, index) => (
               <motion.div
                 key={`${event.type}-${index}`}
@@ -130,6 +113,25 @@ export const GenerationFlow = ({ market, activeStep, events }: GenerationFlowPro
               </motion.div>
             ))}
           </div>
+        </div>
+
+        <div className="generation-steps">
+          {steps.map((step, index) => {
+            const done = index < activeStep
+            const active = index === activeStep
+            return (
+              <motion.div
+                key={step}
+                className={active ? 'generation-step generation-step--active' : done ? 'generation-step generation-step--done' : 'generation-step'}
+                initial={{ opacity: 0, x: 16 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: index * 0.05 }}
+              >
+                {done ? <CheckCircle2 size={17} /> : active ? <Loader2 className="spin" size={17} /> : <span />}
+                {step}
+              </motion.div>
+            )
+          })}
         </div>
       </aside>
     </section>
