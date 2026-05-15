@@ -899,6 +899,107 @@ async def generate_scenario(request: ScenarioGenerateRequest):
     return scenario
 
 
+def _sse(payload: dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/api/scenario/generate/stream")
+async def generate_scenario_stream(request: ScenarioGenerateRequest):
+    async def stream():
+        try:
+            pool = await discover_market_pool()
+            root_id = request.root_market_id.removeprefix("pm-")
+            root = next((market for market in pool if _market_id(market) == root_id), None)
+            if root is None:
+                searches = await asyncio.gather(
+                    *(public_search_markets(term, limit=12) for term in _extract_keywords(request.root_market_id, 4)),
+                    return_exceptions=True,
+                )
+                extra: list[dict[str, Any]] = []
+                for result in searches:
+                    if not isinstance(result, Exception):
+                        extra.extend(result)
+                pool = _dedupe_markets([*pool, *extra])
+                root = next((market for market in pool if _market_id(market) == root_id), None)
+            if root is None:
+                yield _sse({"type": "error", "step": 0, "message": "Root market not found in live Polymarket universe"})
+                return
+
+            root_item = _universe_item(root).model_dump(mode="json")
+            yield _sse(
+                {
+                    "type": "root",
+                    "step": 0,
+                    "message": f"Locked live PM root: {root_item['question']}",
+                    "data": {"root": root_item},
+                }
+            )
+
+            related = await related_markets_for_root(root, pool, count=7)
+            related_items = [_universe_item(market).model_dump(mode="json") for market in related[1:]]
+            yield _sse(
+                {
+                    "type": "related",
+                    "step": 1,
+                    "message": f"Found {len(related_items)} related Polymarket markets from live Gamma/search pool",
+                    "data": {"markets": related_items},
+                }
+            )
+
+            evidence_query = f"{root.get('question', '')} {_event_title(root)}"
+            evidence = await fetch_news_evidence(evidence_query, limit=6)
+            yield _sse(
+                {
+                    "type": "evidence",
+                    "step": 2,
+                    "message": f"Fetched {len(evidence)} recent news evidence items for: {evidence_query[:96]}",
+                    "data": {"evidence": [item.model_dump(mode="json") for item in evidence]},
+                }
+            )
+
+            scenario = build_dynamic_scenario(root, related, evidence)
+            yield _sse(
+                {
+                    "type": "draft",
+                    "step": 4,
+                    "message": f"Drafted {len(scenario.edges)} causal edges across {len(scenario.nodes)} PM nodes",
+                    "data": {"edgeCount": len(scenario.edges), "nodeCount": len(scenario.nodes)},
+                }
+            )
+
+            if request.use_ai:
+                yield _sse(
+                    {
+                        "type": "ai",
+                        "step": 5,
+                        "message": f"Sending causal draft to {AI_MODEL} for direction, confidence, and delta review",
+                        "data": {"aiStatus": "disabled" if not AI_API_KEY else scenario.aiStatus},
+                    }
+                )
+                scenario = await analyze_with_ai(scenario)
+                yield _sse(
+                    {
+                        "type": "ai",
+                        "step": 5,
+                        "message": "AI review completed" if scenario.aiStatus == "refined" else "AI review failed",
+                        "data": {"aiStatus": scenario.aiStatus, "aiError": scenario.aiError},
+                    }
+                )
+
+            yield _sse(
+                {
+                    "type": "done",
+                    "step": 5,
+                    "message": "Playable causal scenario is ready",
+                    "scenario": scenario.model_dump(mode="json"),
+                }
+            )
+        except Exception as exc:
+            yield _sse({"type": "error", "step": 0, "message": f"{type(exc).__name__}: {exc}"[:220]})
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
 @app.get("/api/graph/scenario-presets", response_model=list[ScenarioPreset])
 async def scenario_presets(use_ai: bool = False):
     cache_key = f"dynamic:{use_ai}"

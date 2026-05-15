@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { Activity, Loader2, Network, Play } from 'lucide-react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { UniverseMarket } from '../types'
 
 type MarketUniverseProps = {
@@ -27,16 +28,22 @@ const clusterFor = (market: UniverseMarket) => {
 
 const sizeFor = (market: UniverseMarket) => {
   const volume = Math.max(1, market.volume)
-  return Math.max(82, Math.min(138, 66 + Math.log10(volume) * 10))
+  return Math.max(74, Math.min(148, 62 + Math.log10(volume) * 10))
 }
 
-const positionFor = (index: number) => {
-  const x = 8 + ((index * 37) % 82)
-  const y = 14 + ((index * 29) % 70)
+const positionFor = (index: number, width: number, height: number) => {
+  const xPercent = 8 + ((index * 37) % 82)
+  const yPercent = 14 + ((index * 29) % 70)
   return {
-    left: `${x}%`,
-    top: `${y}%`,
+    x: (xPercent / 100) * width,
+    y: (yPercent / 100) * height,
   }
+}
+
+const formatVolume = (volume: number) => {
+  if (volume >= 1_000_000) return `$${(volume / 1_000_000).toFixed(1)}M`
+  if (volume >= 1_000) return `$${(volume / 1_000).toFixed(0)}K`
+  return `$${Math.round(volume)}`
 }
 
 export const MarketUniverse = ({
@@ -47,6 +54,23 @@ export const MarketUniverse = ({
   onSelect,
   onGenerate,
 }: MarketUniverseProps) => {
+  const cloudRef = useRef<HTMLDivElement>(null)
+  const [cloudSize, setCloudSize] = useState({ width: 0, height: 0 })
+  const [draggedPositions, setDraggedPositions] = useState<Record<string, { x: number; y: number }>>({})
+
+  useEffect(() => {
+    if (!cloudRef.current) return
+    const update = () => {
+      if (!cloudRef.current) return
+      const rect = cloudRef.current.getBoundingClientRect()
+      setCloudSize({ width: rect.width, height: rect.height })
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(cloudRef.current)
+    return () => observer.disconnect()
+  }, [])
+
   return (
     <section className="universe">
       <div className="universe-stage">
@@ -57,6 +81,12 @@ export const MarketUniverse = ({
             Live PM nodes pulse by price and volume. Select one root event, then let AI search related markets, news,
             and evidence to assemble the causal run.
           </p>
+        </div>
+
+        <div className="universe-legend">
+          <span>Drag nodes to reorganize</span>
+          <span>Bubble size = log market volume</span>
+          <span>Number = YES probability</span>
         </div>
 
         <div className="cluster-ring" aria-hidden="true">
@@ -76,29 +106,49 @@ export const MarketUniverse = ({
 
         {error && <div className="universe-error">{error}</div>}
 
-        <div className="market-cloud">
+        <div className="market-cloud" ref={cloudRef}>
           {markets.map((market, index) => {
             const selected = selectedMarket?.id === market.id
             const size = sizeFor(market)
             const price = Math.round(market.price * 100)
+            const position =
+              draggedPositions[market.id] ?? positionFor(index, cloudSize.width || 1200, cloudSize.height || 640)
             return (
               <motion.button
                 key={market.id}
                 type="button"
                 className={selected ? 'universe-node universe-node--selected' : 'universe-node'}
                 style={{
-                  ...positionFor(index),
                   width: size,
                   height: size,
+                  x: position.x - size / 2,
+                  y: position.y - size / 2,
                   animationDelay: `${(index % 9) * 0.27}s`,
-                }}
+                } as CSSProperties}
                 onClick={() => onSelect(market)}
+                drag
+                dragConstraints={cloudRef}
+                dragElastic={0.08}
+                dragMomentum={false}
+                onDragEnd={(event) => {
+                  if (!cloudRef.current) return
+                  const nodeRect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+                  const cloudRect = cloudRef.current.getBoundingClientRect()
+                  setDraggedPositions((current) => ({
+                    ...current,
+                    [market.id]: {
+                      x: nodeRect.left - cloudRect.left + nodeRect.width / 2,
+                      y: nodeRect.top - cloudRect.top + nodeRect.height / 2,
+                    },
+                  }))
+                }}
                 initial={{ opacity: 0, scale: 0.72 }}
                 animate={{ opacity: 1, scale: selected ? 1.12 : 1 }}
                 transition={{ delay: index * 0.018, duration: 0.36 }}
               >
                 <span className="universe-node-price">{price}%</span>
                 <span className="universe-node-question">{market.question}</span>
+                <span className="universe-node-volume">{formatVolume(market.volume)}</span>
                 <span className={`universe-node-cluster universe-node-cluster--${clusterFor(market).toLowerCase()}`}>
                   {clusterFor(market)}
                 </span>
@@ -129,6 +179,10 @@ export const MarketUniverse = ({
                 <strong>{selectedMarket.category}</strong>
                 category
               </span>
+            </div>
+            <div className="root-size-note">
+              Current bubble diameter: {Math.round(sizeFor(selectedMarket))}px, derived from log market volume (
+              {formatVolume(selectedMarket.volume)}).
             </div>
             <p>
               Start a run to pull related PM markets, search current news, and let the agent chain assemble a causal

@@ -25,6 +25,27 @@ export type UniverseMarket = {
   endDate?: string
 }
 
+export type GenerationEvent = {
+  type: 'root' | 'related' | 'evidence' | 'draft' | 'ai' | 'done' | 'error'
+  step: number
+  message: string
+  data?: {
+    root?: UniverseMarket
+    markets?: UniverseMarket[]
+    evidence?: Array<{
+      title: string
+      url: string
+      source?: string
+      published?: string
+    }>
+    edgeCount?: number
+    nodeCount?: number
+    aiStatus?: ScenarioPreset['aiStatus']
+    aiError?: string | null
+  }
+  scenario?: ScenarioPreset
+}
+
 export type GraphEdge = {
   id: string
   source: string

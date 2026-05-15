@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Download, Search, Share2 } from 'lucide-react'
-import { fetchMarketUniverse, generateScenario } from './api'
+import { fetchMarketUniverse, generateScenarioStream } from './api'
 import { GenerationFlow } from './components/GenerationFlow'
 import { LanguageToggle } from './components/LanguageToggle'
 import { MarketUniverse } from './components/MarketUniverse'
@@ -11,7 +11,7 @@ import { TimelineControls } from './components/TimelineControls'
 import { scenarios as mockScenarios } from './data/scenarios'
 import { translateScenario, uiText } from './i18n'
 import { useScenarioStore } from './store/scenarioStore'
-import type { ScenarioPreset, UniverseMarket } from './types'
+import type { GenerationEvent, ScenarioPreset, UniverseMarket } from './types'
 
 const STEP_MS = 1900
 const GENERATION_STEP_MS = 980
@@ -35,6 +35,7 @@ function App() {
   const [loadingUniverse, setLoadingUniverse] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [generationStep, setGenerationStep] = useState(0)
+  const [generationEvents, setGenerationEvents] = useState<GenerationEvent[]>([])
 
   const scenarioCatalog = generatedScenarios.length ? generatedScenarios : mockScenarios
   const baseScenario = scenarioCatalog.find((candidate) => candidate.id === scenarioId) ?? scenarioCatalog[0]
@@ -99,8 +100,12 @@ function App() {
     if (!selectedMarket) return
     setMode('generating')
     setGenerationStep(0)
+    setGenerationEvents([])
     try {
-      const generated = await generateScenario(selectedMarket.id)
+      const generated = await generateScenarioStream(selectedMarket.id, (event) => {
+        setGenerationStep(event.step)
+        setGenerationEvents((current) => [...current, event].slice(-16))
+      })
       if (generated.aiStatus !== 'refined') {
         throw new Error(generated.aiError ?? 'AI refinement did not complete')
       }
@@ -180,7 +185,9 @@ function App() {
         />
       )}
 
-      {mode === 'generating' && selectedMarket && <GenerationFlow market={selectedMarket} activeStep={generationStep} />}
+      {mode === 'generating' && selectedMarket && (
+        <GenerationFlow market={selectedMarket} activeStep={generationStep} events={generationEvents} />
+      )}
 
       {mode === 'scenario' && scenario && (
         <section className="workspace">
