@@ -7,13 +7,11 @@ import { MarketUniverse } from './components/MarketUniverse'
 import { ScenarioGraph } from './components/ScenarioGraph'
 import { ScenarioPanel } from './components/ScenarioPanel'
 import { ScenarioTabs } from './components/ScenarioTabs'
-import { TimelineControls } from './components/TimelineControls'
 import { scenarios as mockScenarios } from './data/scenarios'
 import { translateScenario, uiText } from './i18n'
 import { useScenarioStore } from './store/scenarioStore'
 import type { GenerationEvent, ScenarioPreset, UniverseMarket } from './types'
 
-const STEP_MS = 1900
 const GENERATION_STEP_MS = 980
 
 type AppMode = 'universe' | 'generating' | 'scenario'
@@ -21,9 +19,6 @@ type AppMode = 'universe' | 'generating' | 'scenario'
 function App() {
   const scenarioId = useScenarioStore((state) => state.scenarioId)
   const language = useScenarioStore((state) => state.language)
-  const activeStepIndex = useScenarioStore((state) => state.activeStepIndex)
-  const isPlaying = useScenarioStore((state) => state.isPlaying)
-  const nextStep = useScenarioStore((state) => state.nextStep)
   const pause = useScenarioStore((state) => state.pause)
   const setScenario = useScenarioStore((state) => state.setScenario)
   const setStep = useScenarioStore((state) => state.setStep)
@@ -77,18 +72,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (mode !== 'scenario' || !isPlaying || !scenario) return
-
-    if (activeStepIndex >= scenario.steps.length - 1) {
-      pause()
-      return
-    }
-
-    const timer = window.setTimeout(() => nextStep(scenario.steps.length - 1), activeStepIndex < 0 ? 250 : STEP_MS)
-    return () => window.clearTimeout(timer)
-  }, [activeStepIndex, isPlaying, mode, nextStep, pause, scenario])
-
-  useEffect(() => {
     if (mode !== 'generating') return
     const timer = window.setInterval(() => {
       setGenerationStep((step) => Math.min(step + 1, 5))
@@ -118,7 +101,7 @@ function App() {
       }
       setGeneratedScenarios((current) => [generated, ...current.filter((item) => item.id !== generated.id)].slice(0, 5))
       setScenario(generated.id)
-      setStep(-1)
+      setStep(generated.steps.length - 1)
       setMode('scenario')
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Scenario generation failed')
@@ -211,7 +194,6 @@ function App() {
               </div>
             </div>
             <ScenarioGraph scenario={scenario} />
-            <TimelineControls scenario={scenario} />
           </div>
           <ScenarioPanel scenario={scenario} />
         </section>

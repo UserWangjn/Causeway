@@ -1,5 +1,5 @@
-import { AnimatePresence, motion } from 'framer-motion'
-import { ExternalLink, ShieldAlert, Sparkles } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { ExternalLink, GitBranch } from 'lucide-react'
 import { directionLabel, uiText } from '../i18n'
 import { useScenarioStore } from '../store/scenarioStore'
 import type { GraphEdge, ScenarioPreset } from '../types'
@@ -16,12 +16,10 @@ const deltaText = (edge: GraphEdge, text: { to: string; points: string }) => {
 
 export const ScenarioPanel = ({ scenario }: ScenarioPanelProps) => {
   const language = useScenarioStore((state) => state.language)
-  const activeStepIndex = useScenarioStore((state) => state.activeStepIndex)
   const text = uiText[language]
-  const currentStep = scenario.steps[activeStepIndex]
-  const activeEdges = currentStep
-    ? scenario.edges.filter((edge) => currentStep.edgeIds.includes(edge.id))
-    : scenario.edges.filter((edge) => edge.source === scenario.rootNodeId)
+  const activeEdges = scenario.edges
+  const directEdges = scenario.edges.filter((edge) => edge.source === scenario.rootNodeId).length
+  const secondOrderEdges = scenario.edges.length - directEdges
 
   return (
     <aside className="side-panel">
@@ -30,38 +28,35 @@ export const ScenarioPanel = ({ scenario }: ScenarioPanelProps) => {
           <p className="eyebrow">{text.scenarioRun}</p>
           <h1>{scenario.title}</h1>
         </div>
-        <div className="agent-badge">
-          <Sparkles size={16} />
-          {text.agentChain}
+        <div className="agent-badge agent-badge--static">
+          <GitBranch size={16} />
+          Flow
         </div>
       </div>
 
       <p className="scenario-summary">{scenario.summary}</p>
 
-      <div className="agent-stack" aria-label={text.agentPipeline}>
-        {text.agents.map((agent, index) => (
-          <span key={agent} className={index <= activeStepIndex + 2 ? 'agent-chip agent-chip--active' : 'agent-chip'}>
-            {agent}
-          </span>
-        ))}
+      <div className="flow-stats">
+        <span>
+          <strong>{scenario.nodes.length}</strong>
+          PM nodes
+        </span>
+        <span>
+          <strong>{scenario.edges.length}</strong>
+          causal links
+        </span>
+        <span>
+          <strong>{directEdges}/{secondOrderEdges}</strong>
+          direct / indirect
+        </span>
       </div>
 
-      <section className="explanation-card">
+      <section className="explanation-card explanation-card--compact">
         <div className="explanation-title">
-          <ShieldAlert size={18} />
-          <span>{currentStep ? currentStep.title : text.clickToStart}</span>
+          <GitBranch size={18} />
+          <span>Final script flow</span>
         </div>
-        <AnimatePresence mode="wait">
-          <motion.p
-            key={currentStep?.id ?? 'initial'}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.25 }}
-          >
-            {currentStep?.narrative ?? text.initialNarrative}
-          </motion.p>
-        </AnimatePresence>
+        <p>{scenario.steps.map((step) => step.narrative).join(' ')}</p>
       </section>
 
       <div className="edge-list">

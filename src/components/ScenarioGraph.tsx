@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useMemo } from 'react'
 import {
   Background,
   Controls,
@@ -10,7 +10,6 @@ import {
 import '@xyflow/react/dist/style.css'
 import { MarketNode, type MarketNodeData } from './MarketNode'
 import { CausalEdge, type CausalEdgeData } from './CausalEdge'
-import { useScenarioStore } from '../store/scenarioStore'
 import type { GraphEdge, GraphNode, ImpactDirection, ScenarioPreset } from '../types'
 
 const nodeTypes = {
@@ -31,23 +30,6 @@ const getDeltaForNode = (
 ): { delta?: [number, number]; direction?: ImpactDirection } => {
   const edge = activeEdges.find((candidate) => candidate.target === nodeId)
   return edge ? { delta: edge.deltaRange, direction: edge.direction } : {}
-}
-
-const buildNodeStatus = (
-  node: GraphNode,
-  scenario: ScenarioPreset,
-  activeStepIndex: number,
-) => {
-  const currentStep = scenario.steps[activeStepIndex]
-  const completedSteps = scenario.steps.slice(0, activeStepIndex + 1)
-  const impacted = new Set(completedSteps.flatMap((step) => step.impactedNodeIds))
-
-  if (currentStep?.sourceNodeId === node.id || (activeStepIndex === -1 && node.id === scenario.rootNodeId)) {
-    return 'active'
-  }
-  if (impacted.has(node.id)) return 'impacted'
-  if (activeStepIndex >= 0) return 'muted'
-  return 'idle'
 }
 
 const getStablePosition = (node: GraphNode, index: number, scenario: ScenarioPreset) => {
@@ -72,30 +54,7 @@ const getStablePosition = (node: GraphNode, index: number, scenario: ScenarioPre
 }
 
 export const ScenarioGraph = ({ scenario }: ScenarioGraphProps) => {
-  const activeStepIndex = useScenarioStore((state) => state.activeStepIndex)
-  const setStep = useScenarioStore((state) => state.setStep)
-  const play = useScenarioStore((state) => state.play)
-
-  const activeEdgeIds = useMemo(
-    () => new Set(scenario.steps.slice(0, activeStepIndex + 1).flatMap((step) => step.edgeIds)),
-    [activeStepIndex, scenario],
-  )
-
-  const activeEdges = useMemo(
-    () => scenario.edges.filter((edge) => activeEdgeIds.has(edge.id)),
-    [activeEdgeIds, scenario.edges],
-  )
-
-  const activateFromNode = useCallback(
-    (nodeId: string) => {
-      const nextStepIndex = scenario.steps.findIndex(
-        (step) => step.sourceNodeId === nodeId || step.impactedNodeIds.includes(nodeId),
-      )
-      setStep(nextStepIndex > -1 ? nextStepIndex - 1 : -1)
-      play()
-    },
-    [play, scenario.steps, setStep],
-  )
+  const activeEdges = scenario.edges
 
   const nodes = useMemo<Node<MarketNodeData>[]>(() => {
     return scenario.nodes.map((node, index) => {
@@ -106,15 +65,15 @@ export const ScenarioGraph = ({ scenario }: ScenarioGraphProps) => {
         position: getStablePosition(node, index, scenario),
         data: {
           ...node,
-          status: buildNodeStatus(node, scenario, activeStepIndex),
+          status: node.id === scenario.rootNodeId ? 'active' : 'impacted',
           delta,
           direction,
           isRoot: node.id === scenario.rootNodeId,
-          onActivate: activateFromNode,
+          onActivate: () => undefined,
         },
       }
     })
-  }, [activateFromNode, activeEdges, activeStepIndex, scenario])
+  }, [activeEdges, scenario])
 
   const edges = useMemo<Edge<CausalEdgeData>[]>(() => {
     return scenario.edges.map((edge) => ({
@@ -122,13 +81,13 @@ export const ScenarioGraph = ({ scenario }: ScenarioGraphProps) => {
       source: edge.source,
       target: edge.target,
       type: 'causalEdge',
-      animated: activeEdgeIds.has(edge.id),
+      animated: false,
       data: {
         ...edge,
-        active: activeEdgeIds.has(edge.id),
+        active: true,
       },
     }))
-  }, [activeEdgeIds, scenario.edges])
+  }, [scenario.edges])
 
   return (
     <ReactFlowProvider>
