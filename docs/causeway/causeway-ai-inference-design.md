@@ -9,7 +9,7 @@ AI 的任务不是直接下单，而是：
 1. 根据用户选择的根 outcome 生成因果影响路径。
 2. 从候选市场中选择相关市场。
 3. 为每个相关市场下的所有 outcome token 给出默认动作。
-4. 给出置信度、影响方向、层级和理由。
+4. 给出 outcome 级影响方向、置信度、层级和理由。
 5. 输出结构化 JSON，供后端生成因果脚本。
 
 ## 2. AI 输入数据
@@ -156,11 +156,20 @@ type AiOutcomeRecommendation = {
 type AiEdge = {
   sourceClientNodeId: string;
   targetClientNodeId: string;
+  sourceOutcomeId: string;
+  targetOutcomeId: string;
   relation: "causes" | "supports" | "hedges" | "contradicts" | "correlates";
   confidence: number;
   reason: string;
 };
 ```
+
+说明：
+
+- 图谱节点仍以 Market 为单位，便于前端展示。
+- 因果边必须标明 source outcome 和 target outcome，避免把多 outcome market 误解成固定 `Yes/No`。
+- 根节点的 `sourceOutcomeId` 必须等于用户选择的 root outcome。
+- 若一个 market 中多个 outcome 都受到影响，应分别返回 outcome recommendation；edge 连接到最主要的 target outcome。
 
 ## 6. Outcome 选择规则
 
@@ -175,6 +184,18 @@ AI 不能只说“美联储降息”，必须对该 Market 下每个可交易 ou
 AI 必须返回 `outcomes[]`，其中每个 outcome 都有 `aiAction`。通常只有一个或少数 outcome 是 `buy`，其余是 `avoid`。后端会把 `aiAction=buy` 转成用户默认 `userAction=buy`，把 `aiAction=avoid` 转成用户默认 `userAction=skip`。
 
 对于 Event 下多个 Market 的情况，后端会把每个 Market 都作为候选传入，AI 可以分别选择。
+
+AI 的因果理由必须说明具体 outcome 之间的关系。例如：
+
+```text
+root outcome "Trump wins: Yes" -> target outcome "Fed cut in June: No"
+```
+
+不能只写：
+
+```text
+Trump wins -> Fed decision
+```
 
 ## 7. Prompt 模板
 
@@ -218,9 +239,10 @@ Tasks:
 2. Pick only candidate markets that are meaningfully affected by the root outcome or by previous layer outcomes.
 3. For each selected market, return one recommendation for every existing outcome token in that market.
 4. Mark the strongest tradable outcome(s) as buy and the remaining outcomes as avoid.
-5. Assign confidence from 0 to 1.
-6. Explain briefly why each market and outcome action is connected.
-7. Return valid JSON only.
+5. For every edge, include sourceOutcomeId and targetOutcomeId.
+6. Assign confidence from 0 to 1.
+7. Explain briefly why each market and outcome action is connected.
+8. Return valid JSON only.
 ```
 
 ## 8. 缓存设计
@@ -266,6 +288,8 @@ sha256(
 - JSON schema 合法。
 - marketId 存在于候选列表。
 - 每个 outcome recommendation 的 outcomeId 属于对应 market。
+- 每条 edge 的 sourceOutcomeId 属于 source market，targetOutcomeId 属于 target market。
+- 根节点向外的 edge 必须使用用户选择的 rootOutcomeId 作为 sourceOutcomeId。
 - layer 不超过用户设置。
 - confidence 在 0 到 1。
 - 没有重复 token。
@@ -282,6 +306,8 @@ AI 输出只是默认脚本。用户可以：
 
 - 将某个 outcome 改为不参与。
 - 改选同 market 下其他 outcome。
+- 修改订单模式。
+- 修改数量。
 - 修改金额。
 - 修改限价。
 - 删除某个市场。

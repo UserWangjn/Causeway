@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-真实下单是一期最大技术风险。本 Spike 的目标是在正式开发订单模块前，用最小代码验证：
+真实下单是后端集成风险，但不应阻塞前端订单体验和 `dry_run` 订单闭环开发。本 Spike 的目标是在接入 `real` 模式前，用最小代码验证：
 
 - RainbowKit 钱包登录能否满足 Polymarket CLOB 签名流程。
 - TypeScript 后端如何安全地提交订单。
@@ -10,7 +10,7 @@
 - cash、positions、open orders 的实际数据来源。
 - 最小订单能否成功提交、查询、取消。
 
-Spike 完成前，不能冻结真实 CLOB 提交方案；但前后端订单协议必须先按 `preview -> prepare-signature -> submit` 实现，并支持 `dry_run` 降级。
+Spike 完成前，不能冻结真实 CLOB 提交方案；但前后端订单协议必须先按 `preview -> prepare-signature -> submit` 实现，并支持 `dry_run` 降级。市价 / 限价、数量输入、订单确认、预览过期和幂等提交可以先按 Causeway 协议开发。
 
 ## 2. 安全边界
 
@@ -28,10 +28,10 @@ Spike 完成前，不能冻结真实 CLOB 提交方案；但前后端订单协�
 
 ### 3.1 CLOB SDK
 
-官方 TypeScript SDK：
+官方 TypeScript SDK 以 Polymarket 当前推荐版本为准：
 
 ```text
-@polymarket/clob-client
+@polymarket/clob-client-v2
 ```
 
 需要验证：
@@ -163,12 +163,13 @@ Spike 完成前，不能冻结真实 CLOB 提交方案；但前后端订单协�
 
 ### Step 3：订单预览验证
 
-选择一个高流动性、最小下单金额低的市场，生成预览：
+选择一个高流动性、最小下单金额低的市场，分别生成市价和限价预览：
 
 ```json
 {
   "tokenId": "...",
   "side": "BUY",
+  "orderMode": "limit",
   "limitPrice": 0.01,
   "amountUsd": 5,
   "size": 500
@@ -178,6 +179,7 @@ Spike 完成前，不能冻结真实 CLOB 提交方案；但前后端订单协�
 校验：
 
 - 价格符合 tick size。
+- 市价模式能返回估算成交均价和滑点。
 - 金额大于最小下单金额。
 - 用户 cash 足够。
 - 市场可交易。
@@ -277,6 +279,6 @@ Spike 完成前，不能冻结真实 CLOB 提交方案；但前后端订单协�
 - cash balance 数据来源。
 - positions 数据来源。
 - 是否支持取消订单。
-- 一期支持的 order type。
+- 一期支持的 order mode 和 order type。
 
-冻结前不要做大规模订单 UI 和资产组合开发。
+冻结前不要在前端绑定 CLOB 特定签名细节；通用订单 UI、订单预览、`dry_run` 状态和资产组合本地状态可以继续开发。

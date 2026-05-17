@@ -12,6 +12,8 @@
 - Icons：lucide-react；市场图标优先使用 Polymarket API 返回的 `icon/image`。
 - Styling：Tailwind CSS，视觉参考 Polymarket，保留 Causeway 品牌名。
 
+一期只保证主流桌面浏览器体验：最新版 Chrome、Edge、Firefox、Safari。移动端完整交易体验暂不进入一期。
+
 ## 2. 导航结构
 
 建议主导航：
@@ -26,7 +28,7 @@
 
 - 搜索入口。
 - 通知。
-- `Cash $xx.xx`。
+- `Cash $xx.xx` 或余额 capability 状态。余额未接通时不能展示伪余额。
 - 钱包连接/头像。
 
 ## 3. 路由设计
@@ -43,13 +45,13 @@
 /settings                  设置
 ```
 
-`/infer/new` 必须通过 query 或本地状态携带根 market 与 root token：
+`/infer/new` 必须通过 query 或本地状态携带根 market 与 root outcome：
 
 ```text
-/infer/new?marketId=xxx&tokenId=yyy
+/infer/new?marketId=xxx&outcomeId=yyy
 ```
 
-如果缺少 tokenId，必须回到市场详情选择 outcome。
+`tokenId` 可作为展示和交易字段随状态携带，但内部路由优先使用 `outcomeId`。如果缺少 outcomeId，必须回到市场详情选择 outcome。
 
 ## 4. 钱包登录
 
@@ -163,6 +165,7 @@ type ScriptNode = {
   title: string;
   layer: 0 | 1 | 2 | 3;
   recommendedOutcomes: {
+    outcomeId: string;
     label: string;
     tokenId: string;
   }[];
@@ -171,6 +174,8 @@ type ScriptNode = {
   price: number | null;
 };
 ```
+
+图谱边的 tooltip 和详情面板必须展示 source outcome 与 target outcome，不能只展示 market 到 market 的关系。
 
 ### 8.2 Outcome 表格
 
@@ -184,7 +189,9 @@ type ScriptOutcomeRow = {
   aiAction: "buy" | "avoid";
   userAction: "buy" | "skip";
   side: "BUY";
+  orderMode: "market" | "limit";
   limitPrice: number | null;
+  size: number | null;
   amountUsd: number | null;
   confidence: number | null;
   reason: string;
@@ -205,19 +212,36 @@ AI 输出会覆盖每个 Market 下的所有 outcome。前端默认把 `aiAction
 批量下单流程：
 
 1. 用户在因果脚本中选择多个 outcome。
-2. 设置每个 outcome 的金额，或使用批量金额分配。
+2. 设置每个 outcome 的市价 / 限价模式、数量、金额，或使用批量金额分配。
 3. 点击 `生成订单`。
 4. 进入订单确认页。
 5. 后端返回预览、失败原因、风控提示。
-6. 前端调用 `prepare-signature`。
+6. 若预览返回 `requiresSignature=true`，前端调用 `prepare-signature`。
 7. `dry_run` 模式无需签名；`real` 模式按返回协议请求钱包签名。
 8. 用户确认并提交订单。
+
+订单输入控件：
+
+- 订单模式使用分段控件：`市价` / `限价`。
+- 市价模式主要填写数量或金额，价格由预览时的盘口计算。
+- 限价模式必须填写限价价格和数量。
+- 数量输入提供快捷按钮：`-100`、`-10`、`+10`、`+100`。
+- 价格输入提供加减按钮，步长使用后端返回的 tick size。
+- 快捷按钮不能让数量、金额或价格越过后端约束；越界时按钮置灰或回弹到合法值。
+- 单个 outcome 下单和批量下单使用同一套输入组件。
 
 金额分配一期建议：
 
 - 默认每个被选 outcome 手动输入。
 - 可提供 `平均分配` 快捷按钮。
 - `按置信度分配` 放到二期。
+
+订单确认页必须展示：
+
+- 每笔订单的 outcome、tokenId、数量、金额、订单模式、市价估算或限价价格。
+- 最新订单簿刷新时间和预览过期时间。
+- capability 状态和真实提交不可用原因。
+- 成功项和失败项分区。
 
 ## 10. 资产组合页
 
@@ -233,7 +257,7 @@ AI 输出会覆盖每个 Market 下的所有 outcome。前端默认把 `aiAction
 - 未连接钱包：展示连接钱包按钮。
 - 钱包链错误：提示切换 Polygon。
 - 市场数据过期：展示 `数据正在刷新`。
-- CLOB 不可用：允许浏览脚本，不允许提交订单。
+- CLOB 不可用：允许浏览脚本和走 `dry_run` 订单闭环；`real` 提交按钮置灰。
 - 订单部分失败：成功和失败分区展示。
 - 推演缓存命中：明确标注结果来源时间。
 - 真实下单能力不可用：订单确认页仍可展示 `dry_run` 结果，但 `real` 提交按钮置灰并展示后端返回的 capability 原因。

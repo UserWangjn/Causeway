@@ -77,6 +77,16 @@ enum OrderSide {
   BUY
 }
 
+enum ExecutionMode {
+  dry_run
+  real
+}
+
+enum OrderMode {
+  market
+  limit
+}
+
 enum OrderType {
   GTC
   GTD
@@ -128,6 +138,7 @@ model User {
   inferenceRuns  InferenceRun[]
   scripts        CausalScript[]
   orderIntents   OrderIntent[]
+  orderSubmissions OrderSubmission[]
   auditEvents    AuditEvent[]
 }
 ```
@@ -251,6 +262,7 @@ model PolymarketOutcome {
   market         PolymarketMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
   selections     ScriptOutcomeSelection[]
   orders         CausewayOrder[]
+  snapshots      MarketSnapshot[]
 
   @@unique([marketId, outcomeIndex])
   @@index([marketId])
@@ -273,6 +285,7 @@ model MarketSnapshot {
   volume         Decimal?
   snapshotAt     DateTime
   market         PolymarketMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcome        PolymarketOutcome? @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
 
   @@index([marketId, snapshotAt(sort: Desc)])
   @@index([outcomeId, snapshotAt(sort: Desc)])
@@ -324,6 +337,7 @@ model MarketNetworkEdge {
 model InferenceRun {
   id                  String             @id @default(uuid())
   userId              String
+  rootEventId         String?
   rootMarketId        String
   rootOutcomeId       String
   rootClobTokenId     String
@@ -385,6 +399,7 @@ model CausalScript {
   inferenceRunId  String          @unique
   title           String
   status          ScriptStatus    @default(draft)
+  rootEventId     String?
   rootMarketId    String
   rootOutcomeId   String
   graphJson       Json
@@ -433,13 +448,16 @@ model ScriptOutcomeSelection {
   aiAction       AiSelectionAction
   userAction     UserSelectionAction
   side           OrderSide          @default(BUY)
+  orderMode      OrderMode          @default(limit)
   limitPrice     Decimal?
+  size           Decimal?
   amountUsd      Decimal?
   confidence     Decimal?
   reason         String?
   updatedAt      DateTime           @updatedAt
   scriptMarket   ScriptMarket       @relation(fields: [scriptMarketId], references: [id], onDelete: Cascade)
   outcome        PolymarketOutcome  @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+  orders         CausewayOrder[]
 
   @@unique([scriptMarketId, outcomeId])
   @@index([userAction])
@@ -456,18 +474,22 @@ model OrderIntent {
   userId         String
   scriptId       String
   status         OrderIntentStatus @default(draft)
-  executionMode  String            @default("dry_run")
+  executionMode  ExecutionMode     @default(dry_run)
   totalAmountUsd Decimal
   cashAvailable  Decimal?
   tradingCapability String?
+  tradingCapabilityReason String?
   balanceCapability String?
+  balanceCapabilityReason String?
   previewJson    Json
   riskJson       Json
+  previewExpiresAt DateTime?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
   user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   script         CausalScript      @relation(fields: [scriptId], references: [id], onDelete: Cascade)
   orders         CausewayOrder[]
+  submissions    OrderSubmission[]
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([scriptId])
@@ -480,12 +502,15 @@ model OrderIntent {
 model CausewayOrder {
   id               String              @id @default(uuid())
   orderIntentId    String
+  selectionId      String?
   marketId         String
   outcomeId        String
   clobTokenId      String
   side             OrderSide
-  orderType        OrderType
-  limitPrice       Decimal
+  orderMode        OrderMode
+  orderType        OrderType?
+  limitPrice       Decimal?
+  estimatedFillPrice Decimal?
   size             Decimal
   amountUsd        Decimal
   externalOrderId  String?
@@ -496,17 +521,42 @@ model CausewayOrder {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
   orderIntent      OrderIntent         @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+  selection        ScriptOutcomeSelection? @relation(fields: [selectionId], references: [id], onDelete: SetNull)
   market           PolymarketMarket    @relation(fields: [marketId], references: [id], onDelete: Restrict)
   outcome          PolymarketOutcome   @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
 
   @@index([orderIntentId])
+  @@index([selectionId])
   @@index([marketId])
   @@index([externalOrderId])
   @@index([status, createdAt(sort: Desc)])
 }
 ```
 
-### 9.3 `PortfolioSnapshot`
+### 9.3 `OrderSubmission`
+
+用于实现 `POST /orders/submit` 的幂等。相同用户、相同订单意图、相同 `idempotencyKey` 必须返回第一次提交结果。
+
+```prisma
+model OrderSubmission {
+  id             String        @id @default(uuid())
+  userId         String
+  orderIntentId  String
+  idempotencyKey String
+  requestHash    String
+  status         String
+  responseJson   Json?
+  errorMessage   String?
+  createdAt      DateTime      @default(now())
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderIntent    OrderIntent   @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orderIntentId, idempotencyKey])
+  @@index([orderIntentId, createdAt(sort: Desc)])
+}
+```
+
+### 9.4 `PortfolioSnapshot`
 
 ```prisma
 model PortfolioSnapshot {
@@ -525,7 +575,7 @@ model PortfolioSnapshot {
 }
 ```
 
-### 9.4 `ExternalPosition`
+### 9.5 `ExternalPosition`
 
 ```prisma
 model ExternalPosition {
@@ -576,6 +626,7 @@ model SyncRun {
 model AuditEvent {
   id         String   @id @default(uuid())
   userId     String?
+  requestId  String?
   actorType  String
   entityType String
   entityId   String
@@ -587,6 +638,7 @@ model AuditEvent {
   user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt(sort: Desc)])
+  @@index([requestId])
   @@index([entityType, entityId, createdAt(sort: Desc)])
 }
 ```

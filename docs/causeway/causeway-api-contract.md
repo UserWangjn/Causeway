@@ -17,6 +17,8 @@ type ApiResponse<T> = {
 };
 ```
 
+除错误响应外，本文档所有响应类型默认都包在 `ApiResponse<T>` 的 `data` 字段中，示例中展示裸类型时表示 `data` 内部结构。
+
 错误格式：
 
 ```ts
@@ -39,6 +41,14 @@ type Page<T> = {
   hasMore: boolean;
 };
 ```
+
+鉴权：
+
+```text
+Authorization: Bearer <accessToken>
+```
+
+除公开市场浏览接口外，推演、脚本、订单、资产组合和内部接口都需要登录。内部接口还需要服务端内部 token 或后台网络访问控制。
 
 ## 2. Auth
 
@@ -146,6 +156,24 @@ type MarketDetail = MarketListItem & {
   orderPriceMinTickSize: number | null;
   negRisk: boolean;
   relatedMarkets: MarketListItem[];
+};
+```
+
+### `GET /markets/by-slug/:slug`
+
+用于前端 `/markets/:marketSlug` 路由解析，响应结构同 `GET /markets/:marketId`。
+
+标准 outcome 结构：
+
+```ts
+type MarketOutcome = {
+  outcomeId: string;
+  label: string;
+  tokenId: string;
+  price: number | null;
+  bestBid: number | null;
+  bestAsk: number | null;
+  lastTradePrice: number | null;
 };
 ```
 
@@ -299,6 +327,8 @@ type ScriptNode = {
 type ScriptEdge = {
   sourceNodeId: string;
   targetNodeId: string;
+  sourceOutcomeId: string;
+  targetOutcomeId: string;
   relation: "causes" | "supports" | "hedges" | "contradicts" | "correlates";
   confidence: number;
   reason: string;
@@ -317,7 +347,9 @@ type ScriptMarket = {
     tokenId: string;
     aiAction: "buy" | "avoid";
     userAction: "buy" | "skip";
+    orderMode: "market" | "limit";
     limitPrice: number | null;
+    size: number | null;
     amountUsd: number | null;
     reason: string | null;
   }[];
@@ -331,7 +363,9 @@ type ScriptMarket = {
 ```json
 {
   "userAction": "buy",
+  "orderMode": "limit",
   "limitPrice": 0.42,
+  "size": 60,
   "amountUsd": 25
 }
 ```
@@ -343,7 +377,9 @@ type ScriptMarket = {
   "data": {
     "selectionId": "sel_x",
     "userAction": "buy",
+    "orderMode": "limit",
     "limitPrice": 0.42,
+    "size": 60,
     "amountUsd": 25
   },
   "requestId": "req_x"
@@ -357,6 +393,8 @@ type ScriptMarket = {
 ```ts
 type ExecutionMode = "dry_run" | "real";
 type CapabilityStatus = "available" | "degraded" | "unavailable";
+type OrderMode = "market" | "limit";
+type LimitOrderType = "GTC" | "GTD" | "FOK" | "FAK";
 ```
 
 说明：
@@ -375,7 +413,9 @@ type CapabilityStatus = "available" | "degraded" | "unavailable";
   "selections": [
     {
       "selectionId": "sel_x",
+      "orderMode": "limit",
       "amountUsd": 25,
+      "size": 60,
       "limitPrice": 0.42,
       "orderType": "GTC"
     }
@@ -391,12 +431,16 @@ type OrderPreview = {
   executionMode: "dry_run" | "real";
   tradingCapability: "available" | "degraded" | "unavailable";
   balanceCapability: "available" | "degraded" | "unavailable";
+  tradingCapabilityReason: string | null;
+  balanceCapabilityReason: string | null;
   cashAvailable: number | null;
   totalAmountUsd: number;
   estimatedMaxPayout: number;
   estimatedMaxLoss: number;
   requiresSignature: boolean;
   submitMode: "dry_run_no_signature" | "signed_clob_order";
+  refreshedAt: string;
+  expiresAt: string;
   orders: {
     selectionId: string;
     marketId: string;
@@ -404,10 +448,14 @@ type OrderPreview = {
     tokenId: string;
     outcomeLabel: string;
     side: "BUY";
-    orderType: "GTC" | "GTD" | "FOK" | "FAK";
-    limitPrice: number;
+    orderMode: "market" | "limit";
+    orderType: "GTC" | "GTD" | "FOK" | "FAK" | null;
+    limitPrice: number | null;
+    estimatedFillPrice: number | null;
     amountUsd: number;
     size: number;
+    tickSize: number | null;
+    minOrderSize: number | null;
     valid: boolean;
     warnings: string[];
     error: string | null;
@@ -417,7 +465,7 @@ type OrderPreview = {
 
 ### `POST /orders/prepare-signature`
 
-真实下单前调用。`dry_run` 模式返回 `not_required`，`real` 模式返回前端需要签名的 payload。若真实 CLOB 签名方案尚未接通，返回 `unavailable`，前端仍可展示一致的错误状态。
+真实下单前调用。只有 `orders/preview` 返回 `requiresSignature=true` 时前端才需要调用。`dry_run` 模式返回 `not_required`，`real` 模式返回前端需要签名的 payload。若真实 CLOB 签名方案尚未接通，返回 `unavailable`，前端仍可展示一致的错误状态。
 
 请求：
 
@@ -456,13 +504,8 @@ type PrepareSignatureResult = {
 {
   "intentId": "intent_x",
   "executionMode": "dry_run",
-  "signedOrders": [
-    {
-      "orderId": "order_x",
-      "signature": "0x...",
-      "signedPayload": {}
-    }
-  ]
+  "idempotencyKey": "uuid-from-client",
+  "signedOrders": []
 }
 ```
 
@@ -479,6 +522,26 @@ type OrderSubmitResult = {
     status: string;
     errorMessage: string | null;
   }[];
+};
+```
+
+`idempotencyKey` 在同一用户、同一 `intentId` 下必须唯一。重复提交相同 key 返回第一次提交结果；同 key 但请求内容不同返回 `IDEMPOTENCY_CONFLICT`。
+
+### `GET /orders/intents/:intentId`
+
+用于订单确认页刷新预览、提交结果和部分失败状态。
+
+响应结构：
+
+```ts
+type OrderIntentDetail = {
+  intentId: string;
+  executionMode: "dry_run" | "real";
+  status: "draft" | "preview_ready" | "user_confirming" | "dry_run_completed" | "submitted" | "partially_submitted" | "failed" | "cancelled";
+  preview: OrderPreview | null;
+  submitResult: OrderSubmitResult | null;
+  createdAt: string;
+  updatedAt: string;
 };
 ```
 
@@ -576,7 +639,7 @@ type PortfolioTradesResponse = {
 
 ### `POST /internal/sync/polymarket`
 
-内部接口，触发同步任务。
+内部接口，触发同步任务。必须只允许内部 token 或后台网络访问。
 
 请求：
 
@@ -604,6 +667,12 @@ ORDERBOOK_UNAVAILABLE
 INSUFFICIENT_CASH
 INVALID_TICK_SIZE
 BELOW_MIN_ORDER_SIZE
+ORDER_PREVIEW_EXPIRED
+CAPABILITY_UNAVAILABLE
+USER_REJECTED_SIGNATURE
+SIGNATURE_EXPIRED
+IDEMPOTENCY_CONFLICT
+RATE_LIMITED
 INFERENCE_FAILED
 CACHE_ENTRY_EXPIRED
 POLYMARKET_API_ERROR

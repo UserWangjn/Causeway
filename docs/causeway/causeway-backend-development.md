@@ -5,7 +5,7 @@
 - Language：TypeScript。
 - Framework：NestJS。
 - Database：PostgreSQL + Prisma。
-- Jobs：NestJS schedule 或独立 worker，后续可迁移 BullMQ。
+- Jobs：P1 可先用 NestJS schedule；P3/P4 开始建议使用 BullMQ 或独立 worker 承载同步、AI 推演和订单状态刷新，避免长任务阻塞 API 进程。
 - AI：后端直接调用模型 API；一期不再保留 Python AI sidecar 作为主路径。
 - Polymarket：Gamma API + CLOB SDK/API + Data API。
 
@@ -41,6 +41,14 @@ AuditModule
 - 推演脚本涉及的重点市场：10-30 秒。
 - 订单簿：下单预览时实时刷新。
 - 用户资产组合：进入页面时刷新，之后 10-30 秒轮询或 WebSocket。
+
+同步任务必须支持：
+
+- 分页 cursor 和断点续跑。
+- rate limit、重试和指数退避。
+- 原始 payload 保存，字段变化时先不中断主流程。
+- `SyncRun` 记录成功、失败、拉取数量和错误原因。
+- 市场主数据同步失败时，前端仍可读取上一次成功同步的数据并展示过期状态。
 
 ## 4. 关键数据表
 
@@ -149,6 +157,8 @@ depth
 maxMarketsPerLayer
 confidenceThreshold
 model
+promptVersion
+outputSchemaVersion
 cacheEnabled
 cacheKey
 cacheHit
@@ -167,6 +177,7 @@ id
 cacheKey
 model
 promptVersion
+outputSchemaVersion
 inputHash
 outputHash
 resultJson
@@ -214,7 +225,9 @@ outcomeId
 aiAction       buy | avoid
 userAction     buy | skip
 side           BUY
+orderMode      market | limit
 limitPrice
+size
 amountUsd
 confidence
 reason
@@ -228,9 +241,16 @@ id
 userId
 scriptId
 status
+executionMode
 totalAmountUsd
+cashAvailable
+tradingCapability
+tradingCapabilityReason
+balanceCapability
+balanceCapabilityReason
 previewJson
 riskJson
+previewExpiresAt
 createdAt
 updatedAt
 ```
@@ -240,12 +260,15 @@ updatedAt
 ```text
 id
 orderIntentId
+selectionId
 marketId
 outcomeId
 tokenId
 side
+orderMode
 orderType
 limitPrice
+estimatedFillPrice
 size
 amountUsd
 externalOrderId
@@ -254,6 +277,20 @@ submitPayload
 errorMessage
 createdAt
 updatedAt
+```
+
+### 4.13 `order_submissions`
+
+```text
+id
+userId
+orderIntentId
+idempotencyKey
+requestHash
+status
+responseJson
+errorMessage
+createdAt
 ```
 
 ## 5. 推演缓存设计
@@ -332,7 +369,7 @@ script_generation
 
 一期只支持 BUY。
 
-交易 API 必须先实现一致协议，再接入真实 CLOB。即使真实下单、余额读取暂时不可用，后端也要支持 `dry_run`，并通过 capability 状态告诉前端当前真实能力是否可用。
+交易 API 必须先实现一致协议，再接入真实 CLOB。真实 CLOB 调通不阻塞前端并行开发；即使真实下单、余额读取暂时不可用，后端也要支持 `dry_run`，并通过 capability 状态告诉前端当前真实能力是否可用。
 
 后端职责：
 
@@ -340,9 +377,11 @@ script_generation
 - 校验 outcome token 存在且可交易。
 - 刷新订单簿。
 - 校验最小下单金额和 tick size。
-- 生成预览。
-- 生成签名 payload 或返回真实签名能力不可用。
-- 要求用户确认并提交签名结果。
+- 支持市价和限价两种订单输入。
+- 校验数量、金额、限价价格和订单模式。
+- 生成预览，并返回刷新时间和过期时间。
+- 只有 `real` 且 capability 可用时才生成签名 payload；不可用时返回结构化 capability 原因。
+- 要求用户确认并提交；提交接口必须支持 idempotency key。
 - `dry_run` 模式写入本地订单结果，不调用 Polymarket。
 - `real` 模式调用 Polymarket CLOB SDK 下单。
 - 记录订单状态。
@@ -357,7 +396,10 @@ script_generation
 - 单个脚本总金额不能超过用户可用现金。
 - tokenId 必须属于当前 market。
 - 市场必须 `active=true`、`closed=false`、`acceptingOrders=true`、`enableOrderBook=true`。
-- 价格必须符合 tick size。
+- 限价单价格必须符合 tick size。
+- 市价单必须基于最新订单簿估算可成交数量、均价和滑点。
+- 订单预览必须设置短 TTL，提交时过期则要求重新预览。
+- 重复提交必须通过 `idempotencyKey` 返回首次结果，不能重复下单。
 - 下单前必须刷新订单簿。
 - 批量订单允许部分失败，但必须明确展示失败原因。
 
@@ -372,3 +414,4 @@ script_generation
 - 订单预览。
 - 订单提交。
 - 订单失败原因。
+- idempotency key 和 requestId。

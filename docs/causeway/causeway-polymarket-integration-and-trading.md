@@ -117,6 +117,8 @@ cancelOrder
 
 注意：本地 SDK 可加载成功；当前环境中 SDK 访问 CLOB 主机曾出现超时，但 `https://clob.polymarket.com/ok` REST 健康检查可返回 OK。开发时需要对 SDK 超时做重试和降级。
 
+正式交易接入时以 Polymarket 当前官方推荐 SDK 和签名流程为准。CLOB 真实提交细节不阻塞前端订单 UX 和后端 `dry_run` 协议开发。
+
 ## 5. 下单模型
 
 Polymarket CLOB 下单对象是 token ID。
@@ -132,9 +134,11 @@ Causeway 订单最小模型：
 type CausewayOrder = {
   tokenId: string;
   side: "BUY";
-  orderType: "GTC" | "GTD" | "FOK" | "FAK";
-  limitPrice: number;
+  orderMode: "market" | "limit";
+  orderType: "GTC" | "GTD" | "FOK" | "FAK" | null;
+  limitPrice: number | null;
   size: number;
+  amountUsd: number;
 };
 ```
 
@@ -151,9 +155,11 @@ type CausewayOrder = {
 
 一期建议：
 
-- 默认用 `GTC`。
+- 前端订单模式支持 `市价` 和 `限价`。
+- 限价默认用 `GTC`。
 - 订单确认页允许用户选择 `FAK`。
 - 不默认使用 FOK，避免小盘口频繁失败。
+- 市价模式由后端根据最新订单簿估算成交均价、滑点、最大成本，并在真实接入时映射到 Polymarket 当前官方支持的 market order 或等效 CLOB 参数。
 
 ## 7. 订单预览
 
@@ -165,8 +171,10 @@ type CausewayOrder = {
 4. 校验 `closed=false`。
 5. 校验 `enableOrderBook=true`。
 6. 校验 `amountUsd >= orderMinSize`。
-7. 校验价格符合 `orderPriceMinTickSize`。
-8. 校验用户现金余额足够。
+7. 限价单校验价格符合 `orderPriceMinTickSize`。
+8. 市价单校验订单簿深度足够，并返回估算均价和滑点。
+9. 校验用户现金余额足够；余额能力未接通时返回 capability 状态。
+10. 返回 `refreshedAt` 和 `expiresAt`，过期后必须重新预览。
 
 ## 8. 资产组合
 
@@ -222,6 +230,6 @@ imageOptimized
 - Outcome label 不稳定，不应作为唯一标识；必须用 tokenId。
 - Event 下多 Market 场景必须完整展示，不要只展示第一个 Market。
 - Sports 市场有开赛清簿等特殊行为，下单前必须刷新。
-- CLOB 超时或 order book 不可用时，不允许提交订单。
+- CLOB 超时或 order book 不可用时，不允许 `real` 提交，但可以保留 `dry_run` 演示闭环。
 - 任何 AI 结果都不能直接自动下单。
 - 所有真实下单必须由用户确认。
