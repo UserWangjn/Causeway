@@ -1,0 +1,333 @@
+import { HttpStatus, Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { ApiException } from '../../common/errors/api.exception';
+import { PrismaService } from '../../database/prisma.service';
+import {
+  getGammaMarketSkipReason,
+  normalizeGammaMarket,
+  type NormalizedGammaMarket,
+} from '../../integrations/polymarket/gamma-normalizer';
+import { GammaClient } from '../../integrations/polymarket/services/gamma.client';
+import { SyncPolymarketDto } from './dto/sync-polymarket.dto';
+
+@Injectable()
+export class PolymarketSyncService {
+  private readonly pageSize = 100;
+
+  constructor(
+    private readonly gammaClient: GammaClient,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  async syncPolymarket(dto: SyncPolymarketDto) {
+    const scope = dto.scope ?? 'markets';
+    const mode = dto.mode ?? 'incremental';
+    if (scope !== 'markets') {
+      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', `${scope} sync is not implemented yet`);
+    }
+
+    const syncRun = await this.prisma.syncRun.create({
+      data: {
+        jobType: 'polymarket_sync',
+        scope,
+        status: 'running',
+        metadata: toJson({ mode }),
+      },
+    });
+
+    try {
+      const payloads = await this.fetchMarkets(dto.limit ?? 100, mode);
+      const { normalizedMarkets, skippedPayloads } = this.normalizePayloads(payloads);
+
+      let upsertedCount = 0;
+      for (const market of normalizedMarkets) {
+        await this.upsertMarket(market);
+        upsertedCount += 1;
+      }
+
+      const completedRun = await this.prisma.syncRun.update({
+        where: { id: syncRun.id },
+        data: {
+          status: 'completed',
+          finishedAt: new Date(),
+          fetchedCount: payloads.length,
+          upsertedCount,
+          cursor: String(payloads.length),
+          metadata: toJson({
+            mode,
+            pageSize: this.pageSize,
+            skippedCount: skippedPayloads.length,
+            skippedPayloads: skippedPayloads.slice(0, 50),
+          }),
+        },
+      });
+
+      return {
+        runId: completedRun.id,
+        scope,
+        mode,
+        status: completedRun.status,
+        fetchedCount: completedRun.fetchedCount,
+        upsertedCount: completedRun.upsertedCount,
+        skippedCount: skippedPayloads.length,
+      };
+    } catch (error) {
+      await this.prisma.syncRun.update({
+        where: { id: syncRun.id },
+        data: {
+          status: 'failed',
+          finishedAt: new Date(),
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
+  }
+
+  async listRuns() {
+    const runs = await this.prisma.syncRun.findMany({
+      orderBy: { startedAt: 'desc' },
+      take: 50,
+    });
+
+    return {
+      items: runs.map((run) => ({
+        id: run.id,
+        jobType: run.jobType,
+        scope: run.scope,
+        status: run.status,
+        fetchedCount: run.fetchedCount,
+        upsertedCount: run.upsertedCount,
+        error: run.error,
+        startedAt: run.startedAt.toISOString(),
+        finishedAt: run.finishedAt?.toISOString() ?? null,
+      })),
+      nextCursor: null,
+      hasMore: false,
+    };
+  }
+
+  private normalizePayloads(payloads: Record<string, unknown>[]) {
+    const normalizedMarkets: NormalizedGammaMarket[] = [];
+    const skippedPayloads: SkippedGammaPayload[] = [];
+
+    payloads.forEach((payload, index) => {
+      const market = normalizeGammaMarket(payload);
+      if (market) {
+        normalizedMarkets.push(market);
+        return;
+      }
+
+      skippedPayloads.push({
+        index,
+        reason: getGammaMarketSkipReason(payload) ?? 'invalid_payload',
+        externalMarketId: readStringField(payload, 'id') ?? readStringField(payload, 'marketId'),
+        slug: readStringField(payload, 'slug'),
+      });
+    });
+
+    return { normalizedMarkets, skippedPayloads };
+  }
+
+  private async fetchMarkets(limit: number, mode: string) {
+    const payloads: Record<string, unknown>[] = [];
+
+    for (let offset = 0; payloads.length < limit; offset += this.pageSize) {
+      const remaining = limit - payloads.length;
+      const pageLimit = Math.min(this.pageSize, remaining);
+      const page = await this.gammaClient.getMarkets({
+        limit: pageLimit,
+        offset,
+        active: mode === 'incremental' ? true : undefined,
+        closed: false,
+      });
+
+      payloads.push(...page);
+      if (page.length < pageLimit) break;
+    }
+
+    return payloads;
+  }
+
+  private async upsertMarket(market: NormalizedGammaMarket): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const syncedAt = new Date();
+      const event = market.event
+        ? await tx.polymarketEvent.upsert({
+            where: { externalEventId: market.event.externalEventId },
+            update: {
+              slug: market.event.slug,
+              title: market.event.title,
+              description: market.event.description,
+              image: market.event.image,
+              icon: market.event.icon,
+              tags: toJson(market.event.tags),
+              active: market.event.active,
+              closed: market.event.closed,
+              archived: market.event.archived,
+              restricted: market.event.restricted,
+              endDate: market.event.endDate,
+              volume: market.event.volume,
+              liquidity: market.event.liquidity,
+              openInterest: market.event.openInterest,
+              rawPayload: toJson(market.event.rawPayload),
+              syncedAt,
+            },
+            create: {
+              externalEventId: market.event.externalEventId,
+              slug: market.event.slug,
+              title: market.event.title,
+              description: market.event.description,
+              image: market.event.image,
+              icon: market.event.icon,
+              tags: toJson(market.event.tags),
+              active: market.event.active,
+              closed: market.event.closed,
+              archived: market.event.archived,
+              restricted: market.event.restricted,
+              endDate: market.event.endDate,
+              volume: market.event.volume,
+              liquidity: market.event.liquidity,
+              openInterest: market.event.openInterest,
+              rawPayload: toJson(market.event.rawPayload),
+              syncedAt,
+            },
+          })
+        : null;
+
+      const marketData = {
+        eventId: event?.id ?? null,
+        externalMarketId: market.externalMarketId,
+        conditionId: market.conditionId,
+        questionId: market.questionId,
+        slug: market.slug,
+        question: market.question,
+        description: market.description,
+        rules: market.rules,
+        image: market.image,
+        icon: market.icon,
+        active: market.active,
+        closed: market.closed,
+        archived: market.archived,
+        acceptingOrders: market.acceptingOrders,
+        enableOrderBook: market.enableOrderBook,
+        negRisk: market.negRisk,
+        orderMinSize: market.orderMinSize,
+        orderPriceMinTickSize: market.orderPriceMinTickSize,
+        bestBid: market.bestBid,
+        bestAsk: market.bestAsk,
+        lastTradePrice: market.lastTradePrice,
+        spread: market.spread,
+        volume: market.volume,
+        volume24hr: market.volume24hr,
+        liquidity: market.liquidity,
+        endDate: market.endDate,
+        rawPayload: toJson(market.rawPayload),
+        syncedAt,
+      };
+      const existingMarketId = await this.resolveExistingMarketId(tx, market);
+      const savedMarket = existingMarketId
+        ? await tx.polymarketMarket.update({
+            where: { id: existingMarketId },
+            data: marketData,
+          })
+        : await tx.polymarketMarket.create({
+            data: marketData,
+          });
+
+      for (const outcome of market.outcomes) {
+        await tx.polymarketOutcome.upsert({
+          where: { clobTokenId: outcome.clobTokenId },
+          update: {
+            marketId: savedMarket.id,
+            outcomeIndex: outcome.outcomeIndex,
+            label: outcome.label,
+            price: outcome.price,
+            rawPayload: toJson(outcome),
+            syncedAt,
+          },
+          create: {
+            marketId: savedMarket.id,
+            outcomeIndex: outcome.outcomeIndex,
+            label: outcome.label,
+            clobTokenId: outcome.clobTokenId,
+            price: outcome.price,
+            rawPayload: toJson(outcome),
+            syncedAt,
+          },
+        });
+      }
+    });
+  }
+
+  private async resolveExistingMarketId(
+    tx: Prisma.TransactionClient,
+    market: NormalizedGammaMarket,
+  ): Promise<string | null> {
+    const matches: MarketIdentityMatch[] = [];
+
+    if (market.externalMarketId) {
+      const row = await tx.polymarketMarket.findUnique({
+        where: { externalMarketId: market.externalMarketId },
+        select: { id: true },
+      });
+      if (row) {
+        matches.push({ field: 'externalMarketId', value: market.externalMarketId, id: row.id });
+      }
+    }
+
+    if (market.conditionId) {
+      const row = await tx.polymarketMarket.findUnique({
+        where: { conditionId: market.conditionId },
+        select: { id: true },
+      });
+      if (row) {
+        matches.push({ field: 'conditionId', value: market.conditionId, id: row.id });
+      }
+    }
+
+    const slugRow = await tx.polymarketMarket.findUnique({
+      where: { slug: market.slug },
+      select: { id: true },
+    });
+    if (slugRow) {
+      matches.push({ field: 'slug', value: market.slug, id: slugRow.id });
+    }
+
+    const matchedIds = [...new Set(matches.map((match) => match.id))];
+    if (matchedIds.length > 1) {
+      throw new ApiException(
+        HttpStatus.CONFLICT,
+        'POLYMARKET_IDENTITY_CONFLICT',
+        'Polymarket market identifiers match multiple existing markets',
+        { matches },
+      );
+    }
+
+    return matchedIds[0] ?? null;
+  }
+}
+
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
+type SkippedGammaPayload = {
+  index: number;
+  reason: string;
+  externalMarketId: string | null;
+  slug: string | null;
+};
+
+type MarketIdentityMatch = {
+  field: string;
+  value: string;
+  id: string;
+};
+
+function readStringField(payload: Record<string, unknown>, field: string): string | null {
+  const value = payload[field];
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}

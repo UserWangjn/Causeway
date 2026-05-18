@@ -1,0 +1,548 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum InferenceRunStatus {
+  queued
+  running
+  completed
+  failed
+  cancelled
+}
+
+enum InferenceStage {
+  candidate_retrieval
+  ai_reasoning
+  outcome_mapping
+  market_refresh
+  script_generation
+}
+
+enum ScriptStatus {
+  draft
+  active
+  archived
+}
+
+enum ImpactDirection {
+  supports
+  opposes
+  unclear
+}
+
+enum RelationType {
+  causes
+  supports
+  hedges
+  contradicts
+  correlates
+}
+
+enum MarketNetworkRelationType {
+  tag
+  event
+  semantic
+  price_correlation
+  ai
+}
+
+enum AiSelectionAction {
+  buy
+  avoid
+}
+
+enum UserSelectionAction {
+  buy
+  skip
+}
+
+enum OrderSide {
+  BUY
+}
+
+enum ExecutionMode {
+  dry_run
+  real
+}
+
+enum OrderMode {
+  market
+  limit
+}
+
+enum OrderType {
+  GTC
+  GTD
+  FOK
+  FAK
+}
+
+enum OrderIntentStatus {
+  draft
+  preview_ready
+  user_confirming
+  dry_run_completed
+  submitted
+  partially_submitted
+  failed
+  cancelled
+}
+
+enum CausewayOrderStatus {
+  preview_ready
+  dry_run_completed
+  submitted
+  partially_filled
+  filled
+  cancelled
+  failed
+}
+
+enum SyncRunStatus {
+  running
+  completed
+  failed
+}
+
+model User {
+  id               String            @id @default(uuid())
+  walletAddress    String            @unique
+  displayName      String?
+  avatarUrl        String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  sessions         WalletSession[]
+  inferenceRuns    InferenceRun[]
+  scripts          CausalScript[]
+  orderIntents     OrderIntent[]
+  orderSubmissions OrderSubmission[]
+  portfolioSnapshots PortfolioSnapshot[]
+  positions        ExternalPosition[]
+  auditEvents      AuditEvent[]
+}
+
+model WalletSession {
+  id               String    @id @default(uuid())
+  userId           String?
+  address          String
+  chainId          Int
+  nonce            String
+  nonceExpiresAt   DateTime
+  verifiedAt       DateTime?
+  sessionTokenHash String?
+  sessionExpiresAt DateTime?
+  createdAt        DateTime  @default(now())
+  user             User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([address, chainId, nonce])
+  @@index([address, createdAt(sort: Desc)])
+}
+
+model PolymarketEvent {
+  id              String             @id @default(uuid())
+  externalEventId String             @unique
+  slug            String?            @unique
+  title           String
+  description     String?
+  image           String?
+  icon            String?
+  tags            Json
+  active          Boolean
+  closed          Boolean
+  archived        Boolean            @default(false)
+  restricted      Boolean?
+  endDate         DateTime?
+  volume          Decimal?
+  liquidity       Decimal?
+  openInterest    Decimal?
+  rawPayload      Json
+  syncedAt        DateTime
+  markets         PolymarketMarket[]
+
+  @@index([active, closed])
+  @@index([volume])
+  @@index([syncedAt])
+}
+
+model PolymarketMarket {
+  id                    String              @id @default(uuid())
+  eventId               String?
+  externalMarketId      String?             @unique
+  conditionId           String?             @unique
+  questionId            String?
+  slug                  String              @unique
+  question              String
+  description           String?
+  rules                 String?
+  image                 String?
+  icon                  String?
+  active                Boolean
+  closed                Boolean
+  archived              Boolean             @default(false)
+  acceptingOrders       Boolean             @default(false)
+  enableOrderBook       Boolean             @default(false)
+  negRisk               Boolean             @default(false)
+  orderMinSize          Decimal?
+  orderPriceMinTickSize Decimal?
+  bestBid               Decimal?
+  bestAsk               Decimal?
+  lastTradePrice        Decimal?
+  spread                Decimal?
+  volume                Decimal?
+  volume24hr            Decimal?
+  liquidity             Decimal?
+  endDate               DateTime?
+  rawPayload            Json
+  syncedAt              DateTime
+  event                 PolymarketEvent?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  outcomes              PolymarketOutcome[]
+  snapshots             MarketSnapshot[]
+  scriptMarkets         ScriptMarket[]
+  networkNodes          MarketNetworkNode[]
+  sourceNetworkEdges    MarketNetworkEdge[] @relation("MarketNetworkEdgeSource")
+  targetNetworkEdges    MarketNetworkEdge[] @relation("MarketNetworkEdgeTarget")
+  orders                CausewayOrder[]
+  externalPositions     ExternalPosition[]
+
+  @@index([active, closed, acceptingOrders, enableOrderBook])
+  @@index([volume24hr])
+  @@index([endDate])
+  @@index([syncedAt])
+}
+
+model PolymarketOutcome {
+  id             String           @id @default(uuid())
+  marketId       String
+  outcomeIndex   Int
+  label          String
+  clobTokenId    String           @unique
+  price          Decimal?
+  bestBid        Decimal?
+  bestAsk        Decimal?
+  lastTradePrice Decimal?
+  rawPayload     Json?
+  syncedAt       DateTime
+  market         PolymarketMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  selections     ScriptOutcomeSelection[]
+  orders         CausewayOrder[]
+  snapshots      MarketSnapshot[]
+  externalPositions ExternalPosition[]
+
+  @@unique([marketId, outcomeIndex])
+  @@index([marketId])
+  @@index([label])
+}
+
+model MarketSnapshot {
+  id         String             @id @default(uuid())
+  marketId   String
+  outcomeId  String?
+  price      Decimal?
+  bestBid    Decimal?
+  bestAsk    Decimal?
+  spread     Decimal?
+  liquidity  Decimal?
+  volume     Decimal?
+  snapshotAt DateTime
+  market     PolymarketMarket   @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  outcome    PolymarketOutcome? @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+
+  @@index([marketId, snapshotAt(sort: Desc)])
+  @@index([outcomeId, snapshotAt(sort: Desc)])
+}
+
+model MarketNetworkNode {
+  id         String           @id @default(uuid())
+  marketId   String
+  score      Decimal
+  category   String?
+  metadata   Json
+  computedAt DateTime
+  market     PolymarketMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
+
+  @@unique([marketId])
+  @@index([score])
+}
+
+model MarketNetworkEdge {
+  id             String           @id @default(uuid())
+  sourceMarketId String
+  targetMarketId String
+  relationType   MarketNetworkRelationType
+  weight         Decimal
+  metadata       Json
+  computedAt     DateTime
+  sourceMarket   PolymarketMarket @relation("MarketNetworkEdgeSource", fields: [sourceMarketId], references: [id], onDelete: Cascade)
+  targetMarket   PolymarketMarket @relation("MarketNetworkEdgeTarget", fields: [targetMarketId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceMarketId, targetMarketId, relationType])
+  @@index([sourceMarketId])
+  @@index([targetMarketId])
+}
+
+model InferenceRun {
+  id                  String             @id @default(uuid())
+  userId              String
+  rootEventId         String?
+  rootMarketId        String
+  rootOutcomeId       String
+  rootClobTokenId     String
+  depth               Int
+  maxMarketsPerLayer  Int
+  confidenceThreshold Decimal
+  model               String
+  promptVersion       String
+  outputSchemaVersion String
+  cacheEnabled        Boolean
+  cacheKey            String
+  cacheHit            Boolean            @default(false)
+  status              InferenceRunStatus @default(queued)
+  stage               InferenceStage?
+  progress            Int                @default(0)
+  inputJson           Json
+  outputJson          Json?
+  errorMessage        String?
+  createdAt           DateTime           @default(now())
+  completedAt         DateTime?
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  script              CausalScript?
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([cacheKey])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+model InferenceCacheEntry {
+  id                  String   @id @default(uuid())
+  cacheKey            String   @unique
+  model               String
+  promptVersion       String
+  outputSchemaVersion String
+  inputHash           String
+  outputHash          String
+  resultJson          Json
+  expiresAt           DateTime
+  createdAt           DateTime @default(now())
+  lastUsedAt          DateTime?
+  useCount            Int      @default(0)
+
+  @@index([expiresAt])
+}
+
+model CausalScript {
+  id             String         @id @default(uuid())
+  userId         String
+  inferenceRunId String         @unique
+  title          String
+  status         ScriptStatus   @default(draft)
+  rootEventId    String?
+  rootMarketId   String
+  rootOutcomeId  String
+  graphJson      Json
+  summary        String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inferenceRun   InferenceRun   @relation(fields: [inferenceRunId], references: [id], onDelete: Cascade)
+  markets        ScriptMarket[]
+  orderIntents   OrderIntent[]
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model ScriptMarket {
+  id                   String                   @id @default(uuid())
+  scriptId             String
+  marketId             String
+  parentScriptMarketId String?
+  layer                Int
+  impactDirection      ImpactDirection
+  confidence           Decimal
+  reason               String
+  metadata             Json
+  createdAt            DateTime                 @default(now())
+  script               CausalScript             @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  market               PolymarketMarket         @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  parent               ScriptMarket?            @relation("ScriptMarketParent", fields: [parentScriptMarketId], references: [id], onDelete: SetNull)
+  children             ScriptMarket[]           @relation("ScriptMarketParent")
+  selections           ScriptOutcomeSelection[]
+
+  @@unique([scriptId, marketId])
+  @@index([scriptId, layer])
+}
+
+model ScriptOutcomeSelection {
+  id             String              @id @default(uuid())
+  scriptMarketId String
+  outcomeId      String
+  aiAction       AiSelectionAction
+  userAction     UserSelectionAction
+  side           OrderSide           @default(BUY)
+  orderMode      OrderMode           @default(limit)
+  limitPrice     Decimal?
+  size           Decimal?
+  amountUsd      Decimal?
+  confidence     Decimal?
+  reason         String?
+  updatedAt      DateTime            @updatedAt
+  scriptMarket   ScriptMarket        @relation(fields: [scriptMarketId], references: [id], onDelete: Cascade)
+  outcome        PolymarketOutcome   @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+  orders         CausewayOrder[]
+
+  @@unique([scriptMarketId, outcomeId])
+  @@index([userAction])
+}
+
+model OrderIntent {
+  id                      String              @id @default(uuid())
+  userId                  String
+  scriptId                String
+  status                  OrderIntentStatus   @default(draft)
+  executionMode           ExecutionMode       @default(dry_run)
+  totalAmountUsd          Decimal
+  cashAvailable           Decimal?
+  tradingCapability       String?
+  tradingCapabilityReason String?
+  balanceCapability       String?
+  balanceCapabilityReason String?
+  previewJson             Json
+  riskJson                Json
+  previewExpiresAt        DateTime?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+  user                    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  script                  CausalScript        @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  orders                  CausewayOrder[]
+  submissions             OrderSubmission[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([scriptId])
+}
+
+model CausewayOrder {
+  id                 String                  @id @default(uuid())
+  orderIntentId      String
+  selectionId        String?
+  marketId           String
+  outcomeId          String
+  clobTokenId        String
+  side               OrderSide
+  orderMode          OrderMode
+  orderType          OrderType?
+  limitPrice         Decimal?
+  estimatedFillPrice Decimal?
+  size               Decimal
+  amountUsd          Decimal
+  externalOrderId    String?
+  status             CausewayOrderStatus     @default(preview_ready)
+  submitPayload      Json?
+  responsePayload    Json?
+  errorMessage       String?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  orderIntent        OrderIntent             @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+  selection          ScriptOutcomeSelection? @relation(fields: [selectionId], references: [id], onDelete: SetNull)
+  market             PolymarketMarket        @relation(fields: [marketId], references: [id], onDelete: Restrict)
+  outcome            PolymarketOutcome       @relation(fields: [outcomeId], references: [id], onDelete: Restrict)
+
+  @@index([orderIntentId])
+  @@index([selectionId])
+  @@index([marketId])
+  @@index([externalOrderId])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+model OrderSubmission {
+  id             String      @id @default(uuid())
+  userId         String
+  orderIntentId  String
+  idempotencyKey String
+  requestHash    String
+  status         String
+  responseJson   Json?
+  errorMessage   String?
+  createdAt      DateTime    @default(now())
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderIntent    OrderIntent @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orderIntentId, idempotencyKey])
+  @@index([orderIntentId, createdAt(sort: Desc)])
+}
+
+model PortfolioSnapshot {
+  id                 String   @id @default(uuid())
+  userId             String
+  walletAddress      String
+  cashAvailable      Decimal?
+  portfolioValue     Decimal?
+  openPositionsValue Decimal?
+  openOrdersValue    Decimal?
+  pnl                Decimal?
+  rawPayload         Json
+  snapshotAt         DateTime
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, snapshotAt(sort: Desc)])
+}
+
+model ExternalPosition {
+  id           String             @id @default(uuid())
+  userId       String
+  marketId     String?
+  outcomeId    String?
+  clobTokenId  String
+  size         Decimal
+  avgPrice     Decimal?
+  currentPrice Decimal?
+  currentValue Decimal?
+  pnl          Decimal?
+  rawPayload   Json
+  syncedAt     DateTime
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  market       PolymarketMarket?  @relation(fields: [marketId], references: [id], onDelete: SetNull)
+  outcome      PolymarketOutcome? @relation(fields: [outcomeId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, clobTokenId])
+  @@index([userId, syncedAt(sort: Desc)])
+}
+
+model SyncRun {
+  id            String        @id @default(uuid())
+  jobType       String
+  scope         String
+  cursor        String?
+  startedAt     DateTime      @default(now())
+  finishedAt    DateTime?
+  status        SyncRunStatus
+  fetchedCount  Int           @default(0)
+  upsertedCount Int           @default(0)
+  error         String?
+  metadata      Json
+
+  @@index([jobType, startedAt(sort: Desc)])
+  @@index([status, startedAt(sort: Desc)])
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  userId     String?
+  requestId  String?
+  actorType  String
+  entityType String
+  entityId   String
+  action     String
+  before     Json?
+  after      Json?
+  reason     String?
+  createdAt  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([requestId])
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+}
