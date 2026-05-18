@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 DB_PATH = DATA_DIR / "causeway.sqlite3"
 GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets"
+GAMMA_EVENTS_URL = "https://gamma-api.polymarket.com/events"
+CLOB_PRICES_HISTORY_URL = "https://clob.polymarket.com/batch-prices-history"
 MAX_NETWORK_MARKETS = 25
 DEFAULT_SYNC_LIMIT = 1000
 USER_AGENT = (
@@ -230,6 +232,30 @@ def init_db() -> None:
               raw_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS events (
+              id TEXT PRIMARY KEY,
+              slug TEXT,
+              title TEXT NOT NULL,
+              category TEXT,
+              category_key TEXT,
+              category_label TEXT,
+              tags_json TEXT,
+              icon TEXT,
+              image TEXT,
+              end_date TEXT,
+              volume REAL,
+              volume_24hr REAL,
+              liquidity REAL,
+              description TEXT,
+              rules TEXT,
+              markets_count INTEGER,
+              active INTEGER,
+              closed INTEGER,
+              updated_at TEXT,
+              synced_at TEXT NOT NULL,
+              raw_json TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS market_edges (
               id TEXT PRIMARY KEY,
               source TEXT NOT NULL,
@@ -263,6 +289,10 @@ def init_db() -> None:
               ON markets(active, closed, event_id, event_slug);
             CREATE INDEX IF NOT EXISTS idx_markets_slug
               ON markets(slug);
+            CREATE INDEX IF NOT EXISTS idx_events_slug
+              ON events(slug);
+            CREATE INDEX IF NOT EXISTS idx_events_active
+              ON events(active, closed, category_key, volume_24hr, volume);
             """
         )
 
@@ -327,9 +357,9 @@ def tag_label(tag: Any) -> str | None:
     return None
 
 
-def official_terms(item: dict[str, Any]) -> list[str]:
+def official_terms(item: dict[str, Any], event: dict[str, Any] | None = None) -> list[str]:
     terms: list[str] = []
-    for source in (item, first_event(item)):
+    for source in (item, event or first_event(item)):
         tags = source.get("tags")
         if isinstance(tags, list):
             for tag in tags:
@@ -349,8 +379,8 @@ def official_terms(item: dict[str, Any]) -> list[str]:
     return deduped
 
 
-def extract_official_category(item: dict[str, Any]) -> str | None:
-    terms = official_terms(item)
+def extract_official_category(item: dict[str, Any], event: dict[str, Any] | None = None) -> str | None:
+    terms = official_terms(item, event)
     return terms[0] if terms else None
 
 
@@ -360,7 +390,8 @@ def keyword_matches(text: str, keyword: str) -> bool:
     return keyword in text
 
 
-def classify_market(item: dict[str, Any], terms: list[str]) -> tuple[str, str]:
+def classify_market(item: dict[str, Any], terms: list[str], event: dict[str, Any] | None = None) -> tuple[str, str]:
+    event_item = event or first_event(item)
     official_text = " ".join(normalize_term(term) for term in terms)
     fallback_text = normalize_term(
         " ".join(
@@ -368,7 +399,7 @@ def classify_market(item: dict[str, Any], terms: list[str]) -> tuple[str, str]:
             for part in (
                 item.get("question"),
                 item.get("title"),
-                first_event(item).get("title"),
+                event_item.get("title"),
             )
         )
     )
@@ -379,10 +410,39 @@ def classify_market(item: dict[str, Any], terms: list[str]) -> tuple[str, str]:
     return "other", "其他"
 
 
-def market_record(item: dict[str, Any]) -> tuple[Any, ...]:
-    event = first_event(item)
+def event_record(item: dict[str, Any]) -> tuple[Any, ...]:
     terms = official_terms(item)
     category_key, category_label = classify_market(item, terms)
+    event_payload = {key: value for key, value in item.items() if key != "markets"}
+    return (
+        str(item.get("id")),
+        item.get("slug") or item.get("ticker"),
+        item.get("title") or "Untitled event",
+        extract_official_category(item),
+        category_key,
+        category_label,
+        json.dumps(terms, ensure_ascii=False),
+        item.get("icon") or item.get("image"),
+        item.get("image") or item.get("icon"),
+        item.get("endDate"),
+        as_float(item.get("volume")),
+        as_float(item.get("volume24hr")),
+        as_float(item.get("liquidity") or item.get("liquidityClob")),
+        item.get("description"),
+        item.get("resolutionSource"),
+        len(item.get("markets") or []),
+        1 if item.get("active") else 0,
+        1 if item.get("closed") else 0,
+        item.get("updatedAt"),
+        utc_now(),
+        json.dumps(event_payload, ensure_ascii=False),
+    )
+
+
+def market_record(item: dict[str, Any], parent_event: dict[str, Any] | None = None) -> tuple[Any, ...]:
+    event = parent_event or first_event(item)
+    terms = official_terms(item, event)
+    category_key, category_label = classify_market(item, terms, event)
     outcomes = parse_jsonish(item.get("outcomes"), [])
     prices = parse_jsonish(item.get("outcomePrices"), [])
     clob_ids = parse_jsonish(item.get("clobTokenIds"), [])
@@ -404,7 +464,7 @@ def market_record(item: dict[str, Any]) -> tuple[Any, ...]:
         str(event.get("id")) if event.get("id") is not None else None,
         event.get("slug") or event.get("ticker"),
         event.get("title"),
-        extract_official_category(item),
+        extract_official_category(item, event),
         category_key,
         category_label,
         json.dumps(terms, ensure_ascii=False),
@@ -453,6 +513,49 @@ def fetch_gamma_markets(limit: int) -> list[dict[str, Any]]:
             payload = json.loads(response.read().decode("utf-8"))
         if not isinstance(payload, list):
             raise RuntimeError("Unexpected Polymarket Gamma response")
+        page = [item for item in payload if isinstance(item, dict)]
+        if not page:
+            break
+        new_items = []
+        for item in page:
+            item_id = str(item.get("id"))
+            if item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+            new_items.append(item)
+        if not new_items:
+            break
+        items.extend(new_items)
+        offset += len(page)
+    return items[:requested]
+
+
+def fetch_gamma_events(limit: int) -> list[dict[str, Any]]:
+    requested = min(max(limit, 20), 2500)
+    page_size = 200
+    offset = 0
+    items: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    while len(items) < requested:
+        page_limit = min(page_size, requested - len(items))
+        params = urllib.parse.urlencode(
+            {
+                "active": "true",
+                "closed": "false",
+                "limit": page_limit,
+                "offset": offset,
+                "order": "volume24hr",
+                "ascending": "false",
+            }
+        )
+        request = urllib.request.Request(
+            f"{GAMMA_EVENTS_URL}?{params}",
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, list):
+            raise RuntimeError("Unexpected Polymarket Gamma events response")
         page = [item for item in payload if isinstance(item, dict)]
         if not page:
             break
@@ -606,9 +709,32 @@ def build_edges(conn: sqlite3.Connection) -> None:
 def sync_markets(limit: int = DEFAULT_SYNC_LIMIT) -> dict[str, Any]:
     init_db()
     started = time.time()
-    items = fetch_gamma_markets(limit)
+    events = fetch_gamma_events(limit)
+    top_markets = fetch_gamma_markets(min(limit, 1000))
+    market_items: dict[str, tuple[dict[str, Any], dict[str, Any] | None]] = {}
+    for event in events:
+        for market in event.get("markets") or []:
+            if not isinstance(market, dict) or market.get("id") is None:
+                continue
+            market_items[str(market.get("id"))] = (market, event)
+    for market in top_markets:
+        if not isinstance(market, dict) or market.get("id") is None:
+            continue
+        market_items.setdefault(str(market.get("id")), (market, None))
     with db() as conn:
+        conn.execute("UPDATE events SET active = 0 WHERE active = 1")
         conn.execute("UPDATE markets SET active = 0 WHERE active = 1")
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO events (
+              id, slug, title, category, category_key, category_label, tags_json,
+              icon, image, end_date, volume, volume_24hr, liquidity,
+              description, rules, markets_count, active, closed, updated_at,
+              synced_at, raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [event_record(item) for item in events],
+        )
         conn.executemany(
             """
             INSERT OR REPLACE INTO markets (
@@ -619,23 +745,29 @@ def sync_markets(limit: int = DEFAULT_SYNC_LIMIT) -> dict[str, Any]:
               synced_at, raw_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            [market_record(item) for item in items],
+            [market_record(item, parent_event) for item, parent_event in market_items.values()],
         )
         build_edges(conn)
-    return {"synced": len(items), "elapsedSeconds": round(time.time() - started, 2), "source": GAMMA_MARKETS_URL}
+    return {
+        "syncedEvents": len(events),
+        "syncedMarkets": len(market_items),
+        "elapsedSeconds": round(time.time() - started, 2),
+        "source": {"events": GAMMA_EVENTS_URL, "markets": GAMMA_MARKETS_URL},
+    }
 
 
 def ensure_seed_data() -> None:
     init_db()
     with db() as conn:
         count = conn.execute("SELECT COUNT(*) FROM markets").fetchone()[0]
+        event_count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         missing_category_count = conn.execute(
             "SELECT COUNT(*) FROM markets WHERE active = 1 AND closed = 0 AND category_key IS NULL"
         ).fetchone()[0]
         missing_event_slug_count = conn.execute(
             "SELECT COUNT(*) FROM markets WHERE active = 1 AND closed = 0 AND event_id IS NOT NULL AND event_slug IS NULL"
         ).fetchone()[0]
-    if count == 0 or missing_category_count or missing_event_slug_count:
+    if count == 0 or event_count == 0 or missing_category_count or missing_event_slug_count:
         sync_markets(DEFAULT_SYNC_LIMIT)
 
 
@@ -705,6 +837,7 @@ def row_to_node(row: sqlite3.Row, position: tuple[float, float]) -> dict[str, An
         "id": row["id"],
         "marketId": row["id"],
         "slug": row["slug"],
+        "eventId": row["event_id"],
         "title": row["question"],
         "eventSlug": row["event_slug"],
         "eventTitle": row["event_title"],
@@ -723,6 +856,7 @@ def row_to_node(row: sqlite3.Row, position: tuple[float, float]) -> dict[str, An
         "rules": row["rules"],
         "acceptingOrders": bool(row["accepting_orders"]),
         "outcomes": parse_jsonish(row["outcomes_json"], []),
+        "groupItemTitle": raw.get("groupItemTitle") if isinstance(raw, dict) else None,
         "bestBid": as_float(raw.get("bestBid")) if isinstance(raw, dict) else None,
         "bestAsk": as_float(raw.get("bestAsk")) if isinstance(raw, dict) else None,
         "lastTradePrice": as_float(raw.get("lastTradePrice")) if isinstance(raw, dict) else None,
@@ -1227,6 +1361,148 @@ def market_network(query: dict[str, list[str]]) -> dict[str, Any]:
     }
 
 
+def event_detail(query: dict[str, list[str]]) -> dict[str, Any]:
+    ensure_seed_data()
+    market_id = query.get("marketId", [""])[0].strip()
+    event_focus = query.get("eventId", [""])[0].strip() or query.get("eventSlug", [""])[0].strip()
+    with db() as conn:
+        focus_row = None
+        if market_id:
+            focus_row = conn.execute(
+                """
+                SELECT *
+                FROM markets
+                WHERE id = ? OR lower(slug) = ?
+                LIMIT 1
+                """,
+                [market_id, normalize_term(market_id)],
+            ).fetchone()
+            if focus_row:
+                event_focus = focus_row["event_id"] or focus_row["event_slug"] or event_focus
+        event_row = None
+        if event_focus:
+            event_row = conn.execute(
+                """
+                SELECT *
+                FROM events
+                WHERE id = ? OR lower(slug) = ?
+                LIMIT 1
+                """,
+                [event_focus, normalize_term(event_focus)],
+            ).fetchone()
+        if event_focus:
+            market_rows = conn.execute(
+                """
+                SELECT *
+                FROM markets
+                WHERE active = 1 AND closed = 0
+                  AND (event_id = ? OR lower(event_slug) = ?)
+                ORDER BY COALESCE(price, 0) DESC, COALESCE(volume, 0) DESC
+                LIMIT 80
+                """,
+                [event_focus, normalize_term(event_focus)],
+            ).fetchall()
+        elif focus_row:
+            market_rows = [focus_row]
+        else:
+            market_rows = []
+
+    event_payload: dict[str, Any] | None = None
+    if event_row:
+        event_payload = {
+            "id": event_row["id"],
+            "slug": event_row["slug"],
+            "title": event_row["title"],
+            "category": event_row["category_label"] or event_row["category"] or "其他",
+            "categoryKey": event_row["category_key"] or "other",
+            "officialCategory": event_row["category"],
+            "tags": parse_jsonish(event_row["tags_json"], []),
+            "icon": event_row["icon"] or event_row["image"],
+            "image": event_row["image"] or event_row["icon"],
+            "endDate": event_row["end_date"],
+            "volume": event_row["volume"],
+            "volume24hr": event_row["volume_24hr"],
+            "liquidity": event_row["liquidity"],
+            "description": event_row["description"],
+            "rules": event_row["rules"],
+            "marketsCount": event_row["markets_count"],
+            "updatedAt": event_row["updated_at"],
+            "syncedAt": event_row["synced_at"],
+        }
+    elif market_rows:
+        first = market_rows[0]
+        event_payload = {
+            "id": first["event_id"],
+            "slug": first["event_slug"],
+            "title": first["event_title"] or first["question"],
+            "category": first["category_label"] or first["category"] or "其他",
+            "categoryKey": first["category_key"] or "other",
+            "officialCategory": first["category"],
+            "tags": parse_jsonish(first["tags_json"], []),
+            "icon": first["icon"] or first["image"],
+            "image": first["image"] or first["icon"],
+            "endDate": first["end_date"],
+            "volume": sum(row["volume"] or 0 for row in market_rows),
+            "volume24hr": sum(row["volume_24hr"] or 0 for row in market_rows),
+            "liquidity": sum(row["liquidity"] or 0 for row in market_rows),
+            "description": first["description"],
+            "rules": first["rules"],
+            "marketsCount": len(market_rows),
+            "updatedAt": first["updated_at"],
+            "syncedAt": first["synced_at"],
+        }
+
+    nodes = [row_to_node(row, (50.0, 50.0)) for row in market_rows]
+    return {
+        "event": event_payload,
+        "markets": nodes,
+        "source": GAMMA_EVENTS_URL,
+        "generatedAt": utc_now(),
+    }
+
+
+def market_price_history(query: dict[str, list[str]]) -> dict[str, Any]:
+    token_ids_raw = query.get("tokenIds", [""])[0].strip()
+    token_ids = [
+        token.strip()
+        for token in token_ids_raw.split(",")
+        if token.strip() and re.fullmatch(r"\d{20,}", token.strip())
+    ][:12]
+    if not token_ids:
+        return {"history": {}, "source": CLOB_PRICES_HISTORY_URL, "generatedAt": utc_now()}
+    interval = query.get("interval", ["all"])[0].strip().lower()
+    if interval not in {"1h", "6h", "1d", "1w", "1m", "all"}:
+        interval = "all"
+    try:
+        fidelity = int(query.get("fidelity", ["1440"])[0])
+    except ValueError:
+        fidelity = 1440
+    fidelity = max(1, min(fidelity, 1440))
+    body = json.dumps(
+        {
+            "markets": token_ids,
+            "interval": interval,
+            "fidelity": fidelity,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        CLOB_PRICES_HISTORY_URL,
+        data=body,
+        method="POST",
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    history = payload.get("history") if isinstance(payload, dict) else {}
+    if not isinstance(history, dict):
+        history = {}
+    return {"history": history, "source": CLOB_PRICES_HISTORY_URL, "generatedAt": utc_now()}
+
+
 class Handler(BaseHTTPRequestHandler):
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -1259,6 +1535,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_response(200, {"data": market_search(query), "requestId": f"req_{int(time.time() * 1000)}"})
             elif parsed.path == "/api/markets/network":
                 self.json_response(200, {"data": market_network(query), "requestId": f"req_{int(time.time() * 1000)}"})
+            elif parsed.path == "/api/events/detail":
+                self.json_response(200, {"data": event_detail(query), "requestId": f"req_{int(time.time() * 1000)}"})
+            elif parsed.path == "/api/markets/history":
+                self.json_response(200, {"data": market_price_history(query), "requestId": f"req_{int(time.time() * 1000)}"})
             else:
                 self.json_response(404, {"error": {"code": "NOT_FOUND", "message": parsed.path}})
         except Exception as exc:

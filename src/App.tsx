@@ -52,13 +52,17 @@ type View = 'network' | 'detail' | 'infer' | 'progress' | 'script' | 'scripts'
 
 type Market = {
   id: string
+  slug?: string | null
   title: string
+  groupItemTitle?: string | null
   category: string
   categoryKey?: string
   officialCategory?: string | null
   tags?: string[]
   icon: 'landmark' | 'bank' | 'bitcoin' | 'factory' | 'flame' | 'cpu' | 'globe'
   iconUrl?: string | null
+  eventId?: string | null
+  eventSlug?: string | null
   eventTitle?: string | null
   endDate?: string | null
   description?: string | null
@@ -84,7 +88,10 @@ type Market = {
 
 type ApiMarketNode = {
   id: string
+  slug?: string | null
   title: string
+  groupItemTitle?: string | null
+  eventId?: string | null
   eventSlug?: string | null
   eventTitle: string | null
   category: string | null
@@ -125,6 +132,48 @@ type MarketNetworkResponse = {
   data: {
     nodes: ApiMarketNode[]
     edges: ApiMarketEdge[]
+    source: string
+    generatedAt: string
+  }
+}
+
+type EventDetail = {
+  event: {
+    id: string | null
+    slug: string | null
+    title: string
+    category: string | null
+    categoryKey: string | null
+    officialCategory: string | null
+    tags: string[]
+    icon: string | null
+    image: string | null
+    endDate: string | null
+    volume: number | null
+    volume24hr: number | null
+    liquidity: number | null
+    description: string | null
+    rules: string | null
+    marketsCount: number | null
+    syncedAt: string | null
+  } | null
+  markets: ApiMarketNode[]
+  source: string
+  generatedAt: string
+}
+
+type EventDetailResponse = {
+  data: EventDetail
+}
+
+type PricePoint = {
+  t: number
+  p: number
+}
+
+type PriceHistoryResponse = {
+  data: {
+    history: Record<string, PricePoint[]>
     source: string
     generatedAt: string
   }
@@ -489,9 +538,95 @@ function outcomePath(index: number, price: number | null) {
   return points.join(' ')
 }
 
+const HISTORY_CHART_LEFT = 36
+const HISTORY_CHART_RIGHT = 724
+const HISTORY_CHART_TOP = 38
+const HISTORY_CHART_BOTTOM = 272
+
+function chartY(price: number, maxPrice: number) {
+  const scale = Math.max(0.01, maxPrice)
+  return HISTORY_CHART_BOTTOM - (clamp(price, 0, scale) / scale) * (HISTORY_CHART_BOTTOM - HISTORY_CHART_TOP)
+}
+
+function chartMaxPrice(points: PricePoint[], prices: Array<number | null | undefined>) {
+  const maxValue = Math.max(
+    0,
+    ...points.map((point) => clamp(point.p, 0, 1)),
+    ...prices.map((price) => (price == null ? 0 : clamp(price, 0, 1))),
+  )
+  if (maxValue <= 0.15) return 0.15
+  if (maxValue <= 0.3) return 0.3
+  if (maxValue <= 0.45) return 0.45
+  if (maxValue <= 0.6) return 0.6
+  if (maxValue <= 0.8) return 0.8
+  return 1
+}
+
+function chartTicks(maxPrice: number) {
+  return [maxPrice, maxPrice * 0.75, maxPrice * 0.5, maxPrice * 0.25, 0]
+}
+
+function historyPath(points: PricePoint[], minT: number, maxT: number, maxPrice: number) {
+  if (points.length < 2) return ''
+  const span = Math.max(1, maxT - minT)
+  return points
+    .map((point, index) => {
+      const x = HISTORY_CHART_LEFT + ((point.t - minT) / span) * (HISTORY_CHART_RIGHT - HISTORY_CHART_LEFT)
+      const y = chartY(point.p, maxPrice)
+      return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`
+    })
+    .join(' ')
+}
+
+function compactHistory(points: PricePoint[]) {
+  if (points.length <= 240) return points
+  const step = Math.ceil(points.length / 240)
+  return points.filter((_, index) => index % step === 0 || index === points.length - 1)
+}
+
 function formatToken(tokenId: string | null | undefined) {
   if (!tokenId) return '未提供'
   return `${tokenId.slice(0, 6)}...${tokenId.slice(-6)}`
+}
+
+function marketDisplayLabel(market: Market) {
+  if (market.groupItemTitle) return market.groupItemTitle
+  let label = market.title
+  label = label.replace(/^Will\s+/i, '')
+  label = label.replace(/\s+be\s+the\s+top\s+grossing\s+movie\s+of\s+2026\??$/i, '')
+  label = label.replace(/\s+win\s+on\s+\d{4}-\d{2}-\d{2}\??$/i, '')
+  label = label.replace(/\?$/, '')
+  return label || market.title
+}
+
+function eventToMarket(event: EventDetail['event'], fallback: Market): Market {
+  if (!event) return fallback
+  const category = event.category || fallback.category
+  const categoryKey = event.categoryKey || fallback.categoryKey || category
+  return {
+    ...fallback,
+    id: event.id || fallback.eventId || fallback.id,
+    slug: event.slug || fallback.eventSlug || fallback.slug,
+    title: event.title || fallback.eventTitle || fallback.title,
+    category,
+    categoryKey,
+    officialCategory: event.officialCategory || fallback.officialCategory,
+    tags: event.tags || fallback.tags,
+    iconUrl: event.icon || event.image || fallback.iconUrl,
+    eventId: event.id || fallback.eventId,
+    eventSlug: event.slug || fallback.eventSlug,
+    eventTitle: event.title || fallback.eventTitle,
+    endDate: event.endDate || fallback.endDate,
+    description: event.description || fallback.description,
+    rules: event.rules || fallback.rules,
+    syncedAt: event.syncedAt || fallback.syncedAt,
+    price: fallback.price,
+    volume: formatCompactMoney(event.volume),
+    volumeValue: event.volume,
+    liquidity: event.liquidity,
+    traders: event.volume24hr ? formatCompactMoney(event.volume24hr) : fallback.traders,
+    tone: categoryTones[categoryKey] || categoryTones[category] || fallback.tone,
+  }
 }
 
 const FLOW_NODE_WIDTH = 168
@@ -944,7 +1079,9 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
   const price = node.price == null ? 0 : Math.round(node.price * 100)
   return {
     id: node.id,
+    slug: node.slug,
     title: node.title,
+    groupItemTitle: node.groupItemTitle,
     category,
     categoryKey,
     officialCategory: node.officialCategory,
@@ -957,6 +1094,8 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
           ? 'bank'
           : 'landmark',
     iconUrl: node.icon || node.image,
+    eventId: node.eventId,
+    eventSlug: node.eventSlug,
     eventTitle: node.eventTitle,
     endDate: node.endDate,
     description: node.description,
@@ -1243,22 +1382,44 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
 }
 
 function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () => void; onInfer: () => void }) {
-  const ruleCopy = marketRuleCopy(market)
-  const outcomeRows = getOutcomeRows(market)
-  const primaryOutcome = outcomeRows[0]
+  const [eventDetail, setEventDetail] = useState<EventDetail | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const params = new URLSearchParams({ marketId: market.id })
+    fetch(`/api/events/detail?${params.toString()}`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.json() as Promise<EventDetailResponse>
+      })
+      .then((payload) => setEventDetail(payload.data))
+      .catch((error: Error) => {
+        if (error.name !== 'AbortError') setEventDetail(null)
+      })
+    return () => controller.abort()
+  }, [market.id])
+
+  const eventMarkets = useMemo(
+    () => eventDetail?.markets.map(apiNodeToMarket) || [],
+    [eventDetail],
+  )
+  const displayMarket = eventMarkets.length > 1 ? eventToMarket(eventDetail?.event || null, market) : market
+  const detailMarkets = eventMarkets.length > 1 ? eventMarkets : [market]
+  const ruleCopy = marketRuleCopy(displayMarket)
+  const primaryMarket = [...detailMarkets].sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))[0] || market
   return (
     <section className="page market-detail-page">
       <BackButton onClick={onBack} />
       <div className="market-detail-layout">
         <div className="market-detail-content">
           <div className="market-page-head">
-            <MarketIcon market={market} size="large" />
+            <MarketIcon market={displayMarket} size="large" />
             <div>
               <div className="market-page-meta">
-                <span>{market.officialCategory || market.category}</span>
-                {market.eventTitle ? <span>{market.eventTitle}</span> : null}
+                <span>{displayMarket.officialCategory || displayMarket.category}</span>
+                {eventMarkets.length > 1 ? <span>{detailMarkets.length} 个盘口</span> : displayMarket.eventTitle ? <span>{displayMarket.eventTitle}</span> : null}
               </div>
-              <h1>{market.title}</h1>
+              <h1>{displayMarket.title}</h1>
             </div>
             <div className="market-head-actions">
               <button className="outline-button square" type="button" aria-label="收藏">
@@ -1273,25 +1434,25 @@ function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () 
           <Card className="market-live-card">
             <div className="market-live-strip">
               <div>
-                <span>{primaryOutcome?.label || '当前概率'}</span>
-                <strong>{primaryOutcome?.percent ?? market.price}%</strong>
-                <em className={market.change >= 0 ? 'green-text' : 'red-text'}>{marketChangeText(market)}</em>
+                <span>{eventMarkets.length > 1 ? '领先盘口' : '当前概率'}</span>
+                <strong>{primaryMarket.price}%</strong>
+                <em className={primaryMarket.change >= 0 ? 'green-text' : 'red-text'}>{eventMarkets.length > 1 ? marketDisplayLabel(primaryMarket) : marketChangeText(primaryMarket)}</em>
               </div>
               <div>
                 <span>成交量</span>
-                <strong>{market.volume}</strong>
+                <strong>{displayMarket.volume}</strong>
               </div>
               <div>
                 <span>流动性</span>
-                <strong>{formatCompactMoney(market.liquidity)}</strong>
+                <strong>{formatCompactMoney(displayMarket.liquidity)}</strong>
               </div>
               <div>
                 <span>结束时间</span>
-                <strong>{formatDate(market.endDate)}</strong>
+                <strong>{formatDate(displayMarket.endDate)}</strong>
               </div>
             </div>
-            <MarketPriceChart market={market} />
-            <MarketOrderBook market={market} />
+            <MarketPriceChart eventMarkets={detailMarkets} market={displayMarket} />
+            <MarketOrderBook eventMarkets={detailMarkets} loading={!eventDetail} market={displayMarket} />
           </Card>
         </div>
 
@@ -1299,8 +1460,8 @@ function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () 
           <Card className="market-side-card">
             <SectionHeader title="市场描述" />
             <div className="market-rule-copy">
-              <p>{marketDescriptionCopy(market)}</p>
-              {ruleCopy !== marketDescriptionCopy(market) ? <p>{ruleCopy}</p> : null}
+              <p>{marketDescriptionCopy(displayMarket)}</p>
+              {ruleCopy !== marketDescriptionCopy(displayMarket) ? <p>{ruleCopy}</p> : null}
             </div>
           </Card>
           <Card className="market-side-card">
@@ -1308,15 +1469,15 @@ function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () 
             <InfoTable
               rows={[
                 ['市场 ID', market.id],
-                ['事件', market.eventTitle || '未提供'],
-                ['到期时间', formatDate(market.endDate)],
-                ['类别', market.category],
+                ['事件', displayMarket.eventTitle || '未提供'],
+                ['到期时间', formatDate(displayMarket.endDate)],
+                ['类别', displayMarket.category],
                 ['来源', 'Polymarket'],
-                ['合约类型', outcomeRows.length > 2 ? '多结果盘口' : '二元事件'],
-                ['交易状态', market.acceptingOrders === false ? '暂停接单' : '可交易'],
+                ['合约类型', detailMarkets.length > 1 ? 'Event 多盘口' : '二元事件'],
+                ['交易状态', detailMarkets.some((item) => item.acceptingOrders !== false) ? '可交易' : '暂停接单'],
                 ['最小下单', market.orderMinSize ? `${market.orderMinSize}` : '未提供'],
                 ['最小报价单位', market.tickSize ? `${market.tickSize}` : '未提供'],
-                ['同步时间', formatDate(market.syncedAt)],
+                ['同步时间', formatDate(displayMarket.syncedAt)],
               ]}
             />
           </Card>
@@ -2135,14 +2296,75 @@ function CategoryChips({
   )
 }
 
-function MarketPriceChart({ market }: { market: Market }) {
-  const outcomeRows = getOutcomeRows(market).slice(0, 5)
+function MarketPriceChart({ eventMarkets, market }: { eventMarkets: Market[]; market: Market }) {
+  return <HistoricalMarketPriceChart eventMarkets={eventMarkets} market={market} />
+}
+
+function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Market[]; market: Market }) {
+  const [historyState, setHistoryState] = useState<{ key: string; history: Record<string, PricePoint[]> }>({
+    key: '',
+    history: {},
+  })
+  const chartRows =
+    eventMarkets.length > 1
+      ? [...eventMarkets]
+          .sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))
+          .slice(0, 8)
+          .map((item, index) => ({
+            id: item.id,
+            index,
+            label: marketDisplayLabel(item),
+            price: item.price / 100,
+            tokenId: item.outcomes?.[0]?.tokenId || '',
+          }))
+      : getOutcomeRows(market).slice(0, 5).map((outcome) => ({
+          id: `${outcome.label}-${outcome.index}`,
+          index: outcome.index,
+          label: outcome.label,
+          price: outcome.price,
+          tokenId: outcome.tokenId || '',
+        }))
+  const tokenIds = chartRows.map((row) => row.tokenId).filter(Boolean)
+  const historyKey = tokenIds.join(',')
+
+  useEffect(() => {
+    if (!historyKey) return
+    const controller = new AbortController()
+    const params = new URLSearchParams({ tokenIds: historyKey, interval: 'all', fidelity: '1440' })
+    fetch(`/api/markets/history?${params.toString()}`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.json() as Promise<PriceHistoryResponse>
+      })
+      .then((payload) => {
+        const normalizedHistory = Object.fromEntries(
+          Object.entries(payload.data.history || {}).map(([tokenId, points]) => [
+            tokenId,
+            compactHistory(points.filter((point) => typeof point.t === 'number' && typeof point.p === 'number')),
+          ]),
+        )
+        setHistoryState({ key: historyKey, history: normalizedHistory })
+      })
+      .catch((error: Error) => {
+        if (error.name !== 'AbortError') setHistoryState({ key: historyKey, history: {} })
+      })
+    return () => controller.abort()
+  }, [historyKey])
+
+  const currentHistory = historyState.key === historyKey ? historyState.history : {}
+  const allPoints = tokenIds.flatMap((tokenId) => currentHistory[tokenId] || [])
+  const minT = allPoints.length ? Math.min(...allPoints.map((point) => point.t)) : 0
+  const maxT = allPoints.length ? Math.max(...allPoints.map((point) => point.t)) : 1
+  const hasHistory = allPoints.length > 1
+  const maxPrice = chartMaxPrice(allPoints, chartRows.map((row) => row.price))
+  const ticks = chartTicks(maxPrice)
+
   return (
     <div className="market-price-chart">
       <div className="market-chart-toolbar">
         <div className="market-chart-legend">
-          {outcomeRows.slice(0, 4).map((outcome) => (
-            <span className={`chart-key ${outcomeTone(outcome.index)}`} key={`${outcome.label}-${outcome.index}`}>
+          {chartRows.slice(0, 4).map((outcome) => (
+            <span className={`chart-key ${outcomeTone(outcome.index)}`} key={outcome.id}>
               <i />
               {outcome.label} <b>{formatUnitPercent(outcome.price)}</b>
             </span>
@@ -2156,38 +2378,89 @@ function MarketPriceChart({ market }: { market: Market }) {
           ))}
         </div>
       </div>
-      <svg viewBox="0 0 760 310" aria-label="市场价格走势">
+      <svg viewBox="0 0 760 336" aria-label="市场价格走势">
         <g className="grid-lines">
-          <path d="M36 40H724" /><path d="M36 92H724" /><path d="M36 144H724" /><path d="M36 196H724" /><path d="M36 248H724" />
+          {ticks.map((tick) => {
+            const y = chartY(tick, maxPrice)
+            return <path d={`M${HISTORY_CHART_LEFT} ${y.toFixed(1)}H${HISTORY_CHART_RIGHT}`} key={tick} />
+          })}
         </g>
-        <text className="chart-watermark" x="565" y="58">Polymarket</text>
+        <text className="chart-watermark" x="560" y="62">Polymarket</text>
         <g className="chart-axis">
-          <text x="725" y="44">100%</text>
-          <text x="725" y="148">50%</text>
-          <text x="725" y="252">0%</text>
-          <text x="36" y="292">市场开始</text>
-          <text x="648" y="292">{formatDate(market.endDate)}</text>
+          {ticks.map((tick) => {
+            const y = chartY(tick, maxPrice)
+            return (
+              <text x="725" y={y + 4} key={`label:${tick}`}>
+                {Math.round(tick * 100)}%
+              </text>
+            )
+          })}
+          <text x="36" y="314">市场开始</text>
+          <text x="648" y="314">{formatDate(market.endDate)}</text>
         </g>
-        {outcomeRows.map((outcome) => (
+        {chartRows.map((outcome) => (
           <path
             className={`market-chart-line ${outcomeTone(outcome.index)}`}
-            d={outcomePath(outcome.index, outcome.price)}
-            key={`${outcome.label}-${outcome.index}`}
+            d={
+              outcome.tokenId && currentHistory[outcome.tokenId]?.length > 1
+                ? historyPath(currentHistory[outcome.tokenId], minT, maxT, maxPrice)
+                : outcomePath(outcome.index, outcome.price)
+            }
+            key={outcome.id}
           />
         ))}
+        {hasHistory
+          ? chartRows.map((outcome) => {
+              const points = outcome.tokenId ? currentHistory[outcome.tokenId] : undefined
+              const lastPoint = points?.[points.length - 1]
+              if (!lastPoint) return null
+              const x =
+                HISTORY_CHART_LEFT +
+                ((lastPoint.t - minT) / Math.max(1, maxT - minT)) * (HISTORY_CHART_RIGHT - HISTORY_CHART_LEFT)
+              const y = chartY(lastPoint.p, maxPrice)
+              return <circle className={`chart-last-point ${outcomeTone(outcome.index)}`} cx={x} cy={y} key={`${outcome.id}:last`} r="5" />
+            })
+          : null}
       </svg>
     </div>
   )
 }
 
-function MarketOrderBook({ market }: { market: Market }) {
-  const outcomeRows = getOutcomeRows(market)
+function MarketOrderBook({ eventMarkets, loading, market }: { eventMarkets: Market[]; loading: boolean; market: Market }) {
+  const outcomeRows =
+    eventMarkets.length > 1
+      ? [...eventMarkets]
+          .sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))
+          .map((item, index) => ({
+            id: item.id,
+            label: marketDisplayLabel(item),
+            subtitle: `Token ${formatToken(item.outcomes?.[0]?.tokenId)} · 市场成交量 ${item.volume}`,
+            index,
+            percent: item.price,
+            yesPrice: item.bestAsk ?? item.price / 100,
+            noPrice: item.bestBid == null ? 1 - item.price / 100 : 1 - item.bestBid,
+            bid: item.bestBid ?? item.price / 100,
+            ask: item.bestAsk ?? item.price / 100,
+            trend: outcomeTrend(index, item.price / 100),
+          }))
+      : getOutcomeRows(market).map((outcome) => ({
+          id: `${outcome.label}-${outcome.index}`,
+          label: outcome.label,
+          subtitle: `Token ${formatToken(outcome.tokenId)} · 市场成交量 ${market.volume}`,
+          index: outcome.index,
+          percent: outcome.percent,
+          yesPrice: outcome.yesPrice,
+          noPrice: outcome.noPrice,
+          bid: outcome.index === 0 ? market.bestBid ?? outcome.yesPrice : outcome.yesPrice,
+          ask: outcome.index === 0 ? market.bestAsk ?? outcome.yesPrice : outcome.yesPrice,
+          trend: outcomeTrend(outcome.index, outcome.price),
+        }))
   return (
     <div className="market-orderbook">
       <div className="orderbook-head">
         <div>
           <b>盘口</b>
-          <span>{outcomeRows.length} 个结果 · {market.acceptingOrders === false ? '暂停接单' : '可交易'}</span>
+          <span>{loading ? '正在同步 event 盘口...' : `${outcomeRows.length} 个盘口 · ${market.acceptingOrders === false ? '暂停接单' : '可交易'}`}</span>
         </div>
         <div className="orderbook-meta">
           <span>Vol. {market.volume}</span>
@@ -2196,22 +2469,19 @@ function MarketOrderBook({ market }: { market: Market }) {
       </div>
       <div className="orderbook-list">
         {outcomeRows.map((outcome) => {
-          const trend = outcomeTrend(outcome.index, outcome.price)
-          const bid = outcome.index === 0 ? market.bestBid ?? outcome.yesPrice : outcome.yesPrice
-          const ask = outcome.index === 0 ? market.bestAsk ?? outcome.yesPrice : outcome.yesPrice
           return (
-            <div className="orderbook-row" key={`${outcome.label}-${outcome.index}`}>
+            <div className="orderbook-row" key={outcome.id}>
               <div className="orderbook-title">
                 <b>{outcome.label}</b>
-                <span>Token {formatToken(outcome.tokenId)} · 市场成交量 {market.volume}</span>
+                <span>{outcome.subtitle}</span>
               </div>
               <div className="orderbook-price">
                 <strong>{outcome.percent == null ? 'N/A' : `${outcome.percent}%`}</strong>
-                <span className={trend >= 0 ? 'green-text' : 'red-text'}>{trend >= 0 ? '▲' : '▼'} {Math.abs(trend)}%</span>
+                <span className={outcome.trend >= 0 ? 'green-text' : 'red-text'}>{outcome.trend >= 0 ? '▲' : '▼'} {Math.abs(outcome.trend)}%</span>
               </div>
               <div className="orderbook-quotes">
-                <span>Bid {formatCents(bid)}</span>
-                <span>Ask {formatCents(ask)}</span>
+                <span>Bid {formatCents(outcome.bid)}</span>
+                <span>Ask {formatCents(outcome.ask)}</span>
               </div>
               <button className="buy-yes" type="button">Buy Yes {formatCents(outcome.yesPrice)}</button>
               <button className="buy-no" type="button">Buy No {formatCents(outcome.noPrice)}</button>
