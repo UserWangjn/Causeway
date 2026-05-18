@@ -1,204 +1,2389 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Download, Search, Share2 } from 'lucide-react'
-import { fetchMarketUniverse, generateScenarioStream } from './api'
-import { GenerationFlow } from './components/GenerationFlow'
-import { LanguageToggle } from './components/LanguageToggle'
-import { MarketUniverse } from './components/MarketUniverse'
-import { ScenarioGraph } from './components/ScenarioGraph'
-import { ScenarioPanel } from './components/ScenarioPanel'
-import { ScenarioTabs } from './components/ScenarioTabs'
-import { scenarios as mockScenarios } from './data/scenarios'
-import { translateScenario, uiText } from './i18n'
-import { useScenarioStore } from './store/scenarioStore'
-import type { GenerationEvent, ScenarioPreset, UniverseMarket } from './types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
+import {
+  Background,
+  BaseEdge,
+  Controls,
+  Handle,
+  MarkerType,
+  Position,
+  ReactFlow,
+  applyNodeChanges,
+  useInternalNode,
+  type Edge,
+  type EdgeProps,
+  type InternalNode,
+  type Node,
+  type NodeChange,
+  type NodeMouseHandler,
+  type NodeProps,
+  type XYPosition,
+} from '@xyflow/react'
+import {
+  Activity,
+  ArrowLeft,
+  ArrowRight,
+  Bell,
+  Bitcoin,
+  Bot,
+  BrainCircuit,
+  CheckCircle2,
+  Cpu,
+  Download,
+  ExternalLink,
+  Factory,
+  Flame,
+  Globe2,
+  Info,
+  Landmark,
+  Pencil,
+  Play,
+  Plus,
+  RotateCw,
+  Search,
+  Share2,
+  ShieldCheck,
+  Star,
+  Trash2,
+  WalletCards,
+} from 'lucide-react'
 
-const GENERATION_STEP_MS = 980
+type View = 'network' | 'detail' | 'infer' | 'progress' | 'script' | 'scripts'
 
-type AppMode = 'universe' | 'generating' | 'scenario'
+type Market = {
+  id: string
+  title: string
+  category: string
+  categoryKey?: string
+  officialCategory?: string | null
+  tags?: string[]
+  icon: 'landmark' | 'bank' | 'bitcoin' | 'factory' | 'flame' | 'cpu' | 'globe'
+  iconUrl?: string | null
+  eventTitle?: string | null
+  endDate?: string | null
+  description?: string | null
+  rules?: string | null
+  acceptingOrders?: boolean
+  syncedAt?: string | null
+  outcomes?: { label: string; price: number | null; tokenId: string | null }[]
+  bestBid?: number | null
+  bestAsk?: number | null
+  lastTradePrice?: number | null
+  orderMinSize?: number | null
+  tickSize?: number | null
+  price: number
+  change: number
+  volume: string
+  volumeValue?: number | null
+  liquidity?: number | null
+  traders: string
+  x: number
+  y: number
+  tone: 'blue' | 'green' | 'orange' | 'red' | 'purple' | 'cyan'
+}
+
+type ApiMarketNode = {
+  id: string
+  title: string
+  eventSlug?: string | null
+  eventTitle: string | null
+  category: string | null
+  categoryKey: string | null
+  officialCategory: string | null
+  tags: string[]
+  icon: string | null
+  image: string | null
+  price: number | null
+  volume: number | null
+  volume24hr: number | null
+  liquidity: number | null
+  endDate: string | null
+  description: string | null
+  rules: string | null
+  acceptingOrders: boolean
+  outcomes: { label: string; price: number | null; tokenId: string | null }[]
+  bestBid?: number | null
+  bestAsk?: number | null
+  lastTradePrice?: number | null
+  orderMinSize?: number | null
+  tickSize?: number | null
+  syncedAt: string | null
+  x: number
+  y: number
+}
+
+type ApiMarketEdge = {
+  id: string
+  source: string
+  target: string
+  relationType: 'tag' | 'event' | 'semantic' | 'price_correlation' | 'ai'
+  weight: number
+  reason: string
+}
+
+type MarketNetworkResponse = {
+  data: {
+    nodes: ApiMarketNode[]
+    edges: ApiMarketEdge[]
+    source: string
+    generatedAt: string
+  }
+}
+
+type ApiMarketCategory = {
+  key: string
+  label: string
+  count: number
+}
+
+type MarketCategoriesResponse = {
+  data: {
+    categories: ApiMarketCategory[]
+    generatedAt: string
+    source: string
+  }
+}
+
+type MarketSearchResult = {
+  type: 'market' | 'event' | 'topic'
+  id: string
+  marketId?: string | null
+  eventId?: string | null
+  eventSlug?: string | null
+  topic?: string | null
+  slug?: string | null
+  title: string
+  subtitle?: string | null
+  category?: string | null
+  categoryKey?: string | null
+  icon?: string | null
+  image?: string | null
+  price?: number | null
+  volume?: number | null
+  liquidity?: number | null
+  endDate?: string | null
+  score: number
+  matchedBy: string
+}
+
+type MarketSearchResponse = {
+  data: {
+    results: MarketSearchResult[]
+    generatedAt: string
+    source: string
+  }
+}
+
+type MarketNodeRole = 'focus' | 'upstream' | 'downstream' | 'lateral'
+
+type MarketFlowNodeData = {
+  market: Market
+  role: MarketNodeRole
+  isFocus: boolean
+  isSelected: boolean
+  onIconMouseEnter?: (event: ReactMouseEvent<HTMLElement>, market: Market) => void
+  onIconMouseLeave?: () => void
+}
+
+type MarketFlowEdgeData = {
+  relationType: ApiMarketEdge['relationType']
+  weight: number
+  reason: string
+  strength: 'primary' | 'secondary'
+  tone: 'positive' | 'neutral' | 'warning'
+}
+
+type MarketFlowNode = Node<MarketFlowNodeData, 'market'>
+type MarketFlowEdge = Edge<MarketFlowEdgeData, 'causal'>
+
+type HoverPlacement = 'right' | 'left' | 'bottom' | 'top'
+
+type ScriptRow = {
+  title: string
+  status: '进行中' | '已完成'
+  created: string
+  favorite?: boolean
+  points: number[]
+}
+
+const rootMarket: Market = {
+  id: 'trump-2024',
+  title: '特朗普赢得2024年大选?',
+  category: '政治',
+  icon: 'landmark',
+  price: 62,
+  change: 5,
+  volume: '$28.4M',
+  traders: '3.2K',
+  x: 48,
+  y: 46,
+  tone: 'blue',
+}
+
+const markets: Market[] = [
+  rootMarket,
+  {
+    id: 'congress',
+    title: '美国国会选举结果?',
+    category: '政治',
+    icon: 'bank',
+    price: 71,
+    change: 4,
+    volume: '$15.2M',
+    traders: '1.9K',
+    x: 38,
+    y: 22,
+    tone: 'blue',
+  },
+  {
+    id: 'fed',
+    title: '美联储降息概率?',
+    category: '宏观经济',
+    icon: 'landmark',
+    price: 68,
+    change: 2,
+    volume: '$11.8M',
+    traders: '1.4K',
+    x: 70,
+    y: 20,
+    tone: 'green',
+  },
+  {
+    id: 'tech',
+    title: '美国科技股Q3表现?',
+    category: '科技',
+    icon: 'cpu',
+    price: 57,
+    change: 3,
+    volume: '$9.8M',
+    traders: '1.2K',
+    x: 88,
+    y: 35,
+    tone: 'green',
+  },
+  {
+    id: 'btc',
+    title: '比特币突破8万美元?',
+    category: '加密货币',
+    icon: 'bitcoin',
+    price: 41,
+    change: -1,
+    volume: '$9.3M',
+    traders: '943',
+    x: 91,
+    y: 56,
+    tone: 'orange',
+  },
+  {
+    id: 'oil',
+    title: '原油价格上涨?',
+    category: '商品',
+    icon: 'factory',
+    price: 31,
+    change: -2,
+    volume: '$7.6M',
+    traders: '816',
+    x: 72,
+    y: 73,
+    tone: 'orange',
+  },
+  {
+    id: 'china',
+    title: '比特币与AI板块联动?',
+    category: '科技',
+    icon: 'cpu',
+    price: 27,
+    change: -1,
+    volume: '$5.1M',
+    traders: '642',
+    x: 42,
+    y: 72,
+    tone: 'blue',
+  },
+  {
+    id: 'recession',
+    title: '拜登退选概率?',
+    category: '政治',
+    icon: 'globe',
+    price: 37,
+    change: 1,
+    volume: '$6.9M',
+    traders: '902',
+    x: 24,
+    y: 45,
+    tone: 'purple',
+  },
+  {
+    id: 'halving',
+    title: '比特币年底走势?',
+    category: '加密货币',
+    icon: 'bitcoin',
+    price: 29,
+    change: -3,
+    volume: '$4.7M',
+    traders: '521',
+    x: 25,
+    y: 63,
+    tone: 'red',
+  },
+]
+
+const scriptRows: ScriptRow[] = [
+  { title: '特朗普赢得2024年大选?', status: '进行中', created: '2024-07-15 14:30', points: [71, 62, 41, 68] },
+  { title: '美联储降息影响路径', status: '已完成', created: '2024-07-14 09:15', points: [68, 52, 38, 59] },
+  { title: '比特币减半影响分析', status: '已完成', created: '2024-07-12 16:45', points: [57, 63, 47] },
+  { title: 'AI 技术突破对市场影响', status: '进行中', created: '2024-07-10 11:20', favorite: true, points: [73, 58, 42, 66] },
+  { title: '碳中和政策影响推演', status: '已完成', created: '2024-07-08 15:30', points: [61, 48, 36] },
+  { title: '中东局势升级影响分析', status: '已完成', created: '2024-07-07 22:10', points: [65, 54, 39, 62] },
+]
+
+const causalColumns = [
+  [
+    { title: '美联储降息概率?', price: 71, delta: '+0.65', tone: 'green' },
+    { title: '美国国债收益率下降?', price: 75, delta: '+0.55', tone: 'green' },
+    { title: '科技股上涨?', price: 64, delta: '+0.50', tone: 'green' },
+  ],
+  [
+    { title: '原油价格上涨?', price: 68, delta: '+0.40', tone: 'orange' },
+    { title: '通胀预期上升?', price: 55, delta: '+0.35', tone: 'orange' },
+    { title: '能源股受益?', price: 69, delta: '+0.50', tone: 'orange' },
+  ],
+  [
+    { title: '美元汇率走势?', price: 41, delta: '-0.30', tone: 'red' },
+    { title: '新兴市场货币承压?', price: 39, delta: '-0.35', tone: 'red' },
+    { title: '美国出口竞争力下降?', price: 42, delta: '-0.25', tone: 'red' },
+  ],
+  [
+    { title: '黄金价格上涨?', price: 56, delta: '+0.45', tone: 'purple' },
+    { title: '避险情绪升温?', price: 61, delta: '+0.40', tone: 'purple' },
+    { title: '黄金ETF流入增加?', price: 58, delta: '+0.35', tone: 'purple' },
+  ],
+]
+
+const categoryTones: Record<string, Market['tone']> = {
+  政治: 'blue',
+  politics: 'blue',
+  宏观: 'green',
+  宏观经济: 'green',
+  macro: 'green',
+  加密: 'orange',
+  加密货币: 'orange',
+  crypto: 'orange',
+  科技: 'cyan',
+  tech: 'cyan',
+  体育: 'purple',
+  sports: 'purple',
+  文化: 'purple',
+  娱乐: 'purple',
+  entertainment: 'purple',
+  其他: 'purple',
+  other: 'purple',
+}
+
+const fallbackCategories: ApiMarketCategory[] = [
+  { key: 'all', label: '全部', count: 0 },
+  { key: 'hot', label: '热门', count: 0 },
+  { key: 'politics', label: '政治', count: 0 },
+  { key: 'macro', label: '宏观', count: 0 },
+  { key: 'crypto', label: '加密', count: 0 },
+  { key: 'tech', label: '科技', count: 0 },
+  { key: 'entertainment', label: '娱乐', count: 0 },
+  { key: 'other', label: '其他', count: 0 },
+]
+
+function formatCompactMoney(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return 'N/A'
+  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`
+  return `$${value.toFixed(0)}`
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return '未提供'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+}
+
+function formatProbability(value: number | null | undefined) {
+  return value == null ? '' : `${Math.round(value * 100)}%`
+}
+
+function marketSubtitle(market: Market) {
+  return [market.category, market.eventTitle, market.officialCategory || market.tags?.[0]]
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' · ') || 'Polymarket 市场'
+}
+
+function marketRuleCopy(market: Market) {
+  return market.rules?.trim() || market.description?.trim() || 'Polymarket 未提供详细规则说明。'
+}
+
+function marketDescriptionCopy(market: Market) {
+  return market.description?.trim() || market.rules?.trim() || '该市场来自 Polymarket，当前没有额外描述。'
+}
+
+function marketChangeText(market: Market) {
+  if (!market.change) return '0%'
+  return `${market.change > 0 ? '+' : ''}${market.change}%`
+}
+
+function unitPriceToPercent(price: number | null | undefined) {
+  if (price == null || Number.isNaN(price)) return null
+  return Math.round(clamp(price, 0, 1) * 100)
+}
+
+function formatUnitPercent(price: number | null | undefined) {
+  const percent = unitPriceToPercent(price)
+  return percent == null ? 'N/A' : `${percent}%`
+}
+
+function formatCents(price: number | null | undefined) {
+  if (price == null || Number.isNaN(price)) return 'N/A'
+  const cents = clamp(price, 0, 1) * 100
+  const precision = cents < 1 || cents > 99 || cents % 1 ? 1 : 0
+  return `${cents.toFixed(precision)}¢`
+}
+
+function getOutcomeRows(market: Market) {
+  const sourceOutcomes =
+    market.outcomes?.filter((outcome) => outcome.label) ||
+    [
+      { label: 'Yes', price: market.price / 100, tokenId: null },
+      { label: 'No', price: 1 - market.price / 100, tokenId: null },
+    ]
+  return sourceOutcomes.map((outcome, index) => {
+    const price = typeof outcome.price === 'number' ? clamp(outcome.price, 0, 1) : null
+    return {
+      ...outcome,
+      index,
+      price,
+      yesPrice: price,
+      noPrice: price == null ? null : 1 - price,
+      percent: unitPriceToPercent(price),
+    }
+  })
+}
+
+function outcomeTone(index: number) {
+  return ['blue', 'indigo', 'amber', 'orange', 'green', 'purple'][index % 6]
+}
+
+function outcomeTrend(index: number, price: number | null) {
+  if (price == null) return 0
+  const direction = index % 2 === 0 ? 1 : -1
+  return Math.round((price * 18 + index * 3) * direction)
+}
+
+function outcomePath(index: number, price: number | null) {
+  const base = price == null ? 0.5 : clamp(price, 0.03, 0.97)
+  const points = Array.from({ length: 18 }, (_, pointIndex) => {
+    const x = 24 + pointIndex * 42
+    const wave = Math.sin((pointIndex + 1) * (0.72 + index * 0.08)) * (18 + index * 2)
+    const drift = (pointIndex - 8) * (base - 0.5) * -7
+    const y = clamp(250 - base * 210 + wave + drift, 24, 268)
+    return `${pointIndex === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`
+  })
+  return points.join(' ')
+}
+
+function formatToken(tokenId: string | null | undefined) {
+  if (!tokenId) return '未提供'
+  return `${tokenId.slice(0, 6)}...${tokenId.slice(-6)}`
+}
+
+const FLOW_NODE_WIDTH = 168
+const FLOW_NODE_HEIGHT = 94
+const FLOW_FOCUS_WIDTH = 260
+const FLOW_FOCUS_HEIGHT = 122
+const FLOW_CANVAS_WIDTH = 1600
+const FLOW_CANVAS_HEIGHT = 760
+const FLOW_CENTER = { x: FLOW_CANVAS_WIDTH / 2, y: 382 }
+const MAX_FLOW_NODES = 25
+const HOVER_CARD_WIDTH = 360
+const HOVER_CARD_HEIGHT = 390
+const HOVER_CARD_GAP = 24
+const HOVER_CARD_MARGIN = 18
+
+function getNodeSize(role: MarketNodeRole) {
+  return role === 'focus'
+    ? { width: FLOW_FOCUS_WIDTH, height: FLOW_FOCUS_HEIGHT }
+    : { width: FLOW_NODE_WIDTH, height: FLOW_NODE_HEIGHT }
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function arcAngles(count: number, start: number, end: number) {
+  if (count <= 0) return []
+  if (count === 1) return [(start + end) / 2]
+  const step = (end - start) / (count - 1)
+  return Array.from({ length: count }, (_, index) => start + step * index)
+}
+
+function ellipsePoint(angle: number, radiusX: number, radiusY: number): XYPosition {
+  const radians = (angle * Math.PI) / 180
+  return {
+    x: FLOW_CENTER.x + Math.cos(radians) * radiusX,
+    y: FLOW_CENTER.y + Math.sin(radians) * radiusY,
+  }
+}
+
+function nodeCenterToPosition(center: XYPosition, role: MarketNodeRole): XYPosition {
+  const size = getNodeSize(role)
+  return {
+    x: clamp(center.x - size.width / 2, 44, FLOW_CANVAS_WIDTH - size.width - 44),
+    y: clamp(center.y - size.height / 2, 52, FLOW_CANVAS_HEIGHT - size.height - 52),
+  }
+}
+
+function getNodeCenter(node: MarketFlowNode) {
+  const size = getNodeSize(node.data.role)
+  return {
+    x: node.position.x + size.width / 2,
+    y: node.position.y + size.height / 2,
+  }
+}
+
+function positionVector(position: Position) {
+  if (position === Position.Left) return { x: -1, y: 0 }
+  if (position === Position.Right) return { x: 1, y: 0 }
+  if (position === Position.Top) return { x: 0, y: -1 }
+  return { x: 0, y: 1 }
+}
+
+function positionFromVector(dx: number, dy: number) {
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? Position.Right : Position.Left
+  return dy >= 0 ? Position.Bottom : Position.Top
+}
+
+function getFloatingNodeCenter(node: InternalNode<MarketFlowNode>) {
+  const role = node.data.role
+  const measuredWidth = node.measured.width || getNodeSize(role).width
+  return {
+    x: node.internals.positionAbsolute.x + measuredWidth / 2,
+    y: node.internals.positionAbsolute.y + 29,
+  }
+}
+
+function getFloatingNodeRadius() {
+  return 33
+}
+
+function getFloatingAnchor(
+  node: InternalNode<MarketFlowNode>,
+  targetCenter: XYPosition,
+) {
+  const center = getFloatingNodeCenter(node)
+  const dx = targetCenter.x - center.x
+  const dy = targetCenter.y - center.y
+  const distance = Math.max(1, Math.hypot(dx, dy))
+  const radius = getFloatingNodeRadius()
+
+  return {
+    x: center.x + (dx / distance) * radius,
+    y: center.y + (dy / distance) * radius,
+    position: positionFromVector(dx, dy),
+  }
+}
+
+function getFloatingEdgePath(sourceNode: InternalNode<MarketFlowNode>, targetNode: InternalNode<MarketFlowNode>) {
+  const sourceCenter = getFloatingNodeCenter(sourceNode)
+  const targetCenter = getFloatingNodeCenter(targetNode)
+  const sourceAnchor = getFloatingAnchor(sourceNode, targetCenter)
+  const targetAnchor = getFloatingAnchor(targetNode, sourceCenter)
+  const distance = Math.hypot(targetAnchor.x - sourceAnchor.x, targetAnchor.y - sourceAnchor.y)
+  const curve = clamp(distance * 0.34, 52, 210)
+  const sourceTangent = positionVector(sourceAnchor.position)
+  const targetTangent = positionVector(targetAnchor.position)
+  const c1 = {
+    x: sourceAnchor.x + sourceTangent.x * curve,
+    y: sourceAnchor.y + sourceTangent.y * curve,
+  }
+  const c2 = {
+    x: targetAnchor.x + targetTangent.x * curve,
+    y: targetAnchor.y + targetTangent.y * curve,
+  }
+
+  return `M ${sourceAnchor.x},${sourceAnchor.y} C ${c1.x},${c1.y} ${c2.x},${c2.y} ${targetAnchor.x},${targetAnchor.y}`
+}
+
+function rectsOverlap(
+  rect: { left: number; top: number; right: number; bottom: number },
+  target: { left: number; top: number; right: number; bottom: number },
+  padding = 0,
+) {
+  return !(
+    rect.right + padding <= target.left ||
+    rect.left - padding >= target.right ||
+    rect.bottom + padding <= target.top ||
+    rect.top - padding >= target.bottom
+  )
+}
+
+function getOverflowPenalty(
+  rect: { left: number; top: number; right: number; bottom: number },
+  width: number,
+  height: number,
+) {
+  return (
+    Math.max(0, HOVER_CARD_MARGIN - rect.left) +
+    Math.max(0, HOVER_CARD_MARGIN - rect.top) +
+    Math.max(0, rect.right - width + HOVER_CARD_MARGIN) +
+    Math.max(0, rect.bottom - height + HOVER_CARD_MARGIN)
+  )
+}
+
+function clampHoverOrigin(x: number, y: number, width: number, height: number) {
+  return {
+    x: clamp(x, HOVER_CARD_MARGIN, Math.max(HOVER_CARD_MARGIN, width - HOVER_CARD_WIDTH - HOVER_CARD_MARGIN)),
+    y: clamp(y, HOVER_CARD_MARGIN, Math.max(HOVER_CARD_MARGIN, height - HOVER_CARD_HEIGHT - HOVER_CARD_MARGIN)),
+  }
+}
+
+function getHoverCardPlacement(containerBounds: DOMRect, nodeBounds: DOMRect) {
+  const node = {
+    left: nodeBounds.left - containerBounds.left,
+    top: nodeBounds.top - containerBounds.top,
+    right: nodeBounds.right - containerBounds.left,
+    bottom: nodeBounds.bottom - containerBounds.top,
+  }
+  const centerX = (node.left + node.right) / 2
+  const centerY = (node.top + node.bottom) / 2
+  const candidates: { placement: HoverPlacement; x: number; y: number }[] = [
+    { placement: 'right', x: node.right + HOVER_CARD_GAP, y: centerY - HOVER_CARD_HEIGHT / 2 },
+    { placement: 'left', x: node.left - HOVER_CARD_GAP - HOVER_CARD_WIDTH, y: centerY - HOVER_CARD_HEIGHT / 2 },
+    { placement: 'bottom', x: centerX - HOVER_CARD_WIDTH / 2, y: node.bottom + HOVER_CARD_GAP },
+    { placement: 'top', x: centerX - HOVER_CARD_WIDTH / 2, y: node.top - HOVER_CARD_GAP - HOVER_CARD_HEIGHT },
+  ]
+
+  const scored = candidates.map((candidate, index) => {
+    const origin = clampHoverOrigin(candidate.x, candidate.y, containerBounds.width, containerBounds.height)
+    const rect = {
+      left: origin.x,
+      top: origin.y,
+      right: origin.x + HOVER_CARD_WIDTH,
+      bottom: origin.y + HOVER_CARD_HEIGHT,
+    }
+    const overflow = getOverflowPenalty(rect, containerBounds.width, containerBounds.height)
+    const overlapPenalty = rectsOverlap(rect, node, 14) ? 10_000 : 0
+    const movementPenalty = Math.abs(origin.x - candidate.x) * 0.18 + Math.abs(origin.y - candidate.y) * 0.18
+    return {
+      ...candidate,
+      ...origin,
+      score: overlapPenalty + overflow * 12 + movementPenalty + index,
+    }
+  })
+
+  return scored.sort((left, right) => left.score - right.score)[0]
+}
+
+function clampCenterForRole(center: XYPosition, role: MarketNodeRole): XYPosition {
+  const size = getNodeSize(role)
+  return {
+    x: clamp(center.x, 44 + size.width / 2, FLOW_CANVAS_WIDTH - 44 - size.width / 2),
+    y: clamp(center.y, 52 + size.height / 2, FLOW_CANVAS_HEIGHT - 52 - size.height / 2),
+  }
+}
+
+function relaxNodeCenters(
+  centers: Map<string, XYPosition>,
+  roles: Map<string, MarketNodeRole>,
+  pinnedId: string,
+) {
+  const relaxed = new Map(centers)
+  const ids = Array.from(relaxed.keys())
+
+  for (let pass = 0; pass < 72; pass += 1) {
+    let moved = false
+    for (let left = 0; left < ids.length; left += 1) {
+      for (let right = left + 1; right < ids.length; right += 1) {
+        const leftId = ids[left]
+        const rightId = ids[right]
+        const leftRole = roles.get(leftId) || 'lateral'
+        const rightRole = roles.get(rightId) || 'lateral'
+        const leftCenter = relaxed.get(leftId)!
+        const rightCenter = relaxed.get(rightId)!
+        const leftSize = getNodeSize(leftRole)
+        const rightSize = getNodeSize(rightRole)
+        const dx = rightCenter.x - leftCenter.x
+        const dy = rightCenter.y - leftCenter.y
+        const minX = (leftSize.width + rightSize.width) / 2 + 34
+        const minY = (leftSize.height + rightSize.height) / 2 + 24
+
+        if (Math.abs(dx) >= minX || Math.abs(dy) >= minY) continue
+
+        const overlapX = minX - Math.abs(dx)
+        const overlapY = minY - Math.abs(dy)
+        const directionX = dx === 0 ? (left % 2 === 0 ? 1 : -1) : Math.sign(dx)
+        const directionY = dy === 0 ? (right % 2 === 0 ? 1 : -1) : Math.sign(dy)
+        const shift = overlapX < overlapY
+          ? { x: (overlapX + 6) * directionX, y: 0 }
+          : { x: 0, y: (overlapY + 6) * directionY }
+
+        if (leftId === pinnedId) {
+          relaxed.set(rightId, clampCenterForRole({ x: rightCenter.x + shift.x, y: rightCenter.y + shift.y }, rightRole))
+        } else if (rightId === pinnedId) {
+          relaxed.set(leftId, clampCenterForRole({ x: leftCenter.x - shift.x, y: leftCenter.y - shift.y }, leftRole))
+        } else {
+          relaxed.set(leftId, clampCenterForRole({ x: leftCenter.x - shift.x / 2, y: leftCenter.y - shift.y / 2 }, leftRole))
+          relaxed.set(rightId, clampCenterForRole({ x: rightCenter.x + shift.x / 2, y: rightCenter.y + shift.y / 2 }, rightRole))
+        }
+        moved = true
+      }
+    }
+    if (!moved) break
+  }
+
+  return relaxed
+}
+
+function getHandlePair(source: XYPosition, target: XYPosition) {
+  const dx = target.x - source.x
+  const dy = target.y - source.y
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dx >= 0
+      ? { sourceHandle: 'out-right', targetHandle: 'in-left' }
+      : { sourceHandle: 'out-left', targetHandle: 'in-right' }
+  }
+  return dy >= 0
+    ? { sourceHandle: 'out-bottom', targetHandle: 'in-top' }
+    : { sourceHandle: 'out-top', targetHandle: 'in-bottom' }
+}
+
+function edgeTone(relationType: ApiMarketEdge['relationType'], weight: number): MarketFlowEdgeData['tone'] {
+  if (relationType === 'event' || weight >= 0.7) return 'positive'
+  if (relationType === 'price_correlation') return 'warning'
+  return 'neutral'
+}
+
+function trimNodeTitle(value: string, max = 58) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized
+}
+
+function getRelationEdges(visibleMarkets: Market[], edges: ApiMarketEdge[]) {
+  const marketById = new Map(visibleMarkets.map((market) => [market.id, market]))
+  const validEdges = edges
+    .filter((edge) => marketById.has(edge.source) && marketById.has(edge.target) && edge.source !== edge.target)
+    .sort((left, right) => right.weight - left.weight)
+
+  if (validEdges.length) return validEdges
+
+  return visibleMarkets.slice(1).map((market, index) => {
+    const previous = visibleMarkets[Math.max(0, index - 1)]
+    const source = index % 2 === 0 ? previous : market
+    const target = index % 2 === 0 ? market : previous
+    return {
+      id: `fallback-${source.id}-${target.id}`,
+      source: source.id,
+      target: target.id,
+      relationType: index % 3 === 0 ? 'event' : 'semantic',
+      weight: Math.max(0.35, 0.72 - index * 0.035),
+      reason: 'Fallback local topology edge',
+    } satisfies ApiMarketEdge
+  })
+}
+
+function buildMarketFlowGraph(
+  visibleMarkets: Market[],
+  edges: ApiMarketEdge[],
+  focusId: string | undefined,
+  manualPositions: Record<string, XYPosition>,
+) {
+  const marketById = new Map(visibleMarkets.map((market) => [market.id, market]))
+  const activeFocusId = focusId && marketById.has(focusId) ? focusId : visibleMarkets[0]?.id
+  const focusMarket = activeFocusId ? marketById.get(activeFocusId) : undefined
+  if (!focusMarket) return { nodes: [] as MarketFlowNode[], edges: [] as MarketFlowEdge[] }
+
+  const relationEdges = getRelationEdges(visibleMarkets, edges)
+  const directEdges = relationEdges
+    .filter((edge) => edge.source === focusMarket.id || edge.target === focusMarket.id)
+    .sort((left, right) => right.weight - left.weight)
+  const included = new Set<string>([focusMarket.id])
+  const upstreamIds: string[] = []
+  const downstreamIds: string[] = []
+  const lateralIds: string[] = []
+  const requiredEdgeIds = new Set<string>()
+  const roleById = new Map<string, MarketNodeRole>([[focusMarket.id, 'focus']])
+
+  const addId = (list: string[], id: string, role: MarketNodeRole, edgeId?: string) => {
+    if (included.has(id) || !marketById.has(id) || included.size >= MAX_FLOW_NODES) return
+    included.add(id)
+    roleById.set(id, role)
+    if (edgeId) requiredEdgeIds.add(edgeId)
+    list.push(id)
+  }
+
+  directEdges
+    .filter((edge) => edge.target === focusMarket.id)
+    .slice(0, 5)
+    .forEach((edge) => addId(upstreamIds, edge.source, 'upstream', edge.id))
+  directEdges
+    .filter((edge) => edge.source === focusMarket.id)
+    .slice(0, 6)
+    .forEach((edge) => addId(downstreamIds, edge.target, 'downstream', edge.id))
+
+  const frontier = new Set([focusMarket.id, ...upstreamIds, ...downstreamIds])
+  relationEdges.forEach((edge) => {
+    if (included.size >= MAX_FLOW_NODES) return
+    if (frontier.has(edge.source) && !included.has(edge.target)) addId(lateralIds, edge.target, 'lateral', edge.id)
+    if (frontier.has(edge.target) && !included.has(edge.source)) addId(lateralIds, edge.source, 'lateral', edge.id)
+  })
+  relationEdges.forEach((edge) => {
+    if (included.size >= MAX_FLOW_NODES) return
+    const hasSource = included.has(edge.source)
+    const hasTarget = included.has(edge.target)
+    if (hasSource && !hasTarget) addId(lateralIds, edge.target, 'lateral', edge.id)
+    if (hasTarget && !hasSource) addId(lateralIds, edge.source, 'lateral', edge.id)
+    if (!hasSource && !hasTarget && included.size <= MAX_FLOW_NODES - 2) {
+      addId(lateralIds, edge.source, 'lateral', edge.id)
+      addId(lateralIds, edge.target, 'lateral', edge.id)
+    }
+  })
+
+  const centerById = new Map<string, XYPosition>()
+  centerById.set(focusMarket.id, FLOW_CENTER)
+
+  arcAngles(upstreamIds.length, 138, 222).forEach((angle, index) => {
+    centerById.set(upstreamIds[index], ellipsePoint(angle, 520, 282))
+  })
+  arcAngles(downstreamIds.length, -48, 48).forEach((angle, index) => {
+    centerById.set(downstreamIds[index], ellipsePoint(angle, 520, 282))
+  })
+
+  const upperLateralIds = lateralIds.filter((_, index) => index % 2 === 0)
+  const lowerLateralIds = lateralIds.filter((_, index) => index % 2 === 1)
+  arcAngles(upperLateralIds.length, -155, -25).forEach((angle, index) => {
+    centerById.set(upperLateralIds[index], ellipsePoint(angle, 630, 312))
+  })
+  arcAngles(lowerLateralIds.length, 25, 155).forEach((angle, index) => {
+    centerById.set(lowerLateralIds[index], ellipsePoint(angle, 630, 312))
+  })
+  const relaxedCenters = relaxNodeCenters(centerById, roleById, focusMarket.id)
+
+  const nodes: MarketFlowNode[] = Array.from(included).map((id) => {
+    const market = marketById.get(id)!
+    const role = roleById.get(id) || 'lateral'
+    const position = manualPositions[id] || nodeCenterToPosition(relaxedCenters.get(id) || FLOW_CENTER, role)
+    return {
+      id,
+      type: 'market',
+      position,
+      data: { market, role, isFocus: role === 'focus', isSelected: role === 'focus' },
+      draggable: true,
+      selectable: true,
+    }
+  })
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  const includedEdges = relationEdges.filter((edge) => nodeById.has(edge.source) && nodeById.has(edge.target))
+  const selectedEdgeIds = new Set<string>()
+  const incidentCount = new Map<string, number>()
+  const registerEdge = (edge: ApiMarketEdge) => {
+    if (selectedEdgeIds.has(edge.id)) return
+    selectedEdgeIds.add(edge.id)
+    incidentCount.set(edge.source, (incidentCount.get(edge.source) || 0) + 1)
+    incidentCount.set(edge.target, (incidentCount.get(edge.target) || 0) + 1)
+  }
+
+  includedEdges
+    .filter((edge) => edge.source === focusMarket.id || edge.target === focusMarket.id || requiredEdgeIds.has(edge.id))
+    .forEach(registerEdge)
+
+  includedEdges.forEach((edge) => {
+    if (selectedEdgeIds.size >= 24) return
+    if (selectedEdgeIds.has(edge.id)) return
+    const sourceCount = incidentCount.get(edge.source) || 0
+    const targetCount = incidentCount.get(edge.target) || 0
+    if (sourceCount < 3 || targetCount < 3 || edge.weight >= 0.72) registerEdge(edge)
+  })
+
+  nodes.forEach((node) => {
+    if (node.id === focusMarket.id || (incidentCount.get(node.id) || 0) > 0) return
+    const backupEdge = includedEdges.find((edge) => edge.source === node.id || edge.target === node.id)
+    if (backupEdge) registerEdge(backupEdge)
+  })
+
+  const flowEdges = includedEdges
+    .filter((edge) => selectedEdgeIds.has(edge.id))
+    .map<MarketFlowEdge>((edge) => {
+      const sourceNode = nodeById.get(edge.source)!
+      const targetNode = nodeById.get(edge.target)!
+      const sourceCenter = getNodeCenter(sourceNode)
+      const targetCenter = getNodeCenter(targetNode)
+      const handles = getHandlePair(sourceCenter, targetCenter)
+      const primary = edge.source === focusMarket.id || edge.target === focusMarket.id
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: handles.sourceHandle,
+        targetHandle: handles.targetHandle,
+        type: 'causal',
+        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
+        data: {
+          relationType: edge.relationType,
+          weight: edge.weight,
+          reason: edge.reason,
+          strength: primary ? 'primary' : 'secondary',
+          tone: edgeTone(edge.relationType, edge.weight),
+        },
+      }
+    })
+
+  return { nodes, edges: flowEdges }
+}
+
+function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
+  const category = node.category || '其他'
+  const categoryKey = node.categoryKey || category
+  const price = node.price == null ? 0 : Math.round(node.price * 100)
+  return {
+    id: node.id,
+    title: node.title,
+    category,
+    categoryKey,
+    officialCategory: node.officialCategory,
+    tags: node.tags || [],
+    icon: categoryKey === 'crypto' || category === '加密' || category === '加密货币'
+      ? 'bitcoin'
+      : categoryKey === 'tech' || category === '科技'
+        ? 'cpu'
+        : categoryKey === 'macro' || category === '宏观'
+          ? 'bank'
+          : 'landmark',
+    iconUrl: node.icon || node.image,
+    eventTitle: node.eventTitle,
+    endDate: node.endDate,
+    description: node.description,
+    rules: node.rules,
+    acceptingOrders: node.acceptingOrders,
+    syncedAt: node.syncedAt,
+    outcomes: node.outcomes,
+    bestBid: node.bestBid,
+    bestAsk: node.bestAsk,
+    lastTradePrice: node.lastTradePrice,
+    orderMinSize: node.orderMinSize,
+    tickSize: node.tickSize,
+    price,
+    change: 0,
+    volume: formatCompactMoney(node.volume),
+    volumeValue: node.volume,
+    liquidity: node.liquidity,
+    traders: node.volume24hr ? formatCompactMoney(node.volume24hr) : '24h N/A',
+    x: node.x,
+    y: node.y,
+    tone: categoryTones[categoryKey] || categoryTones[category] || (index % 5 === 0 ? 'purple' : index % 3 === 0 ? 'orange' : index % 2 === 0 ? 'green' : 'blue'),
+  }
+}
 
 function App() {
-  const scenarioId = useScenarioStore((state) => state.scenarioId)
-  const language = useScenarioStore((state) => state.language)
-  const pause = useScenarioStore((state) => state.pause)
-  const setScenario = useScenarioStore((state) => state.setScenario)
-  const setStep = useScenarioStore((state) => state.setStep)
+  const [view, setView] = useState<View>('network')
+  const [selectedMarket, setSelectedMarket] = useState<Market>(rootMarket)
+  const activeNav = view === 'scripts' ? 'scripts' : view === 'progress' ? 'monitor' : 'network'
 
-  const [mode, setMode] = useState<AppMode>('universe')
-  const [markets, setMarkets] = useState<UniverseMarket[]>([])
-  const [selectedMarket, setSelectedMarket] = useState<UniverseMarket | undefined>()
-  const [generatedScenarios, setGeneratedScenarios] = useState<ScenarioPreset[]>([])
-  const [loadingUniverse, setLoadingUniverse] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [generationStep, setGenerationStep] = useState(0)
-  const [generationEvents, setGenerationEvents] = useState<GenerationEvent[]>([])
+  const openMarketDetail = useCallback((market: Market) => {
+    setSelectedMarket(market)
+    setView('detail')
+  }, [])
 
-  const scenarioCatalog = generatedScenarios.length ? generatedScenarios : mockScenarios
-  const baseScenario = scenarioCatalog.find((candidate) => candidate.id === scenarioId) ?? scenarioCatalog[0]
-  const scenario = useMemo(
-    () => (baseScenario?.source ? baseScenario : translateScenario(baseScenario, language)),
-    [baseScenario, language],
+  return (
+    <div className="app-shell">
+      <Header activeNav={activeNav} onNavigate={setView} />
+      <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
+        {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
+        {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={() => setView('infer')} />}
+        {view === 'infer' && <InferenceSettings market={selectedMarket} onBack={() => setView('detail')} onStart={() => setView('progress')} />}
+        {view === 'progress' && <InferenceProgress market={selectedMarket} onBack={() => setView('infer')} onDone={() => setView('script')} />}
+        {view === 'script' && <CausalScript market={selectedMarket} onBack={() => setView('progress')} onScripts={() => setView('scripts')} />}
+        {view === 'scripts' && <MyScripts onNew={() => setView('infer')} onOpen={() => setView('script')} />}
+      </main>
+    </div>
   )
-  const text = uiText[language]
-  const sourceLabel =
-    mode === 'universe'
-      ? loadingUniverse
-        ? 'Loading PM'
-        : 'Live PM Universe'
-      : scenario?.aiStatus === 'refined'
-        ? 'Live PM + AI'
-        : 'Live PM'
+}
+
+function Header({ activeNav, onNavigate }: { activeNav: string; onNavigate: (view: View) => void }) {
+  const navItems = [
+    { id: 'network', label: '市场网络', view: 'network' as View },
+    { id: 'discover', label: '发现', view: 'infer' as View },
+    { id: 'monitor', label: '监控', view: 'progress' as View },
+    { id: 'scripts', label: '我的脚本', view: 'scripts' as View },
+  ]
+
+  return (
+    <header className="topbar">
+      <button className="brand-button" type="button" onClick={() => onNavigate('network')}>
+        <CausewayLogo />
+        <span>Causeway</span>
+      </button>
+      <nav className="topnav" aria-label="Primary">
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            className={activeNav === item.id ? 'nav-button active' : 'nav-button'}
+            type="button"
+            onClick={() => onNavigate(item.view)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <div className="header-actions">
+        <button className="icon-button" aria-label="搜索" type="button">
+          <Search size={20} />
+        </button>
+        <button className="icon-button has-dot" aria-label="通知" type="button">
+          <Bell size={20} />
+        </button>
+        <button className="cash-pill" type="button">
+          <WalletCards size={16} />
+          Cash unavailable
+        </button>
+        <div className="avatar">CW</div>
+      </div>
+    </header>
+  )
+}
+
+function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) => void }) {
+  const searchAreaRef = useRef<HTMLDivElement | null>(null)
+  const [activeCategory, setActiveCategory] = useState('all')
+  const [categories, setCategories] = useState<ApiMarketCategory[]>(fallbackCategories)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedSearch, setSelectedSearch] = useState<MarketSearchResult | null>(null)
+  const [searchResults, setSearchResults] = useState<MarketSearchResult[]>([])
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [networkMarkets, setNetworkMarkets] = useState<Market[]>(markets)
+  const [networkEdges, setNetworkEdges] = useState<ApiMarketEdge[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    let cancelled = false
-
-    fetchMarketUniverse()
-      .then((items) => {
-        if (cancelled) return
-        setMarkets(items)
-        setSelectedMarket(items[0])
-        setLoadError(null)
+    const controller = new AbortController()
+    fetch('/api/markets/categories', { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.json() as Promise<MarketCategoriesResponse>
       })
-      .catch((error: Error) => {
-        if (cancelled) return
-        setLoadError(error.message)
+      .then((payload) => {
+        if (payload.data.categories.length) setCategories(payload.data.categories)
       })
-      .finally(() => {
-        if (!cancelled) setLoadingUniverse(false)
+      .catch(() => {
+        if (!controller.signal.aborted) setCategories(fallbackCategories)
       })
-
-    return () => {
-      cancelled = true
-    }
+    return () => controller.abort()
   }, [])
 
   useEffect(() => {
-    if (mode !== 'generating') return
-    const timer = window.setInterval(() => {
-      setGenerationStep((step) => Math.min(step + 1, 5))
-    }, GENERATION_STEP_MS)
-    return () => window.clearInterval(timer)
-  }, [mode])
-
-  const startGeneration = async () => {
-    if (!selectedMarket) return
-    setMode('generating')
-    setGenerationStep(0)
-    setGenerationEvents([
-      {
-        type: 'root',
-        step: 0,
-        message: `Preparing live PM root: ${selectedMarket.question}`,
-        data: { root: selectedMarket },
-      },
-    ])
-    try {
-      const generated = await generateScenarioStream(selectedMarket.id, (event) => {
-        setGenerationStep(event.step)
-        setGenerationEvents((current) => [...current, event].slice(-16))
-      })
-      if (generated.aiStatus !== 'refined') {
-        throw new Error(generated.aiError ?? 'AI refinement did not complete')
-      }
-      setGeneratedScenarios((current) => [generated, ...current.filter((item) => item.id !== generated.id)].slice(0, 5))
-      setScenario(generated.id)
-      setStep(generated.steps.length - 1)
-      setMode('scenario')
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Scenario generation failed')
-      setMode('universe')
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target
+      if (!(target instanceof globalThis.Node) || !searchAreaRef.current?.contains(target)) setSearchOpen(false)
     }
-  }
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [])
 
-  const returnToUniverse = () => {
-    pause()
-    setStep(-1)
-    setMode('universe')
-  }
+  useEffect(() => {
+    const trimmedQuery = searchQuery.trim()
+    if (selectedSearch && trimmedQuery === selectedSearch.title) {
+      return
+    }
+    if (trimmedQuery.length < 2) {
+      return
+    }
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      setSearchLoading(true)
+      const params = new URLSearchParams({ q: trimmedQuery, limit: '8' })
+      fetch(`/api/markets/search?${params.toString()}`, { signal: controller.signal })
+        .then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`)
+          return response.json() as Promise<MarketSearchResponse>
+        })
+        .then((payload) => {
+          setSearchResults(payload.data.results)
+          setSearchOpen(true)
+        })
+        .catch((fetchError: Error) => {
+          if (fetchError.name !== 'AbortError') {
+            setSearchResults([])
+            setSearchOpen(false)
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setSearchLoading(false)
+        })
+    }, 180)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [searchQuery, selectedSearch])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const params = new URLSearchParams({ limit: '25' })
+    const trimmedQuery = searchQuery.trim()
+    if (selectedSearch?.type === 'market' && selectedSearch.marketId) {
+      params.set('focusMarketId', selectedSearch.marketId)
+    } else if (selectedSearch?.type === 'event' && (selectedSearch.eventId || selectedSearch.eventSlug)) {
+      params.set('eventId', selectedSearch.eventId || selectedSearch.eventSlug || '')
+    } else if (selectedSearch?.type === 'topic' && (selectedSearch.topic || selectedSearch.categoryKey)) {
+      params.set('topic', selectedSearch.topic || selectedSearch.categoryKey || '')
+    } else {
+      if (activeCategory !== 'all') params.set('categoryKey', activeCategory)
+      if (trimmedQuery) params.set('q', trimmedQuery)
+    }
+    fetch(`/api/markets/network?${params.toString()}`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.json() as Promise<MarketNetworkResponse>
+      })
+      .then((payload) => {
+        const nodes = payload.data.nodes.map(apiNodeToMarket)
+        if (nodes.length) {
+          setNetworkMarkets(nodes)
+          setNetworkEdges(payload.data.edges)
+        }
+        setError(null)
+      })
+      .catch((fetchError: Error) => {
+        if (fetchError.name !== 'AbortError') {
+          setError(fetchError.message)
+          setNetworkMarkets(markets)
+          setNetworkEdges([])
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
+  }, [activeCategory, searchQuery, selectedSearch])
+
+  const chooseSearchResult = useCallback((result: MarketSearchResult) => {
+    setSelectedSearch(result)
+    setSearchQuery(result.title)
+    setSearchOpen(false)
+    setLoading(true)
+  }, [])
+
+  const clearSearch = useCallback(() => {
+    setSelectedSearch(null)
+    setSearchQuery('')
+    setSearchResults([])
+    setSearchOpen(false)
+    setLoading(true)
+  }, [])
 
   return (
-    <main className="app">
-      <div className="app-topbar">
-        <div className="brand">
-          <span className="brand-mark">A</span>
-          <div>
-            <strong>{text.brandTitle}</strong>
-            <span
-              className={
-                sourceLabel.includes('AI')
-                  ? 'source-pill source-pill--live'
-                  : loadingUniverse
-                    ? 'source-pill source-pill--loading'
-                    : 'source-pill source-pill--live'
-              }
-              title={loadError ?? scenario?.aiError}
-            >
-              {sourceLabel}
-            </span>
+    <section className="page page-network">
+      <div className="search-row">
+        <div className="search-area" ref={searchAreaRef}>
+          <div className="searchbox">
+            <Search size={18} />
+            <input
+              aria-label="搜索市场、事件或主题"
+              onChange={(event) => {
+                const nextValue = event.target.value
+                setSelectedSearch(null)
+                setLoading(true)
+                setSearchQuery(nextValue)
+                if (nextValue.trim().length < 2) {
+                  setSearchResults([])
+                  setSearchOpen(false)
+                  setSearchLoading(false)
+                }
+              }}
+              onFocus={() => {
+                if (searchResults.length) setSearchOpen(true)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0])
+                if (event.key === 'Escape') setSearchOpen(false)
+              }}
+              placeholder="搜索市场、事件、主题或粘贴 Polymarket 链接..."
+              type="text"
+              value={searchQuery}
+            />
+            {searchQuery ? (
+              <button className="search-clear" type="button" aria-label="清空搜索" onClick={clearSearch}>
+                ×
+              </button>
+            ) : null}
           </div>
-        </div>
-
-        <div className="market-search" aria-label="Market search">
-          <Search size={15} />
-          <span>Search markets</span>
-          <kbd>⌘</kbd>
-          <kbd>K</kbd>
-        </div>
-
-        <div className="topbar-actions">
-          {mode === 'scenario' && (
-            <button className="toolbar-button" type="button" onClick={returnToUniverse}>
-              <ArrowLeft size={15} />
-              Market universe
-            </button>
-          )}
-          {mode === 'scenario' && <ScenarioTabs scenarios={scenarioCatalog} />}
-          <button className="toolbar-button" type="button" aria-label="Export graph">
-            <Download size={15} />
-            Export
-          </button>
-          <button className="toolbar-button toolbar-button--primary" type="button" aria-label="Share graph">
-            <Share2 size={15} />
-            Share
-          </button>
-          <LanguageToggle />
+          {searchOpen && (searchLoading || searchResults.length) ? (
+            <SearchPopover
+              loading={searchLoading}
+              onSelect={chooseSearchResult}
+              query={searchQuery}
+              results={searchResults}
+            />
+          ) : null}
         </div>
       </div>
+      <CategoryChips
+        active={activeCategory}
+        categories={categories}
+        onChange={(category) => {
+          setLoading(true)
+          setActiveCategory(category)
+        }}
+      />
+      <div className="network-stage">
+        <NetworkMap edges={networkEdges} loading={loading} markets={networkMarkets} onConfirmMarket={onConfirmMarket} />
+        {error ? <div className="network-error">后端数据暂不可用，正在显示本地示例图谱：{error}</div> : null}
+      </div>
+    </section>
+  )
+}
 
-      {mode === 'universe' && (
-        <MarketUniverse
-          markets={markets}
-          selectedMarket={selectedMarket}
-          loading={loadingUniverse}
-          error={loadError}
-          onSelect={setSelectedMarket}
-          onGenerate={startGeneration}
-        />
-      )}
-
-      {mode === 'generating' && selectedMarket && (
-        <GenerationFlow market={selectedMarket} activeStep={generationStep} events={generationEvents} />
-      )}
-
-      {mode === 'scenario' && scenario && (
-        <section className="workspace">
-          <div className="canvas-area">
-            <div className="canvas-header">
-              <div>
-                <p className="eyebrow">{text.graphEyebrow}</p>
-                <h2>{scenario.subtitle}</h2>
+function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () => void; onInfer: () => void }) {
+  const ruleCopy = marketRuleCopy(market)
+  const outcomeRows = getOutcomeRows(market)
+  const primaryOutcome = outcomeRows[0]
+  return (
+    <section className="page market-detail-page">
+      <BackButton onClick={onBack} />
+      <div className="market-detail-layout">
+        <div className="market-detail-content">
+          <div className="market-page-head">
+            <MarketIcon market={market} size="large" />
+            <div>
+              <div className="market-page-meta">
+                <span>{market.officialCategory || market.category}</span>
+                {market.eventTitle ? <span>{market.eventTitle}</span> : null}
               </div>
-              <div className="legend">
-                <span className="legend-up">{text.up}</span>
-                <span className="legend-down">{text.down}</span>
-                <span className="legend-uncertain">{text.uncertain}</span>
+              <h1>{market.title}</h1>
+            </div>
+            <div className="market-head-actions">
+              <button className="outline-button square" type="button" aria-label="收藏">
+                <Star size={18} />
+              </button>
+              <button className="outline-button" type="button">
+                <Share2 size={17} /> 分享
+              </button>
+            </div>
+          </div>
+
+          <Card className="market-live-card">
+            <div className="market-live-strip">
+              <div>
+                <span>{primaryOutcome?.label || '当前概率'}</span>
+                <strong>{primaryOutcome?.percent ?? market.price}%</strong>
+                <em className={market.change >= 0 ? 'green-text' : 'red-text'}>{marketChangeText(market)}</em>
+              </div>
+              <div>
+                <span>成交量</span>
+                <strong>{market.volume}</strong>
+              </div>
+              <div>
+                <span>流动性</span>
+                <strong>{formatCompactMoney(market.liquidity)}</strong>
+              </div>
+              <div>
+                <span>结束时间</span>
+                <strong>{formatDate(market.endDate)}</strong>
               </div>
             </div>
-            <ScenarioGraph scenario={scenario} />
+            <MarketPriceChart market={market} />
+            <MarketOrderBook market={market} />
+          </Card>
+        </div>
+
+        <aside className="market-detail-side">
+          <Card className="market-side-card">
+            <SectionHeader title="市场描述" />
+            <div className="market-rule-copy">
+              <p>{marketDescriptionCopy(market)}</p>
+              {ruleCopy !== marketDescriptionCopy(market) ? <p>{ruleCopy}</p> : null}
+            </div>
+          </Card>
+          <Card className="market-side-card">
+            <SectionHeader title="市场信息" />
+            <InfoTable
+              rows={[
+                ['市场 ID', market.id],
+                ['事件', market.eventTitle || '未提供'],
+                ['到期时间', formatDate(market.endDate)],
+                ['类别', market.category],
+                ['来源', 'Polymarket'],
+                ['合约类型', outcomeRows.length > 2 ? '多结果盘口' : '二元事件'],
+                ['交易状态', market.acceptingOrders === false ? '暂停接单' : '可交易'],
+                ['最小下单', market.orderMinSize ? `${market.orderMinSize}` : '未提供'],
+                ['最小报价单位', market.tickSize ? `${market.tickSize}` : '未提供'],
+                ['同步时间', formatDate(market.syncedAt)],
+              ]}
+            />
+          </Card>
+          <Card className="market-side-card">
+            <SectionHeader title="相关市场" />
+            <RelatedMarketList currentMarket={market} />
+          </Card>
+        </aside>
+      </div>
+      <button className="primary-action" type="button" onClick={onInfer}>
+        <BrainCircuit size={20} /> 设定作为推演节点
+      </button>
+    </section>
+  )
+}
+
+function InferenceSettings({ market, onBack, onStart }: { market: Market; onBack: () => void; onStart: () => void }) {
+  return (
+    <section className="page">
+      <BackButton onClick={onBack} />
+      <PageTitle title="AI 推演设置" subtitle="配置推演参数，AI 将为您分析事件的潜在影响。" />
+      <div className="content-grid settings-grid">
+        <Card className="span-8 settings-panel">
+          <SectionHeader title="根节点市场" />
+          <div className="root-market-card">
+            <MarketIcon market={market} size="medium" />
+            <div>
+              <h3>{market.title}</h3>
+              <p>{marketSubtitle(market)}</p>
+            </div>
+            <strong>{market.price}%</strong>
+            <span className={market.change >= 0 ? 'green-text' : 'red-text'}>{marketChangeText(market)}</span>
+            <div className="mini-stat">
+              <b>{market.volume}</b>
+              <span>成交量</span>
+            </div>
+            <div className="mini-stat">
+              <b>{formatCompactMoney(market.liquidity)}</b>
+              <span>流动性</span>
+            </div>
           </div>
-          <ScenarioPanel scenario={scenario} />
+          <Divider />
+          <SectionHeader title="推演范围" note="选择要纳入分析的数据源范围。" />
+          <div className="option-grid four">
+            {[
+              ['相关新闻', '新闻报道和媒体'],
+              ['相关市场', 'Polymarket 市场'],
+              ['社交媒体', '社交讨论和情绪'],
+              ['全部', '所有可用数据源'],
+            ].map(([title, subtitle], index) => (
+              <button className={index === 3 ? 'option-card selected' : 'option-card'} key={title} type="button">
+                <span className="option-icon">{index + 1}</span>
+                <b>{title}</b>
+                <small>{subtitle}</small>
+              </button>
+            ))}
+          </div>
+          <Divider />
+          <div className="form-grid">
+            <Field label="时间周期" value="至市场结束" hint={`当前结束时间：${formatDate(market.endDate)}`} />
+            <Field label="AI 模型" value="GPT-4o" hint="更强的推理能力，更全面的分析" badge="推荐" />
+            <Field label="置信度偏好" value="平衡（推荐）" hint="平衡准确性和覆盖范围" />
+          </div>
+          <SectionHeader title="推演层数" note="控制 AI 生成的解释和洞察的详细程度。" />
+          <div className="segmented">
+            <button type="button">1 层</button>
+            <button className="active" type="button">2 层</button>
+            <button type="button">3 层</button>
+          </div>
+          <div className="range-block">
+            <div className="range-label">
+              <span>置信度阈值</span>
+              <b>0.55</b>
+            </div>
+            <div className="range-track">
+              <span style={{ width: '55%' }} />
+            </div>
+            <div className="range-scale">
+              <span>更广覆盖</span>
+              <span>平衡</span>
+              <span>高置信</span>
+            </div>
+          </div>
+          <div className="estimate-strip">
+            <span>
+              <Bot size={18} /> 预计处理时间：2-3 分钟
+            </span>
+            <span>
+              <ShieldCheck size={18} /> 预计消耗积分：25 积分
+            </span>
+          </div>
+          <button className="primary-action inside" type="button" onClick={onStart}>
+            <Play size={18} /> 启动 AI 推演
+          </button>
+        </Card>
+        <div className="side-stack">
+          <Card>
+            <SectionHeader title="推演设置预览" note="以下是您将要运行的推演配置摘要。" />
+            <PreviewList market={market} />
+          </Card>
+          <Card>
+            <SectionHeader title="预期分析内容" />
+            <Checklist
+              items={[
+                '直接影响的相关市场变化',
+                '中长期因果链路与传导路径',
+                '社交媒体情绪与观点变化',
+                '关键事件节点与时间线',
+                '风险因素与不确定性分析',
+              ]}
+            />
+          </Card>
+          <Card className="tip-card">
+            <SectionHeader title="使用小贴士" />
+            <ul>
+              <li>范围越广，发现的潜在影响越多，但耗时越长。</li>
+              <li>建议使用 30%-50% 强度进行首次探索。</li>
+              <li>推演结果将基于历史数据和 AI 推理生成。</li>
+            </ul>
+          </Card>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function InferenceProgress({ market, onBack, onDone }: { market: Market; onBack: () => void; onDone: () => void }) {
+  const steps = ['已选择根节点', '正在检索相关市场', '正在收集消息面', '正在分析因果关系', '正在生成脚本']
+
+  return (
+    <section className="page">
+      <BackButton onClick={onBack} />
+      <PageTitle title="AI 推演进行中..." subtitle={`正在基于「${market.title}」构建因果链条。`} />
+      <div className="progress-steps">
+        {steps.map((step, index) => (
+          <div className={index < 2 ? 'step done' : index === 2 ? 'step current' : 'step'} key={step}>
+            <div className="step-circle">{index === 0 ? <CheckCircle2 size={26} /> : index + 1}</div>
+            <strong>{step}</strong>
+            <span>{index < 2 ? `14:30:${index ? '35' : '21'}` : `预计 ${index === 2 ? 30 : 45} 秒`}</span>
+          </div>
+        ))}
+      </div>
+      <div className="global-progress">
+        <span style={{ width: '45%' }} />
+      </div>
+      <div className="progress-caption">
+        <span>推演中... <b>45%</b></span>
+        <span>预计还需 1-2 分钟</span>
+      </div>
+      <div className="content-grid progress-grid">
+        <Card>
+          <SectionHeader title="实时发现的相关市场" />
+          <DiscoveryTable market={market} />
+          <button className="link-button" type="button">
+            查看全部 12 个相关市场 <ArrowRight size={15} />
+          </button>
+        </Card>
+        <Card>
+          <SectionHeader title="实时推演日志" />
+          <LogList />
+        </Card>
+      </div>
+      <Card>
+        <SectionHeader title="当前推演信息" />
+        <div className="info-strip-grid">
+          {[ 
+            ['根节点市场', market.title],
+            ['推演深度', '3 阶关联'],
+            ['时间范围', formatDate(market.endDate)],
+            ['分析维度', market.category],
+            ['AI 模型', 'GPT-4o'],
+          ].map(([label, value]) => (
+            <div className="info-item" key={label}>
+              <div className="info-icon">
+                <Info size={18} />
+              </div>
+              <span>{label}</span>
+              <b>{value}</b>
+            </div>
+          ))}
+        </div>
+        <div className="soft-note">提示：AI 推演可能需要 1-3 分钟完成，请稍候。您可以在推演完成后查看详细的因果关系图谱和影响分析。</div>
+      </Card>
+      <button className="floating-next" type="button" onClick={onDone}>
+        查看已生成脚本 <ArrowRight size={18} />
+      </button>
+    </section>
+  )
+}
+
+function CausalScript({ market, onBack, onScripts }: { market: Market; onBack: () => void; onScripts: () => void }) {
+  return (
+    <section className="page">
+      <BackButton onClick={onBack} />
+      <div className="script-header">
+        <PageTitle
+          title="因果脚本"
+          subtitle={`基于 AI 分析的因果关系图谱，展示「${market.title}」对相关市场的潜在影响路径。`}
+        />
+        <div className="script-actions">
+          <button className="outline-button" type="button">
+            <Download size={17} /> 导出图谱
+          </button>
+          <button className="outline-button" type="button">
+            <Share2 size={17} /> 分享
+          </button>
+        </div>
+      </div>
+      <div className="tabbar">
+        <button className="active" type="button">图谱视图</button>
+        <button type="button">脚本详情</button>
+      </div>
+      <div className="content-grid script-grid">
+        <Card className="script-map-card">
+          <CausalMap market={market} />
+        </Card>
+        <Card>
+          <SectionHeader title="因果链路摘要" />
+          <p className="body-copy">基于当前市场价格、成交量和结构化因果模型，AI 识别出以下主要影响路径及逻辑关系。</p>
+          <SummaryList market={market} />
+          <div className="soft-note">以上为 AI 基于当前数据与模型的推演结果，不构成任何投资建议，市场有风险，决策需谨慎。</div>
+        </Card>
+      </div>
+      <Card className="script-footer-card">
+        <div className="footer-meta">
+          <span><BrainCircuit size={16} /> 推演模型：因果图谱 v2.1</span>
+          <span><Globe2 size={16} /> 数据来源：Polymarket / CME / FRED / Bloomberg</span>
+          <span><Activity size={16} /> 推演时间：2024-07-15 14:30</span>
+          <span><Bot size={16} /> 耗时：36 秒</span>
+        </div>
+        <div className="footer-actions">
+          <button className="outline-button" type="button" onClick={onScripts}>保存到我的脚本</button>
+          <button className="primary-button" type="button"><RotateCw size={17} /> 重新推演</button>
+        </div>
+      </Card>
+    </section>
+  )
+}
+
+function MyScripts({ onNew, onOpen }: { onNew: () => void; onOpen: () => void }) {
+  return (
+    <section className="page">
+      <div className="scripts-headline">
+        <PageTitle title="我的脚本" subtitle="管理和回顾您的事件推演脚本与分析历史。" />
+        <button className="primary-button" type="button" onClick={onNew}>
+          <Plus size={17} /> 新建推演
+        </button>
+      </div>
+      <div className="stats-row">
+        {[
+          ['全部脚本', '28', '较昨日 +3', 'blue'],
+          ['进行中', '6', '较昨日 +1', 'orange'],
+          ['已完成', '17', '较昨日 +2', 'green'],
+          ['收藏', '5', '较昨日 +1', 'purple'],
+        ].map(([label, value, note, tone]) => (
+          <Card className="stat-card" key={label}>
+            <span className={`stat-icon ${tone}`}>{value === '6' ? <Play size={19} /> : value === '17' ? <CheckCircle2 size={19} /> : <Star size={19} />}</span>
+            <div>
+              <span>{label}</span>
+              <b>{value}</b>
+              <small>{note}</small>
+            </div>
+          </Card>
+        ))}
+      </div>
+      <div className="scripts-toolbar">
+        <div className="tabbar inline">
+          <button className="active" type="button">全部</button>
+          <button type="button">进行中</button>
+          <button type="button">已完成</button>
+          <button type="button">收藏</button>
+        </div>
+        <div className="searchbox narrow">
+          <Search size={17} />
+          <span>搜索脚本名称、关键词...</span>
+        </div>
+        <button className="outline-button" type="button">最新创建</button>
+      </div>
+      <div className="script-list">
+        {scriptRows.map((row) => (
+          <button className="script-row" key={row.title} type="button" onClick={onOpen}>
+            <MarketIcon market={markets[row.points.length]} size="small" />
+            <div className="script-row-title">
+              <b>{row.title}</b>
+              {row.favorite ? <Star className="starred" size={17} fill="currentColor" /> : <Star size={17} />}
+              <span>创建时间：{row.created}</span>
+            </div>
+            <span className={row.status === '进行中' ? 'status-badge running' : 'status-badge done'}>{row.status}</span>
+            <MiniPath values={row.points} />
+            <div className="row-actions">
+              <ExternalLink size={18} />
+              <Pencil size={18} />
+              <Share2 size={18} />
+              <Trash2 size={18} />
+            </div>
+          </button>
+        ))}
+      </div>
+      <div className="pagination">共 28 条 <button type="button">1</button><span>2</span><span>3</span><span>下一页</span></div>
+    </section>
+  )
+}
+
+function FlowHandle({ id, position, type }: { id: string; position: Position; type: 'source' | 'target' }) {
+  return <Handle className={`flow-handle ${id}`} id={id} isConnectable={false} position={position} type={type} />
+}
+
+function MarketFlowNodeView({ data }: NodeProps<MarketFlowNode>) {
+  const { market, role, isFocus, isSelected, onIconMouseEnter, onIconMouseLeave } = data
+  return (
+    <div className={`flow-market-node ${role}${isFocus ? ' focus' : ''}${isSelected ? ' selected' : ''}`}>
+      <FlowHandle id="in-left" position={Position.Left} type="target" />
+      <FlowHandle id="out-left" position={Position.Left} type="source" />
+      <FlowHandle id="in-right" position={Position.Right} type="target" />
+      <FlowHandle id="out-right" position={Position.Right} type="source" />
+      <FlowHandle id="in-top" position={Position.Top} type="target" />
+      <FlowHandle id="out-top" position={Position.Top} type="source" />
+      <FlowHandle id="in-bottom" position={Position.Bottom} type="target" />
+      <FlowHandle id="out-bottom" position={Position.Bottom} type="source" />
+      <span
+        className="flow-node-icon-target"
+        onMouseEnter={(event) => onIconMouseEnter?.(event, market)}
+        onMouseLeave={onIconMouseLeave}
+      >
+        <MarketIcon market={market} size="small" />
+      </span>
+      <div className="flow-node-copy">
+        <b>{trimNodeTitle(market.title, isFocus ? 76 : 46)}</b>
+        <em>{market.price}%</em>
+      </div>
+    </div>
+  )
+}
+
+function CausalFlowEdgeView(props: EdgeProps<MarketFlowEdge>) {
+  const sourceNode = useInternalNode<MarketFlowNode>(props.source)
+  const targetNode = useInternalNode<MarketFlowNode>(props.target)
+  const edgePath = sourceNode && targetNode
+    ? getFloatingEdgePath(sourceNode, targetNode)
+    : `M ${props.sourceX},${props.sourceY} L ${props.targetX},${props.targetY}`
+  const tone = props.data?.tone || 'neutral'
+  const strength = props.data?.strength || 'secondary'
+  return (
+    <g className={`flow-edge ${tone} ${strength}`}>
+      <BaseEdge className="flow-edge-base" id={props.id} markerEnd={props.markerEnd} path={edgePath} />
+      {strength === 'primary' ? <path className="flow-edge-pulse" d={edgePath} /> : null}
+    </g>
+  )
+}
+
+const nodeTypes = { market: MarketFlowNodeView }
+const edgeTypes = { causal: CausalFlowEdgeView }
+const reactFlowFitViewOptions = { padding: 0.2 }
+const reactFlowProOptions = { hideAttribution: true }
+
+function applyFocusSelection(
+  nodes: MarketFlowNode[],
+  edges: MarketFlowEdge[],
+  selectedFocusId: string | undefined,
+) {
+  const selectedId = selectedFocusId && nodes.some((node) => node.id === selectedFocusId)
+    ? selectedFocusId
+    : nodes.find((node) => node.data.isFocus)?.id
+
+  return {
+    nodes: nodes.map((node) => ({
+      ...node,
+      selected: node.id === selectedId,
+      data: {
+        ...node.data,
+        isSelected: node.id === selectedId,
+      },
+    })),
+    edges: edges.map((edge) => {
+      const related = selectedId ? edge.source === selectedId || edge.target === selectedId : edge.data?.strength === 'primary'
+      return {
+        ...edge,
+        data: edge.data
+          ? {
+              ...edge.data,
+              strength: related ? 'primary' : 'secondary',
+            }
+          : edge.data,
+      }
+    }),
+  }
+}
+
+function NetworkMap({
+  edges,
+  loading,
+  markets: graphMarkets,
+  onConfirmMarket,
+}: {
+  edges: ApiMarketEdge[]
+  loading: boolean
+  markets: Market[]
+  onConfirmMarket: (market: Market) => void
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const hoverCloseTimerRef = useRef<number | null>(null)
+  const [hoveredMarket, setHoveredMarket] = useState<Market | null>(null)
+  const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null)
+  const [hoverPlacement, setHoverPlacement] = useState<HoverPlacement>('right')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const visibleMarkets = useMemo(() => (graphMarkets.length ? graphMarkets : markets).slice(0, MAX_FLOW_NODES), [graphMarkets])
+  const layoutFocusId = visibleMarkets[0]?.id
+  const selectedFocusId = selectedId && visibleMarkets.some((market) => market.id === selectedId) ? selectedId : layoutFocusId
+  const graph = useMemo(
+    () => buildMarketFlowGraph(visibleMarkets, edges, layoutFocusId, {}),
+    [layoutFocusId, edges, visibleMarkets],
+  )
+  const graphKey = useMemo(
+    () => `${layoutFocusId || 'empty'}:${visibleMarkets.map((market) => market.id).join('|')}:${edges.map((edge) => edge.id).join('|')}`,
+    [layoutFocusId, edges, visibleMarkets],
+  )
+
+  const clearHoverCloseTimer = useCallback(() => {
+    if (hoverCloseTimerRef.current != null) {
+      window.clearTimeout(hoverCloseTimerRef.current)
+      hoverCloseTimerRef.current = null
+    }
+  }, [])
+
+  const closeHoverCard = useCallback(() => {
+    setHoveredMarket(null)
+    setHoverPoint(null)
+  }, [])
+
+  const scheduleHoverClose = useCallback(() => {
+    clearHoverCloseTimer()
+    hoverCloseTimerRef.current = window.setTimeout(closeHoverCard, 220)
+  }, [clearHoverCloseTimer, closeHoverCard])
+
+  useEffect(() => () => clearHoverCloseTimer(), [clearHoverCloseTimer])
+
+  const updateHoverPoint = useCallback((event: ReactMouseEvent<HTMLElement>, market: Market) => {
+    clearHoverCloseTimer()
+    const bounds = containerRef.current?.getBoundingClientRect()
+    if (!bounds) return
+    const nodeBounds = event.currentTarget.getBoundingClientRect()
+    const placement = getHoverCardPlacement(bounds, nodeBounds)
+    setHoveredMarket(market)
+    setHoverPlacement(placement.placement)
+    setHoverPoint({ x: placement.x, y: placement.y })
+  }, [clearHoverCloseTimer])
+
+  const handleIconMouseEnter = useCallback(
+    (event: ReactMouseEvent<HTMLElement>, market: Market) => updateHoverPoint(event, market),
+    [updateHoverPoint],
+  )
+
+  const handleIconMouseLeave = useCallback(() => {
+    scheduleHoverClose()
+  }, [scheduleHoverClose])
+
+  const handleNodeClick = useCallback<NodeMouseHandler<MarketFlowNode>>(
+    (_, node) => {
+      if (selectedId === node.id) {
+        onConfirmMarket(node.data.market)
+        return
+      }
+      setSelectedId(node.id)
+    },
+    [onConfirmMarket, selectedId],
+  )
+
+  const graphWithHover = useMemo(
+    () => ({
+      nodes: graph.nodes.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          onIconMouseEnter: handleIconMouseEnter,
+          onIconMouseLeave: handleIconMouseLeave,
+        },
+      })),
+      edges: graph.edges,
+    }),
+    [graph, handleIconMouseEnter, handleIconMouseLeave],
+  )
+
+  const hoverStyle: CSSProperties | undefined = hoverPoint ? { left: hoverPoint.x, top: hoverPoint.y } : undefined
+
+  return (
+    <div className="network-map flow-network-map" ref={containerRef}>
+      <NetworkFlowCanvas
+        key={graphKey}
+        graph={graphWithHover}
+        selectedFocusId={selectedFocusId}
+        onNodeClick={handleNodeClick}
+      />
+      {hoveredMarket ? (
+        <MarketHoverCard
+          market={hoveredMarket}
+          placement={hoverPlacement}
+          style={hoverStyle}
+          onMouseEnter={clearHoverCloseTimer}
+          onMouseLeave={handleIconMouseLeave}
+        />
+      ) : null}
+      {loading ? <div className="network-loading">正在从 SQLite / Polymarket 同步市场网络...</div> : null}
+      <div className="legend">
+        <span><i className="dot blue" />政治</span>
+        <span><i className="dot green" />宏观经济</span>
+        <span><i className="dot orange" />加密货币</span>
+        <span><i className="line solid" />强相关</span>
+        <span><i className="line dashed" />中等相关</span>
+      </div>
+    </div>
+  )
+}
+
+function NetworkFlowCanvas({
+  graph,
+  selectedFocusId,
+  onNodeClick,
+}: {
+  graph: { nodes: MarketFlowNode[]; edges: MarketFlowEdge[] }
+  selectedFocusId: string | undefined
+  onNodeClick: NodeMouseHandler<MarketFlowNode>
+}) {
+  const [flowNodes, setFlowNodes] = useState<MarketFlowNode[]>(() => graph.nodes)
+  const draggingRef = useRef(false)
+  const renderedGraph = useMemo(
+    () => applyFocusSelection(flowNodes, graph.edges, selectedFocusId),
+    [flowNodes, graph.edges, selectedFocusId],
+  )
+
+  const onNodesChange = useCallback((changes: NodeChange<MarketFlowNode>[]) => {
+    setFlowNodes((currentNodes) => applyNodeChanges(changes, currentNodes) as MarketFlowNode[])
+  }, [])
+
+  const handleNodeClick = useCallback<NodeMouseHandler<MarketFlowNode>>(
+    (event, node) => {
+      if (draggingRef.current) return
+      onNodeClick(event, node)
+    },
+    [onNodeClick],
+  )
+
+  const handleNodeDragStart = useCallback(() => {
+    draggingRef.current = true
+  }, [])
+
+  const handleNodeDragStop = useCallback(() => {
+    window.setTimeout(() => {
+      draggingRef.current = false
+    }, 0)
+  }, [])
+
+  return (
+    <ReactFlow
+      colorMode="light"
+      edges={renderedGraph.edges}
+      edgeTypes={edgeTypes}
+      fitView
+      fitViewOptions={reactFlowFitViewOptions}
+      maxZoom={1.28}
+      minZoom={0.5}
+      nodeOrigin={[0, 0]}
+      nodeTypes={nodeTypes}
+      nodes={renderedGraph.nodes}
+      nodesConnectable={false}
+      nodesDraggable
+      onNodeClick={handleNodeClick}
+      onNodeDragStart={handleNodeDragStart}
+      onNodeDragStop={handleNodeDragStop}
+      onNodesChange={onNodesChange}
+      panOnDrag
+      panOnScroll
+      proOptions={reactFlowProOptions}
+      zoomOnDoubleClick={false}
+    >
+      <Background color="rgba(226, 235, 247, 0.62)" gap={92} size={1} />
+      <Controls position="bottom-right" showInteractive={false} />
+    </ReactFlow>
+  )
+}
+
+function CausalMap({ market }: { market: Market }) {
+  return (
+    <div className="causal-map">
+      <div className="causal-root">
+        <MarketIcon market={market} size="medium" />
+        <b>{market.title}</b>
+        <strong>{market.price}% <span>{marketChangeText(market)}</span></strong>
+        <small>同步于 {formatDate(market.syncedAt)}</small>
+      </div>
+      <svg className="causal-lines" viewBox="0 0 1000 560" aria-hidden="true">
+        <path d="M500 155 C420 235 300 205 185 265" className="green" />
+        <path d="M500 155 C430 245 350 245 300 265" className="green" />
+        <path d="M500 155 C550 250 590 235 650 265" className="red" />
+        <path d="M500 155 C620 220 760 210 850 265" className="green" />
+        <path d="M185 330 V430" className="green dashed" />
+        <path d="M300 330 V430" className="orange dashed" />
+        <path d="M650 330 V430" className="red dashed" />
+        <path d="M850 330 V430" className="purple dashed" />
+      </svg>
+      <div className="causal-columns">
+        {causalColumns.map((column, columnIndex) => (
+          <div className="causal-column" key={columnIndex}>
+            {column.map((item) => (
+              <div className={`causal-node ${item.tone}`} key={item.title}>
+                <b>{item.title}</b>
+                <strong>{item.price}%</strong>
+                <span>{item.delta} 中等置信度</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="confidence-legend">
+        <b>置信度说明</b>
+        <span><i className="dot green" />高置信度 ≥ 0.65</span>
+        <span><i className="dot orange" />较高置信度 0.45 - 0.64</span>
+        <span><i className="dot red" />中等置信度 0.25 - 0.44</span>
+        <span><i className="dot purple" />较低置信度 0.10 - 0.24</span>
+      </div>
+    </div>
+  )
+}
+
+function CausewayLogo() {
+  return (
+    <svg className="logo-mark" viewBox="0 0 64 64" aria-hidden="true">
+      <rect width="64" height="64" rx="15" fill="#081B33" />
+      <circle cx="20" cy="32" r="5" fill="#fff" />
+      <path d="M24 32H47" stroke="#1677FF" strokeWidth="6" strokeLinecap="round" />
+      <path d="M24 32L45 20" stroke="#fff" strokeWidth="6" strokeLinecap="round" />
+      <path d="M24 32L45 44" stroke="#fff" strokeWidth="6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function MarketIcon({ market, size }: { market: Pick<Market, 'icon' | 'tone' | 'iconUrl'>; size: 'small' | 'medium' | 'large' }) {
+  const maybeImage = market.iconUrl
+  if (maybeImage) {
+    return (
+      <span className={`market-icon image ${market.tone} ${size}`}>
+        <img alt="" src={maybeImage} />
+      </span>
+    )
+  }
+  const Icon = {
+    landmark: Landmark,
+    bank: Landmark,
+    bitcoin: Bitcoin,
+    factory: Factory,
+    flame: Flame,
+    cpu: Cpu,
+    globe: Globe2,
+  }[market.icon]
+  return (
+    <span className={`market-icon ${market.tone} ${size}`}>
+      <Icon size={size === 'large' ? 32 : size === 'medium' ? 23 : 17} />
+    </span>
+  )
+}
+
+function MarketHoverCard({
+  market,
+  placement = 'right',
+  style,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  market: Market
+  placement?: HoverPlacement
+  style?: CSSProperties
+  onMouseEnter?: () => void
+  onMouseLeave?: () => void
+}) {
+  const topOutcome = market.outcomes?.[0]
+  const description = market.description?.trim() || ''
+  const rules = market.rules?.trim() || ''
+  const hasDistinctSummary = Boolean(description && rules && description !== rules)
+  const rulesText = rules || description || 'Polymarket 未提供详细规则说明。'
+  return (
+    <aside
+      className={`market-hover-card ${placement}`}
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onMouseDown={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+    >
+      <div className="hover-card-head">
+        <MarketIcon market={market} size="small" />
+        <div>
+          <b>{market.title}</b>
+          <span>{market.eventTitle || market.category}</span>
+        </div>
+      </div>
+      <div className="hover-card-stats">
+        <div><span>价格</span><b>{market.price}%</b></div>
+        <div><span>成交量</span><b>{market.volume}</b></div>
+        <div><span>流动性</span><b>{formatCompactMoney(market.liquidity)}</b></div>
+        <div><span>结束时间</span><b>{formatDate(market.endDate)}</b></div>
+      </div>
+      <div className="hover-card-body" tabIndex={0}>
+        {hasDistinctSummary ? (
+          <section className="hover-card-section">
+            <span>简介</span>
+            <p>{description}</p>
+          </section>
+        ) : null}
+        <section className="hover-card-section">
+          <span>规则说明</span>
+          <p>{rulesText}</p>
         </section>
-      )}
-    </main>
+      </div>
+      <div className="hover-card-footer">
+        <span className={market.acceptingOrders === false ? 'closed' : 'open'}>{market.acceptingOrders === false ? '暂停接单' : '可交易'}</span>
+        {topOutcome ? <span>{topOutcome.label}: {topOutcome.price == null ? 'N/A' : `${Math.round(topOutcome.price * 100)}%`}</span> : null}
+      </div>
+    </aside>
+  )
+}
+
+function PageTitle({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div className="page-title">
+      <h1>{title}</h1>
+      <p>{subtitle}</p>
+    </div>
+  )
+}
+
+function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <section className={`card ${className}`}>{children}</section>
+}
+
+function SectionHeader({ title, note }: { title: string; note?: string }) {
+  return (
+    <div className="section-header">
+      <h2>{title}</h2>
+      {note ? <span>{note}</span> : null}
+    </div>
+  )
+}
+
+function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="back-button" type="button" onClick={onClick}>
+      <ArrowLeft size={17} /> 返回
+    </button>
+  )
+}
+
+function SearchPopover({
+  loading,
+  onSelect,
+  query,
+  results,
+}: {
+  loading: boolean
+  onSelect: (result: MarketSearchResult) => void
+  query: string
+  results: MarketSearchResult[]
+}) {
+  return (
+    <div className="search-popover">
+      <div className="search-tabs">
+        <span className="active">盘口</span>
+        <span>事件</span>
+        <span>主题</span>
+      </div>
+      <div className="search-result-list">
+        {results.map((result) => (
+          <button className="search-result-item" key={`${result.type}:${result.id}`} type="button" onClick={() => onSelect(result)}>
+            <span className="search-result-avatar">
+              {result.image || result.icon ? <img alt="" src={result.image || result.icon || ''} /> : <i>{result.title.slice(0, 1)}</i>}
+            </span>
+            <span className="search-result-main">
+              <b>{result.title}</b>
+              <small>{result.subtitle || result.category || 'Polymarket 市场'}</small>
+            </span>
+            <span className="search-result-meta">
+              <b>{formatProbability(result.price)}</b>
+              <small>{result.type === 'topic' ? '主题' : result.endDate ? formatDate(result.endDate) : formatCompactMoney(result.volume)}</small>
+            </span>
+          </button>
+        ))}
+        {!loading && !results.length ? <div className="search-empty">没有找到 “{query}” 的相关市场</div> : null}
+        {loading ? <div className="search-empty">正在搜索 Polymarket 市场...</div> : null}
+      </div>
+      {results.length ? <button className="search-all" type="button">查看全部结果 <ArrowRight size={15} /></button> : null}
+    </div>
+  )
+}
+
+function CategoryChips({
+  active,
+  categories,
+  onChange,
+}: {
+  active: string
+  categories: ApiMarketCategory[]
+  onChange: (category: string) => void
+}) {
+  return (
+    <div className="chip-row">
+      {categories.map((category) => (
+        <button
+          className={active === category.key ? 'chip active' : 'chip'}
+          key={category.key}
+          type="button"
+          onClick={() => onChange(category.key)}
+        >
+          {category.key === 'hot' ? <Flame size={15} /> : null}
+          {category.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function MarketPriceChart({ market }: { market: Market }) {
+  const outcomeRows = getOutcomeRows(market).slice(0, 5)
+  return (
+    <div className="market-price-chart">
+      <div className="market-chart-toolbar">
+        <div className="market-chart-legend">
+          {outcomeRows.slice(0, 4).map((outcome) => (
+            <span className={`chart-key ${outcomeTone(outcome.index)}`} key={`${outcome.label}-${outcome.index}`}>
+              <i />
+              {outcome.label} <b>{formatUnitPercent(outcome.price)}</b>
+            </span>
+          ))}
+        </div>
+        <div className="chart-range-tabs">
+          {['1H', '6H', '1D', '1W', '1M', 'ALL'].map((range) => (
+            <button className={range === 'ALL' ? 'active' : ''} key={range} type="button">
+              {range}
+            </button>
+          ))}
+        </div>
+      </div>
+      <svg viewBox="0 0 760 310" aria-label="市场价格走势">
+        <g className="grid-lines">
+          <path d="M36 40H724" /><path d="M36 92H724" /><path d="M36 144H724" /><path d="M36 196H724" /><path d="M36 248H724" />
+        </g>
+        <text className="chart-watermark" x="565" y="58">Polymarket</text>
+        <g className="chart-axis">
+          <text x="725" y="44">100%</text>
+          <text x="725" y="148">50%</text>
+          <text x="725" y="252">0%</text>
+          <text x="36" y="292">市场开始</text>
+          <text x="648" y="292">{formatDate(market.endDate)}</text>
+        </g>
+        {outcomeRows.map((outcome) => (
+          <path
+            className={`market-chart-line ${outcomeTone(outcome.index)}`}
+            d={outcomePath(outcome.index, outcome.price)}
+            key={`${outcome.label}-${outcome.index}`}
+          />
+        ))}
+      </svg>
+    </div>
+  )
+}
+
+function MarketOrderBook({ market }: { market: Market }) {
+  const outcomeRows = getOutcomeRows(market)
+  return (
+    <div className="market-orderbook">
+      <div className="orderbook-head">
+        <div>
+          <b>盘口</b>
+          <span>{outcomeRows.length} 个结果 · {market.acceptingOrders === false ? '暂停接单' : '可交易'}</span>
+        </div>
+        <div className="orderbook-meta">
+          <span>Vol. {market.volume}</span>
+          {market.lastTradePrice != null ? <span>Last {formatCents(market.lastTradePrice)}</span> : null}
+        </div>
+      </div>
+      <div className="orderbook-list">
+        {outcomeRows.map((outcome) => {
+          const trend = outcomeTrend(outcome.index, outcome.price)
+          const bid = outcome.index === 0 ? market.bestBid ?? outcome.yesPrice : outcome.yesPrice
+          const ask = outcome.index === 0 ? market.bestAsk ?? outcome.yesPrice : outcome.yesPrice
+          return (
+            <div className="orderbook-row" key={`${outcome.label}-${outcome.index}`}>
+              <div className="orderbook-title">
+                <b>{outcome.label}</b>
+                <span>Token {formatToken(outcome.tokenId)} · 市场成交量 {market.volume}</span>
+              </div>
+              <div className="orderbook-price">
+                <strong>{outcome.percent == null ? 'N/A' : `${outcome.percent}%`}</strong>
+                <span className={trend >= 0 ? 'green-text' : 'red-text'}>{trend >= 0 ? '▲' : '▼'} {Math.abs(trend)}%</span>
+              </div>
+              <div className="orderbook-quotes">
+                <span>Bid {formatCents(bid)}</span>
+                <span>Ask {formatCents(ask)}</span>
+              </div>
+              <button className="buy-yes" type="button">Buy Yes {formatCents(outcome.yesPrice)}</button>
+              <button className="buy-no" type="button">Buy No {formatCents(outcome.noPrice)}</button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ChartMini() {
+  return (
+    <svg className="mini-chart" viewBox="0 0 220 64" aria-hidden="true">
+      <path d="M6 48 L28 44 L42 46 L60 38 L83 34 L105 30 L125 36 L143 22 L165 29 L188 20 L213 13" />
+    </svg>
+  )
+}
+
+function RelatedMarketList({ currentMarket }: { currentMarket: Market }) {
+  const relatedMarkets = markets
+    .filter((market) => market.id !== currentMarket.id && (market.category === currentMarket.category || market.tone === currentMarket.tone))
+    .slice(0, 3)
+  const items = relatedMarkets.length ? relatedMarkets : markets.filter((market) => market.id !== currentMarket.id).slice(0, 3)
+  return (
+    <div className="related-list">
+      {items.map((market) => (
+        <div className="related-item" key={market.id}>
+          <MarketIcon market={market} size="small" />
+          <div>
+            <b>{market.title}</b>
+            <span>成交量 {market.volume} · 交易者 {market.traders}</span>
+          </div>
+          <strong>{market.price}%</strong>
+          <span className={market.change > 0 ? 'green-text' : 'red-text'}>{market.change > 0 ? '+' : ''}{market.change}%</span>
+          <Star size={17} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function InfoTable({ rows }: { rows: [string, string][] }) {
+  return (
+    <div className="info-table">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <span>{label}</span>
+          <b>{value}</b>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function Divider() {
+  return <div className="divider" />
+}
+
+function Field({ label, value, hint, badge }: { label: string; value: string; hint: string; badge?: string }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <div>
+        <b>{value}</b>
+        {badge ? <em>{badge}</em> : null}
+      </div>
+      <small>{hint}</small>
+    </label>
+  )
+}
+
+function PreviewList({ market }: { market: Market }) {
+  const items = [
+    ['根节点市场', market.title],
+    ['推演范围', '全部（相关新闻 + 相关市场 + 社交媒体）'],
+    ['时间周期', `至市场结束：${formatDate(market.endDate)}`],
+    ['推演层数', '2 层'],
+    ['AI 模型', 'GPT-4o'],
+    ['置信度偏好', '平衡（推荐）'],
+  ]
+  return (
+    <div className="preview-list">
+      {items.map(([label, value]) => (
+        <div key={label}>
+          <span className="preview-icon"><CheckCircle2 size={16} /></span>
+          <div><b>{label}</b><p>{value}</p></div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function Checklist({ items }: { items: string[] }) {
+  return <ul className="checklist">{items.map((item) => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>
+}
+
+function DiscoveryTable({ market }: { market?: Market }) {
+  const seedMarket = market || rootMarket
+  const discoveryMarkets = [seedMarket, ...markets.filter((item) => item.id !== seedMarket.id)].slice(0, 5)
+  return (
+    <div className="discovery-table">
+      {discoveryMarkets.map((market) => (
+        <div key={market.id}>
+          <MarketIcon market={market} size="small" />
+          <b>{market.title}</b>
+          <span>{market.category}</span>
+          <strong>{market.price}%</strong>
+          <em>{market.volume}</em>
+          <ChartMini />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function LogList() {
+  const logs = [
+    ['14:30:35', '正在检索根节点的直接关联市场...', '发现 8 个直接关联市场'],
+    ['14:30:42', '正在扩展二阶关联市场...', '新增发现 12 个相关市场'],
+    ['14:30:51', '正在收集政治领域消息面...', '解析 23 篇相关新闻'],
+    ['14:31:03', '正在收集经济领域消息面...', '解析 18 篇相关新闻'],
+    ['14:31:15', '正在收集加密货币领域消息面...', '解析 15 篇相关新闻'],
+    ['14:31:28', '正在分析因果关系强度...', '计算相关性矩阵'],
+  ]
+  return (
+    <div className="log-list">
+      {logs.map(([time, title, detail], index) => (
+        <div key={time}>
+          <i className={`dot ${index > 3 ? 'green' : index > 1 ? 'cyan' : 'blue'}`} />
+          <span>{time}</span>
+          <b>{title}</b>
+          <small>{detail}</small>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SummaryList({ market }: { market: Market }) {
+  const items = [
+    [market.title, `市场当前价格为 ${market.price}%，成交量为 ${market.volume}，这是本次推演的根节点。`],
+    ['同事件市场联动', market.eventTitle ? `优先检索「${market.eventTitle}」事件下的其他盘口，判断同事件内概率迁移。` : '优先检索同主题和同分类市场，判断相近盘口的概率迁移。'],
+    ['流动性与定价强度', `当前流动性为 ${formatCompactMoney(market.liquidity)}，将作为评估信号强弱和噪声水平的输入。`],
+    ['时间约束', `市场结束时间为 ${formatDate(market.endDate)}，推演将优先关注结束前的关键触发因素。`],
+    ['风险提示', '该脚本为基于市场数据和 AI 推理的情景分析，不构成交易建议。'],
+  ]
+  return (
+    <div className="summary-list">
+      {items.map(([title, detail], index) => (
+        <div key={title}>
+          <span>{index + 1}</span>
+          <div><b>{title}</b><p>{detail}</p></div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function MiniPath({ values }: { values: number[] }) {
+  return (
+    <div className="mini-path">
+      <svg viewBox="0 0 300 70" aria-hidden="true">
+        <path d="M20 36 C70 8 82 62 130 34 S205 14 252 36" />
+        {values.map((value, index) => (
+          <g key={`${value}-${index}`}>
+            <circle cx={35 + index * 70} cy={36 + (index % 2 ? 7 : -6)} r="9" />
+            <text x={35 + index * 70} y={61 + (index % 2 ? 0 : -38)}>{value}%</text>
+          </g>
+        ))}
+      </svg>
+    </div>
   )
 }
 
