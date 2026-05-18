@@ -190,20 +190,37 @@ type InferenceEvidence = {
 type InferenceRelatedMarket = {
   id: string
   title: string
+  slug?: string | null
+  eventTitle?: string | null
   category: string
   price: number | null
   volume: string
+  icon?: string | null
+  image?: string | null
   confidence: number
+  verificationScore?: number
   relation: string
+  direction?: string
+  impact?: string
+  reason?: string
+  evidenceSummary?: string
+  evidenceIds?: string[]
+  checkedSources?: string[]
+  evidenceCount?: number
   url?: string
 }
 
 type InferenceCausalLink = {
+  sourceMarketId?: string | null
+  targetMarketId?: string | null
   source: string
   target: string
   direction: 'positive' | 'negative' | 'conditional' | 'unknown' | string
   confidence: number
+  impact?: string
   rationale: string
+  evidenceSummary?: string
+  evidenceIds?: string[]
 }
 
 type InferenceScenario = {
@@ -235,6 +252,14 @@ type InferenceResult = {
   riskFactors: string[]
   evidence: InferenceEvidence[]
   relatedMarkets: InferenceRelatedMarket[]
+  excludedMarkets?: { id: string; title?: string; score?: number; reason?: string }[]
+  verification?: {
+    summary?: string
+    candidateCount?: number
+    verifiedCount?: number
+    excludedCount?: number
+    model?: string | null
+  }
   logs: string[]
   generatedAt: string
   error?: string | null
@@ -533,9 +558,23 @@ function formatProbability(value: number | null | undefined) {
   return value == null ? '' : `${Math.round(value * 100)}%`
 }
 
+function formatMarketPercent(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return 'N/A'
+  if (value > 0 && value < 1) return '<1%'
+  if (value % 1 === 0) return `${value}%`
+  return `${value.toFixed(1)}%`
+}
+
 function formatConfidence(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return 'N/A'
   return `${Math.round(value * 100)}%`
+}
+
+function directionLabel(value: string | null | undefined) {
+  if (value === 'positive') return '正向'
+  if (value === 'negative') return '反向'
+  if (value === 'conditional') return '条件'
+  return '待判定'
 }
 
 function marketSubtitle(market: Market) {
@@ -1820,10 +1859,11 @@ function InferenceProgress({
   result: InferenceResult | null
   settings: InferenceSettingsState
 }) {
-  const steps = ['已选择根节点', '正在检索相关市场', '正在收集消息面', '正在分析因果关系', '正在生成脚本']
+  const steps = ['已选择根节点', '候选市场召回', '逐市场证据核实', 'AI 关联度打分', '生成因果脚本']
   const [loading, setLoading] = useState(!result)
   const [error, setError] = useState<string | null>(null)
   const hasCurrentResult = result?.rootMarket?.id === market.id
+  const isComplete = hasCurrentResult && !error
   const progress = hasCurrentResult ? 100 : error ? 100 : loading ? 62 : 35
   const currentStep = hasCurrentResult ? 5 : error ? 3 : loading ? 3 : 1
 
@@ -1862,32 +1902,38 @@ function InferenceProgress({
       <BackButton onClick={onBack} />
       <PageTitle
         title={hasCurrentResult ? 'AI 推演已完成' : 'AI 推演进行中...'}
-        subtitle={`正在基于「${market.title}」构建因果链条。`}
+        subtitle={`正在基于「${market.title}」核实相关市场并构建因果链条。`}
       />
       <div className="progress-steps">
-        {steps.map((step, index) => (
-          <div className={index < currentStep - 1 ? 'step done' : index === currentStep - 1 ? 'step current' : 'step'} key={step}>
-            <div className="step-circle">{index === 0 ? <CheckCircle2 size={26} /> : index + 1}</div>
+        {steps.map((step, index) => {
+          const done = isComplete || index < currentStep - 1
+          const current = !isComplete && index === currentStep - 1
+          return (
+          <div className={done ? 'step done' : current ? 'step current' : 'step'} key={step}>
+            <div className="step-circle">{done ? <CheckCircle2 size={26} /> : index + 1}</div>
             <strong>{step}</strong>
-            <span>{index < currentStep - 1 ? '已完成' : index === currentStep - 1 ? '处理中' : `等待中`}</span>
+            <span>{done ? '已完成' : current ? '处理中' : `等待中`}</span>
           </div>
-        ))}
+        )})}
       </div>
       <div className="global-progress">
         <span style={{ width: `${progress}%` }} />
       </div>
       <div className="progress-caption">
         <span>{hasCurrentResult ? '推演完成' : error ? '推演异常' : '推演中...'} <b>{progress}%</b></span>
-        <span>{result?.model ? `模型：${result.model}` : 'DeepSeek 正在分析市场与外部信息'}</span>
+        <span>{result?.model ? `模型：${result.model}` : 'DeepSeek 正在核实候选市场与外部信息'}</span>
       </div>
       {error ? <div className="status-note error">推演请求失败：{error}</div> : null}
       {result?.status === 'fallback' ? <div className="status-note warning">当前 AI 调用不可用，已使用本地市场数据生成结构化推演。{result.error ? `原因：${result.error}` : null}</div> : null}
       <div className="content-grid progress-grid">
         <Card>
-          <SectionHeader title="实时发现的相关市场" />
+          <SectionHeader
+            title="AI 核实后的相关市场"
+            note={result?.verification ? `候选 ${result.verification.candidateCount || 0} · 保留 ${result.verification.verifiedCount || result.relatedMarkets.length} · 排除 ${result.verification.excludedCount || 0}` : undefined}
+          />
           <DiscoveryTable market={market} relatedMarkets={result?.relatedMarkets} />
           <button className="link-button" type="button">
-            查看全部 {result?.relatedMarkets.length || 0} 个相关市场 <ArrowRight size={15} />
+            共 {result?.relatedMarkets.length || 0} 个已核实市场 <ArrowRight size={15} />
           </button>
         </Card>
         <Card>
@@ -1914,7 +1960,7 @@ function InferenceProgress({
             </div>
         ))}
         </div>
-        <div className="soft-note">{result?.summary || '提示：AI 会综合 Polymarket 盘口、相关市场、新闻和社交信息生成因果推演。'}</div>
+        <div className="soft-note">{result?.verification?.summary || result?.summary || '提示：AI 会综合 Polymarket 盘口、相关市场、新闻和社交信息生成因果推演。'}</div>
       </Card>
       <button className="floating-next" type="button" onClick={onDone} disabled={!hasCurrentResult}>
         查看已生成脚本 <ArrowRight size={18} />
@@ -2331,62 +2377,83 @@ function causalLinkTone(link: InferenceCausalLink): 'green' | 'orange' | 'red' |
 }
 
 function CausalMap({ market, result }: { market: Market; result: InferenceResult | null }) {
-  const fallbackLinks: InferenceCausalLink[] = [
-    {
-      source: market.title,
-      target: market.eventTitle || '同事件盘口',
-      direction: 'conditional',
-      confidence: 0.5,
-      rationale: '等待推演结果生成后展示完整因果链路。',
-    },
+  const related = result?.relatedMarkets?.length ? result.relatedMarkets.slice(0, 8) : []
+  const fallbackRelated: InferenceRelatedMarket[] = related.length ? [] : [{
+    id: 'pending-related',
+    title: market.eventTitle || '等待 AI 核实相关市场',
+    eventTitle: market.eventTitle,
+    category: market.category,
+    price: null,
+    volume: market.volume,
+    confidence: 0.5,
+    verificationScore: 0.5,
+    relation: '待核实市场',
+    direction: 'unknown',
+    impact: '待观察',
+    reason: '推演完成后会在这里展示真实 Polymarket 市场节点。',
+    evidenceSummary: '等待候选市场证据核实。',
+    evidenceCount: 0,
+  }]
+  const nodes = related.length ? related : fallbackRelated
+  const linkByTarget = new Map((result?.causalLinks || []).map((link) => [link.targetMarketId || link.target, link]))
+  const nodePositions = [
+    [180, 165],
+    [350, 115],
+    [650, 115],
+    [830, 170],
+    [190, 405],
+    [365, 455],
+    [660, 455],
+    [835, 390],
   ]
-  const links = (result?.causalLinks.length ? result.causalLinks : fallbackLinks).slice(0, 8)
-  const pathTargets = [
-    [185, 265],
-    [300, 265],
-    [650, 265],
-    [850, 265],
-    [185, 430],
-    [300, 430],
-    [650, 430],
-    [850, 430],
-  ]
-  const columns = [0, 1, 2, 3].map((columnIndex) => links.filter((_, index) => index % 4 === columnIndex))
   return (
     <div className="causal-map">
       <div className="causal-root">
         <MarketIcon market={market} size="medium" />
         <b>{market.title}</b>
         <strong>{market.price}% <span>{formatConfidence(result?.confidence)}</span></strong>
-        <small>{result?.status === 'fallback' ? '本地结构化推演' : `同步于 ${formatDate(market.syncedAt)}`}</small>
+        <small>{result?.status === 'fallback' ? '本地结构化推演' : `根市场 · ${formatDate(market.syncedAt)}`}</small>
       </div>
       <svg className="causal-lines" viewBox="0 0 1000 560" aria-hidden="true">
-        {links.map((link, index) => {
-          const [x, y] = pathTargets[index]
-          const controlX = x < 500 ? 390 - index * 18 : 610 + index * 18
-          const controlY = y < 330 ? 220 : 310
+        <defs>
+          <marker id="script-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="7" refY="4">
+            <path d="M0,0 L8,4 L0,8 Z" />
+          </marker>
+        </defs>
+        {nodes.map((node, index) => {
+          const [nodeX, nodeY] = nodePositions[index]
+          const link = linkByTarget.get(node.id) || linkByTarget.get(node.title) || {
+            direction: node.direction || 'unknown',
+            confidence: node.verificationScore || node.confidence,
+          } as InferenceCausalLink
+          const controlX = nodeX < 500 ? 405 - index * 13 : 595 + index * 13
+          const controlY = nodeY < 280 ? 215 : 345
           return (
             <path
               className={causalLinkTone(link)}
-              d={`M500 155 C${controlX} ${controlY}, ${x} ${Math.max(220, y - 70)}, ${x} ${y}`}
-              key={`${link.target}-${index}`}
+              d={`M500 280 C${controlX} ${controlY}, ${nodeX} ${nodeY}, ${nodeX} ${nodeY}`}
+              key={`${node.id}-${index}`}
+              markerEnd="url(#script-arrow)"
             />
           )
         })}
       </svg>
-      <div className="causal-columns">
-        {columns.map((column, columnIndex) => (
-          <div className="causal-column" key={columnIndex}>
-            {column.map((item) => (
-              <div className={`causal-node ${causalLinkTone(item)}`} key={`${item.target}-${item.source}`}>
-                <b>{item.target}</b>
-                <strong>{formatConfidence(item.confidence)}</strong>
-                <span>{item.rationale}</span>
-              </div>
-            ))}
+      {nodes.map((node, index) => {
+        const [x, y] = nodePositions[index]
+        const link = linkByTarget.get(node.id) || linkByTarget.get(node.title)
+        const tone = causalLinkTone(link || ({ direction: node.direction || 'unknown', confidence: node.verificationScore || node.confidence } as InferenceCausalLink))
+        return (
+          <div className={`causal-node ${tone}`} key={node.id} style={{ left: `${x / 10}%`, top: `${y / 5.6}%` }}>
+            <MarketIcon market={{ icon: market.icon, iconUrl: node.icon || node.image || null, tone: categoryTones[node.category] || market.tone }} size="small" />
+            <div>
+              <b>{node.title}</b>
+              <small>{node.relation} · {directionLabel(node.direction)}</small>
+            </div>
+            <strong>{formatConfidence(node.verificationScore || node.confidence)}</strong>
+            <span>{link?.rationale || node.reason || node.evidenceSummary || 'AI 已核实该市场与根市场存在可观察关联。'}</span>
           </div>
-        ))}
-      </div>
+        )
+      })}
       <div className="confidence-legend">
         <b>置信度说明</b>
         <span><i className="dot green" />高置信度 ≥ 0.65</span>
@@ -2868,16 +2935,28 @@ function DiscoveryTable({ market, relatedMarkets }: { market?: Market; relatedMa
   if (relatedMarkets?.length) {
     return (
       <div className="discovery-table">
-        {relatedMarkets.slice(0, 6).map((item) => (
+        {relatedMarkets.map((item) => {
+          const tone = categoryTones[item.category] || seedMarket.tone
+          const score = item.verificationScore ?? item.confidence
+          return (
           <div key={item.id}>
-            <MarketIcon market={{ icon: seedMarket.icon, iconUrl: null, tone: seedMarket.tone }} size="small" />
-            <b>{item.title}</b>
-            <span>{item.relation || item.category}</span>
-            <strong>{item.price == null ? 'N/A' : `${item.price}%`}</strong>
+            <MarketIcon market={{ icon: seedMarket.icon, iconUrl: item.icon || item.image || null, tone }} size="small" />
+            <div className="discovery-market-title">
+              <b>{item.title}</b>
+              {item.eventTitle ? <small>{item.eventTitle}</small> : null}
+            </div>
+            <span className="relation-cell">
+              <b>{item.relation || item.category}</b>
+              <small>{directionLabel(item.direction)} · 证据 {item.evidenceCount || item.evidenceIds?.length || 1}</small>
+            </span>
+            <strong>{formatConfidence(score)}</strong>
             <em>{item.volume}</em>
-            <MiniPath values={[Math.round(item.confidence * 100), Math.max(1, item.price || 1), 100 - Math.round(item.confidence * 30)]} />
+            <div className="impact-cell">
+              <b>{item.impact || '待观察'}</b>
+              <small>{formatMarketPercent(item.price)}</small>
+            </div>
           </div>
-        ))}
+        )})}
       </div>
     )
   }
@@ -2923,14 +3002,19 @@ function LogList({ logs, loading }: { logs?: string[]; loading?: boolean }) {
 
 function SummaryList({ market, result }: { market: Market; result: InferenceResult | null }) {
   if (result) {
-    const linkItems = result.causalLinks.slice(0, 4).map((link) => [link.target, link.rationale])
+    const linkItems = result.causalLinks.slice(0, 5).map((link) => [
+      `${market.title} → ${link.target}`,
+      `${directionLabel(link.direction)} · ${formatConfidence(link.confidence)} · ${link.impact || '待观察'}。${link.rationale}${link.evidenceSummary ? ` 证据：${link.evidenceSummary}` : ''}`,
+    ])
     const scenarioItems = result.scenarios.slice(0, 2).map((scenario) => [scenario.name, `${scenario.probabilityShift}：${scenario.description}`])
-    const riskItems = result.riskFactors.slice(0, 2).map((risk, index) => [`风险 ${index + 1}`, risk])
+    const excludedNote = result.excludedMarkets?.length
+      ? [[`已排除 ${result.excludedMarkets.length} 个低相关候选`, result.excludedMarkets.slice(0, 3).map((item) => `${item.title || item.id}：${item.reason}`).join('；')]]
+      : []
     const items = [
-      [market.title, result.thesis],
+      ['根市场推演结论', result.thesis],
       ...linkItems,
       ...scenarioItems,
-      ...riskItems,
+      ...excludedNote,
     ]
     return (
       <div className="summary-list">

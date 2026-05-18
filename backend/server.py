@@ -1693,14 +1693,45 @@ def compact_market_for_prompt(market: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def bing_rss_search(query: str, limit: int = 5) -> list[dict[str, str]]:
+    params = urllib.parse.urlencode({"q": query, "format": "rss"})
+    request = urllib.request.Request(
+        f"https://www.bing.com/search?{params}",
+        headers={"User-Agent": USER_AGENT, "Accept": "application/rss+xml,text/xml,*/*"},
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        body = response.read().decode("utf-8", errors="ignore")
+    items: list[dict[str, str]] = []
+    for raw_item in re.findall(r"<item>(.*?)</item>", body, flags=re.S | re.I)[:limit]:
+        title_match = re.search(r"<title>(.*?)</title>", raw_item, flags=re.S | re.I)
+        link_match = re.search(r"<link>(.*?)</link>", raw_item, flags=re.S | re.I)
+        desc_match = re.search(r"<description>(.*?)</description>", raw_item, flags=re.S | re.I)
+        title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<.*?>", "", title_match.group(1) if title_match else ""))).strip()
+        url = html.unescape(link_match.group(1).strip()) if link_match else ""
+        snippet = re.sub(r"\s+", " ", html.unescape(re.sub(r"<.*?>", "", desc_match.group(1) if desc_match else ""))).strip()
+        if title and url:
+            items.append(
+                {
+                    "source": urllib.parse.urlparse(url).netloc or "bing",
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                }
+            )
+    return items
+
+
 def ddg_search(query: str, limit: int = 5) -> list[dict[str, str]]:
     params = urllib.parse.urlencode({"q": query})
     request = urllib.request.Request(
         f"https://duckduckgo.com/html/?{params}",
         headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
     )
-    with urllib.request.urlopen(request, timeout=12) as response:
-        body = response.read().decode("utf-8", errors="ignore")
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            body = response.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return bing_rss_search(query, limit)
 
     titles = re.findall(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', body, re.S)
     snippets = re.findall(r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>', body, re.S)
@@ -1725,6 +1756,8 @@ def ddg_search(query: str, limit: int = 5) -> list[dict[str, str]]:
                     "snippet": cleaned_snippets[index] if index < len(cleaned_snippets) else "",
                 }
             )
+    if not items:
+        return bing_rss_search(query, limit)
     return items
 
 
@@ -1784,6 +1817,389 @@ def collect_inference_evidence(
     return evidence
 
 
+def display_market_price(value: Any) -> float | None:
+    price = as_float(value)
+    if price is None:
+        return None
+    return round(price * 100, 2) if price <= 1 else round(price, 2)
+
+
+def candidate_limit_for_settings(settings: dict[str, Any]) -> int:
+    return {1: 6, 2: 10, 3: 14}[settings_depth(settings)]
+
+
+def compact_text(value: Any, limit: int = 260) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1]}…"
+
+
+def market_terms(market: dict[str, Any]) -> set[str]:
+    raw_terms = [
+        market.get("title"),
+        market.get("eventTitle"),
+        market.get("category"),
+        market.get("officialCategory"),
+        " ".join(str(tag) for tag in market.get("tags") or []),
+    ]
+    words: set[str] = set()
+    for raw in raw_terms:
+        for token in re.findall(r"[a-zA-Z0-9]{3,}", normalize_term(raw)):
+            words.add(token)
+    return words
+
+
+def edge_hint_for_market(context: dict[str, Any], market_id: str) -> dict[str, Any] | None:
+    focus_id = context["focus"]["id"]
+    for edge in context.get("edges", []):
+        if {edge.get("source"), edge.get("target")} == {focus_id, market_id}:
+            return edge
+    return None
+
+
+def local_relation_score(context: dict[str, Any], market: dict[str, Any]) -> tuple[float, str, str]:
+    focus = context["focus"]
+    score = 0.18
+    relation = "相关主题市场"
+    direction = "unknown"
+
+    if market.get("eventId") and market.get("eventId") == focus.get("eventId"):
+        score += 0.42
+        relation = "同事件盘口"
+        direction = "conditional"
+
+    edge = edge_hint_for_market(context, market["id"])
+    if edge:
+        score += min(0.28, max(0.0, as_float(edge.get("weight")) or 0.0))
+        relation = edge.get("reason") or "直接关联市场"
+        direction = "conditional" if edge.get("relationType") == "same_event" else "positive"
+
+    if market.get("categoryKey") and market.get("categoryKey") == focus.get("categoryKey"):
+        score += 0.12
+
+    focus_terms = market_terms(focus)
+    candidate_terms = market_terms(market)
+    overlap = focus_terms & candidate_terms
+    if overlap:
+        score += min(0.16, len(overlap) * 0.04)
+
+    volume = as_float(market.get("volume")) or 0
+    if volume >= 1_000_000:
+        score += 0.05
+    if volume >= 10_000_000:
+        score += 0.04
+
+    score = round(max(0.05, min(0.98, score)), 2)
+    return score, relation, direction
+
+
+def build_market_evidence_item(
+    market: dict[str, Any],
+    source: str,
+    title: str,
+    snippet: str,
+    url: str | None = None,
+    kind: str = "market",
+) -> dict[str, Any]:
+    return {
+        "id": f"{market['id']}:{kind}:{abs(hash((title, snippet))) % 1_000_000}",
+        "marketId": market["id"],
+        "source": source,
+        "title": title,
+        "url": url or market.get("url"),
+        "snippet": compact_text(snippet, 520),
+    }
+
+
+def collect_candidate_evidence(
+    context: dict[str, Any],
+    config: dict[str, Any],
+    logs: list[str],
+    settings: dict[str, Any],
+) -> list[dict[str, Any]]:
+    candidates = context["relatedMarkets"][: candidate_limit_for_settings(settings)]
+    focus = context["focus"]
+    include_web_search = bool(config.get("enableWebSearch", True)) and settings.get("includeWebSearch") is not False
+    include_external = include_web_search and settings.get("scope", "all") in ("news", "social", "all")
+    candidate_evidence: list[dict[str, Any]] = []
+
+    logs.append(f"候选市场召回完成：准备逐项核实 {len(candidates)} 个候选市场。")
+    for index, market in enumerate(candidates, start=1):
+        score, relation, direction = local_relation_score(context, market)
+        edge = edge_hint_for_market(context, market["id"])
+        snippets = [
+            f"候选 {index}/{len(candidates)}：{market.get('title')}。",
+            f"本地关系：{relation}；方向初判：{direction}；启发式相关度 {score:.2f}。",
+            f"市场价格 {display_market_price(market.get('price'))}%，成交量 {format_money(market.get('volume'))}，流动性 {format_money(market.get('liquidity'))}。",
+        ]
+        if market.get("eventTitle"):
+            snippets.append(f"所属事件：{market.get('eventTitle')}。")
+        if edge and edge.get("reason"):
+            snippets.append(f"本地边原因：{edge.get('reason')}。")
+        rule_text = market.get("ruleText") or market.get("rules") or market.get("description")
+        if rule_text:
+            snippets.append(f"规则摘要：{compact_text(rule_text, 260)}")
+        candidate_evidence.append(
+            build_market_evidence_item(
+                market,
+                "Polymarket market",
+                str(market.get("title") or "Polymarket market"),
+                " ".join(snippets),
+                market.get("url"),
+                "polymarket",
+            )
+        )
+
+        if include_external:
+            query = f"{focus.get('title')} {market.get('title')} Polymarket news"
+            try:
+                search_items = ddg_search(query, 2)
+                logs.append(f"外部信息核实：{market.get('title')}，返回 {len(search_items)} 条候选证据。")
+            except Exception as exc:
+                logs.append(f"外部信息核实失败：{market.get('title')}（{exc}）")
+                search_items = []
+            for item in search_items:
+                candidate_evidence.append(
+                    build_market_evidence_item(
+                        market,
+                        item.get("source") or "web",
+                        item.get("title") or query,
+                        item.get("snippet") or "",
+                        item.get("url"),
+                        "web",
+                    )
+                )
+        else:
+            logs.append(f"候选市场核实：{market.get('title')}，已使用 Polymarket 规则、盘口和本地关联边。")
+
+    return candidate_evidence
+
+
+def verification_prompt(
+    context: dict[str, Any],
+    candidate_evidence: list[dict[str, Any]],
+    settings: dict[str, Any],
+) -> list[dict[str, str]]:
+    candidates = []
+    evidence_by_market: dict[str, list[dict[str, Any]]] = {}
+    for item in candidate_evidence:
+        evidence_by_market.setdefault(str(item.get("marketId")), []).append(item)
+
+    for market in context["relatedMarkets"][: candidate_limit_for_settings(settings)]:
+        candidates.append(
+            {
+                **compact_market_for_prompt(market),
+                "heuristic": {
+                    "score": local_relation_score(context, market)[0],
+                    "relation": local_relation_score(context, market)[1],
+                    "direction": local_relation_score(context, market)[2],
+                },
+                "evidence": [
+                    {
+                        "id": evidence.get("id"),
+                        "source": evidence.get("source"),
+                        "title": evidence.get("title"),
+                        "snippet": evidence.get("snippet"),
+                        "url": evidence.get("url"),
+                    }
+                    for evidence in evidence_by_market.get(market["id"], [])[:4]
+                ],
+            }
+        )
+
+    schema = {
+        "verifiedMarkets": [
+            {
+                "id": "必须使用输入候选市场 id",
+                "include": True,
+                "score": 0.0,
+                "relation": "同事件盘口|直接关联市场|新闻关联|主题关联|低相关",
+                "direction": "positive|negative|conditional|unknown",
+                "impact": "+x%/-x%/待观察",
+                "reason": "为什么这个市场与根市场有因果或条件传导关系",
+                "evidenceSummary": "引用 Polymarket/新闻/社交证据的简短总结",
+                "evidenceIds": ["证据 id"],
+                "checkedSources": ["Polymarket", "web/news/social"],
+            }
+        ],
+        "excludedMarkets": [
+            {
+                "id": "候选市场 id",
+                "score": 0.0,
+                "reason": "为什么不纳入因果链路",
+            }
+        ],
+        "summary": "本轮市场相关性核实总结",
+    }
+    payload = {
+        "rootMarket": compact_market_for_prompt(context["focus"]),
+        "event": context.get("event"),
+        "settings": settings,
+        "candidates": candidates,
+    }
+    return [
+        {
+            "role": "system",
+            "content": (
+                "你是 Causeway 的 Polymarket 市场相关性审查员。"
+                "你的任务不是直接生成脚本，而是逐个候选市场核实它与根市场是否有因果、条件、互斥或信息传导关系。"
+                "必须基于输入 evidence 判断；没有证据就降低分数或排除。"
+                "每个候选市场都必须出现在 verifiedMarkets 或 excludedMarkets 之一。"
+                "只输出严格 json 对象，不要 Markdown，不要编造市场 id，不要生成交易建议。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "请逐个候选市场做相关度核实。输出必须是合法 json，字段匹配 schema：\n"
+                f"schema={json.dumps(schema, ensure_ascii=False)}\n"
+                f"data={json.dumps(payload, ensure_ascii=False)}"
+            ),
+        },
+    ]
+
+
+def market_payload_from_verified(
+    market: dict[str, Any],
+    verified: dict[str, Any],
+    evidence_count: int,
+) -> dict[str, Any]:
+    price = display_market_price(market.get("price"))
+    score = clamp_confidence(verified.get("score"), 0.45)
+    return {
+        "id": market["id"],
+        "title": market["title"],
+        "slug": market.get("slug"),
+        "eventTitle": market.get("eventTitle"),
+        "category": market["category"],
+        "price": price,
+        "volume": format_money(market.get("volume")),
+        "icon": market.get("icon"),
+        "image": market.get("image"),
+        "confidence": score,
+        "verificationScore": score,
+        "relation": str(verified.get("relation") or "AI 核实相关市场"),
+        "direction": str(verified.get("direction") or "unknown"),
+        "impact": str(verified.get("impact") or "待观察"),
+        "reason": str(verified.get("reason") or ""),
+        "evidenceSummary": str(verified.get("evidenceSummary") or ""),
+        "evidenceIds": [str(item) for item in verified.get("evidenceIds", [])] if isinstance(verified.get("evidenceIds"), list) else [],
+        "checkedSources": [str(item) for item in verified.get("checkedSources", [])] if isinstance(verified.get("checkedSources"), list) else [],
+        "evidenceCount": evidence_count,
+        "url": market.get("url"),
+    }
+
+
+def normalize_verification_result(
+    raw: dict[str, Any] | None,
+    context: dict[str, Any],
+    candidate_evidence: list[dict[str, Any]],
+    logs: list[str],
+    settings: dict[str, Any],
+    meta: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    threshold = settings_threshold(settings)
+    candidates = context["relatedMarkets"][: candidate_limit_for_settings(settings)]
+    market_by_id = {market["id"]: market for market in candidates}
+    evidence_count_by_market: dict[str, int] = {}
+    for evidence in candidate_evidence:
+        market_id = str(evidence.get("marketId") or "")
+        if market_id:
+            evidence_count_by_market[market_id] = evidence_count_by_market.get(market_id, 0) + 1
+
+    raw_verified = raw.get("verifiedMarkets") if isinstance(raw, dict) else None
+    raw_excluded = raw.get("excludedMarkets") if isinstance(raw, dict) else None
+    verified_items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if isinstance(raw_verified, list):
+        for item in raw_verified:
+            if not isinstance(item, dict):
+                continue
+            market_id = str(item.get("id") or "")
+            if market_id not in market_by_id or market_id in seen:
+                continue
+            seen.add(market_id)
+            include = item.get("include", True) is not False
+            score = clamp_confidence(item.get("score"), local_relation_score(context, market_by_id[market_id])[0])
+            if include and score >= threshold:
+                verified_items.append(
+                    market_payload_from_verified(
+                        market_by_id[market_id],
+                        {**item, "score": score},
+                        evidence_count_by_market.get(market_id, 0),
+                    )
+                )
+
+    if not verified_items:
+        local_candidates = []
+        for market in candidates:
+            score, relation, direction = local_relation_score(context, market)
+            local_candidates.append(
+                market_payload_from_verified(
+                    market,
+                    {
+                        "score": score,
+                        "relation": relation,
+                        "direction": direction,
+                        "impact": "待观察",
+                        "reason": "AI 未返回可用相关性评分，使用本地事件/边/标签/成交量启发式兜底。",
+                        "evidenceSummary": "Polymarket 盘口、规则、事件归属和本地候选边。",
+                        "checkedSources": ["Polymarket", "local graph"],
+                    },
+                    evidence_count_by_market.get(market["id"], 0),
+                )
+            )
+        verified_items = sorted(local_candidates, key=lambda item: item["verificationScore"], reverse=True)[: max(3, min(6, len(local_candidates)))]
+        logs.append("AI 相关度核实未返回足够高置信市场，已启用本地相关度兜底排序。")
+
+    excluded_items: list[dict[str, Any]] = []
+    if isinstance(raw_excluded, list):
+        for item in raw_excluded:
+            if not isinstance(item, dict):
+                continue
+            market_id = str(item.get("id") or "")
+            market = market_by_id.get(market_id)
+            if not market:
+                continue
+            excluded_items.append(
+                {
+                    "id": market_id,
+                    "title": market.get("title"),
+                    "score": clamp_confidence(item.get("score"), 0.2),
+                    "reason": str(item.get("reason") or "AI 判断证据不足，暂不纳入因果链路。"),
+                }
+            )
+
+    verified_ids = {item["id"] for item in verified_items}
+    for market in candidates:
+        if market["id"] in verified_ids or any(item["id"] == market["id"] for item in excluded_items):
+            continue
+        score, relation, _direction = local_relation_score(context, market)
+        excluded_items.append(
+            {
+                "id": market["id"],
+                "title": market.get("title"),
+                "score": score,
+                "reason": f"未达到当前置信阈值 {threshold:.2f}；本地关系为 {relation}。",
+            }
+        )
+
+    verified_items = sorted(verified_items, key=lambda item: item["verificationScore"], reverse=True)
+    logs.append(f"AI 相关度核实完成：保留 {len(verified_items)} 个市场，排除 {len(excluded_items)} 个候选市场。")
+    summary = ""
+    if isinstance(raw, dict):
+        summary = str(raw.get("summary") or "")
+    return {
+        "verifiedMarkets": verified_items,
+        "excludedMarkets": excluded_items,
+        "candidateEvidence": candidate_evidence,
+        "summary": summary or "已完成候选市场相关性核实。",
+        "model": (meta or {}).get("model"),
+        "baseUrl": (meta or {}).get("baseUrl"),
+    }
+
+
 def format_money(value: Any) -> str:
     amount = as_float(value)
     if amount is None:
@@ -1836,17 +2252,25 @@ def extract_json_payload(text: str) -> dict[str, Any] | None:
     return None
 
 
-def ai_prompt(context: dict[str, Any], evidence: list[dict[str, Any]], settings: dict[str, Any]) -> list[dict[str, str]]:
+def ai_prompt(
+    context: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    settings: dict[str, Any],
+    verification: dict[str, Any],
+) -> list[dict[str, str]]:
     focus = compact_market_for_prompt(context["focus"])
-    related = [compact_market_for_prompt(market) for market in context["relatedMarkets"][:18]]
+    verified = verification.get("verifiedMarkets") if isinstance(verification, dict) else []
+    verified_markets = verified if isinstance(verified, list) else []
     event_markets = [compact_market_for_prompt(market) for market in context["eventMarkets"][:18]]
     user_payload = {
         "rootMarket": focus,
         "event": context.get("event"),
         "eventMarkets": event_markets,
-        "relatedMarkets": related,
+        "verifiedRelatedMarkets": verified_markets,
+        "excludedMarkets": verification.get("excludedMarkets", [])[:10] if isinstance(verification, dict) else [],
         "edges": context.get("edges", [])[:24],
         "evidence": evidence[:12],
+        "candidateEvidence": verification.get("candidateEvidence", [])[:36] if isinstance(verification, dict) else [],
         "settings": settings,
     }
     schema = {
@@ -1855,11 +2279,16 @@ def ai_prompt(context: dict[str, Any], evidence: list[dict[str, Any]], settings:
         "confidence": 0.0,
         "causalLinks": [
             {
-                "source": "市场或信号名称",
-                "target": "市场或信号名称",
+                "sourceMarketId": "根市场 id",
+                "targetMarketId": "必须是 verifiedRelatedMarkets 中的市场 id",
+                "source": "根市场标题",
+                "target": "已核实相关市场标题",
                 "direction": "positive|negative|conditional|unknown",
                 "confidence": 0.0,
-                "rationale": "为什么存在因果/条件传导",
+                "impact": "+x%/-x%/待观察",
+                "rationale": "为什么存在因果/条件传导，必须引用市场证据",
+                "evidenceSummary": "使用了哪些 Polymarket/新闻/社交证据",
+                "evidenceIds": ["证据 id"],
             }
         ],
         "scenarios": [
@@ -1877,14 +2306,17 @@ def ai_prompt(context: dict[str, Any], evidence: list[dict[str, Any]], settings:
             "role": "system",
             "content": (
                 "你是 Causeway 的 Polymarket 因果推演分析员。"
-                "你需要综合预测市场价格、同事件盘口、相关市场、新闻和社交信息，分析 A 发生后 B 可能如何变化。"
+                "你需要综合预测市场价格、同事件盘口、已核实相关市场、新闻和社交信息，分析 A 发生后 B 可能如何变化。"
+                "因果图谱的节点必须是真实 Polymarket 市场。causalLinks.targetMarketId 只能引用 verifiedRelatedMarkets 中的 id。"
+                "外部新闻、社交信息只能作为证据或情景信号，不能被当成图谱目标节点。"
+                "如果证据不足，降低 confidence 或不要输出该链路。"
                 "只输出严格 json 对象，不要输出 Markdown，不要给交易建议，不要编造来源。"
             ),
         },
         {
             "role": "user",
             "content": (
-                "请基于以下数据生成中文推演结果。输出必须是合法 json，字段必须匹配 schema：\n"
+                "请基于已核实市场和证据生成中文因果脚本。输出必须是合法 json，字段必须匹配 schema：\n"
                 f"schema={json.dumps(schema, ensure_ascii=False)}\n"
                 f"data={json.dumps(user_payload, ensure_ascii=False)}"
             ),
@@ -1989,25 +2421,36 @@ def fallback_inference(
     evidence: list[dict[str, Any]],
     logs: list[str],
     ai_error: str | None = None,
+    verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     focus = context["focus"]
-    related = context["relatedMarkets"][:8]
+    verified_markets = []
+    if isinstance(verification, dict) and isinstance(verification.get("verifiedMarkets"), list):
+        verified_markets = verification["verifiedMarkets"]
     event_markets = [market for market in context["eventMarkets"] if market["id"] != focus["id"]][:6]
-    link_sources = event_markets or related
+    link_sources = verified_markets or event_markets or context["relatedMarkets"][:8]
     links = []
     for market in link_sources[:8]:
-        relation = "conditional" if market.get("eventId") == focus.get("eventId") else "positive"
-        confidence = 0.68 if market.get("eventId") == focus.get("eventId") else 0.48
+        relation = market.get("direction") or ("conditional" if market.get("eventId") == focus.get("eventId") else "positive")
+        confidence = clamp_confidence(market.get("verificationScore") or market.get("confidence"), 0.68 if market.get("eventId") == focus.get("eventId") else 0.48)
         links.append(
             {
+                "sourceMarketId": focus["id"],
+                "targetMarketId": market.get("id"),
                 "source": focus["title"],
                 "target": market["title"],
                 "direction": relation,
                 "confidence": confidence,
+                "impact": market.get("impact") or "待观察",
+                "evidenceSummary": market.get("evidenceSummary") or "Polymarket 市场盘口、规则和本地关联边。",
+                "evidenceIds": market.get("evidenceIds") or [],
                 "rationale": (
-                    "同事件盘口会共享结算条件，价格变化通常体现概率在候选结果之间迁移。"
-                    if relation == "conditional"
-                    else "该市场在标签、类别或交易活跃度上与根节点接近，适合作为二阶传导观察对象。"
+                    market.get("reason")
+                    or (
+                        "同事件盘口会共享结算条件，价格变化通常体现概率在候选结果之间迁移。"
+                        if relation == "conditional"
+                        else "该市场在标签、类别或交易活跃度上与根节点接近，适合作为二阶传导观察对象。"
+                    )
                 ),
             }
         )
@@ -2064,12 +2507,19 @@ def normalize_ai_result(
     meta: dict[str, str],
     settings: dict[str, Any] | None = None,
     fallback: bool = False,
+    verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     focus = context["focus"]
     settings = settings or {}
+    verification = verification or {}
     depth = settings_depth(settings)
     threshold = settings_threshold(settings)
     max_links = {1: 4, 2: 8, 3: 12}[depth]
+    related_limit = {1: 6, 2: 12, 3: 18}[depth]
+    verified_related = verification.get("verifiedMarkets") if isinstance(verification.get("verifiedMarkets"), list) else []
+    verified_related = verified_related[:related_limit]
+    verified_by_id = {str(market.get("id")): market for market in verified_related if market.get("id")}
+    verified_by_title = {normalize_term(market.get("title")): str(market.get("id")) for market in verified_related if market.get("title") and market.get("id")}
     links = raw.get("causalLinks")
     if not isinstance(links, list):
         links = []
@@ -2077,13 +2527,25 @@ def normalize_ai_result(
     for link in links[:12]:
         if not isinstance(link, dict):
             continue
+        target_id = str(link.get("targetMarketId") or link.get("targetId") or "").strip()
+        if not target_id:
+            target_id = verified_by_title.get(normalize_term(link.get("target")), "")
+        if verified_by_id and target_id not in verified_by_id:
+            continue
+        target_market = verified_by_id.get(target_id, {})
+        confidence = clamp_confidence(link.get("confidence"), target_market.get("verificationScore") or 0.55)
         normalized_links.append(
             {
+                "sourceMarketId": str(link.get("sourceMarketId") or focus["id"]),
+                "targetMarketId": target_id or None,
                 "source": str(link.get("source") or focus["title"]),
-                "target": str(link.get("target") or "相关市场"),
+                "target": str(link.get("target") or target_market.get("title") or "相关市场"),
                 "direction": str(link.get("direction") or "unknown"),
-                "confidence": clamp_confidence(link.get("confidence")),
+                "confidence": confidence,
+                "impact": str(link.get("impact") or target_market.get("impact") or "待观察"),
                 "rationale": str(link.get("rationale") or "未提供原因"),
+                "evidenceSummary": str(link.get("evidenceSummary") or target_market.get("evidenceSummary") or ""),
+                "evidenceIds": [str(item) for item in link.get("evidenceIds", [])] if isinstance(link.get("evidenceIds"), list) else [],
             }
         )
     if normalized_links:
@@ -2091,6 +2553,22 @@ def normalize_ai_result(
         if filtered_links:
             normalized_links = filtered_links
     normalized_links = normalized_links[:max_links]
+    if not normalized_links and verified_related:
+        for market in verified_related[:max_links]:
+            normalized_links.append(
+                {
+                    "sourceMarketId": focus["id"],
+                    "targetMarketId": market.get("id"),
+                    "source": focus["title"],
+                    "target": market.get("title") or "相关市场",
+                    "direction": market.get("direction") or "unknown",
+                    "confidence": clamp_confidence(market.get("verificationScore") or market.get("confidence"), 0.55),
+                    "impact": market.get("impact") or "待观察",
+                    "rationale": market.get("reason") or "该市场通过 AI 相关度核实，保留为根市场的候选因果链路。",
+                    "evidenceSummary": market.get("evidenceSummary") or "",
+                    "evidenceIds": market.get("evidenceIds") or [],
+                }
+            )
     scenarios = raw.get("scenarios")
     if not isinstance(scenarios, list):
         scenarios = []
@@ -2109,21 +2587,6 @@ def normalize_ai_result(
         )
     risks = raw.get("riskFactors")
     normalized_risks = [str(item) for item in risks[:8]] if isinstance(risks, list) else []
-    related = []
-    related_limit = {1: 6, 2: 12, 3: 18}[depth]
-    for market in context["relatedMarkets"][:related_limit]:
-        related.append(
-            {
-                "id": market["id"],
-                "title": market["title"],
-                "category": market["category"],
-                "price": market.get("price"),
-                "volume": format_money(market.get("volume")),
-                "confidence": 0.68 if market.get("eventId") == focus.get("eventId") else 0.46,
-                "relation": "同事件盘口" if market.get("eventId") == focus.get("eventId") else "相关主题市场",
-                "url": market.get("url"),
-            }
-        )
     return {
         "runId": f"run_{uuid.uuid4().hex[:12]}",
         "status": "fallback" if fallback else "completed",
@@ -2138,7 +2601,15 @@ def normalize_ai_result(
         "scenarios": normalized_scenarios,
         "riskFactors": normalized_risks,
         "evidence": raw.get("evidence") if isinstance(raw.get("evidence"), list) else evidence,
-        "relatedMarkets": related,
+        "relatedMarkets": verified_related,
+        "excludedMarkets": verification.get("excludedMarkets", []),
+        "verification": {
+            "summary": verification.get("summary") or "",
+            "candidateCount": len(context.get("relatedMarkets", [])),
+            "verifiedCount": len(verified_related),
+            "excludedCount": len(verification.get("excludedMarkets", []) if isinstance(verification.get("excludedMarkets"), list) else []),
+            "model": verification.get("model"),
+        },
         "logs": logs,
         "generatedAt": utc_now(),
         "error": meta.get("error"),
@@ -2159,20 +2630,28 @@ def run_inference(payload: dict[str, Any]) -> dict[str, Any]:
     settings = payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
     logs = [
         "已读取根节点市场与同事件盘口。",
-        "正在从 SQLite 读取直接关联边和同分类市场。",
+        "正在从 SQLite 召回直接关联边、同事件盘口和同分类候选市场。",
     ]
     config = configured_ai_for_settings(load_ai_config(), settings)
     context = inference_context(market_id)
-    logs.append(f"已整理 {len(context['relatedMarkets'])} 个相关市场、{len(context['edges'])} 条候选链路。")
+    logs.append(f"候选市场召回完成：{len(context['relatedMarkets'])} 个市场、{len(context['edges'])} 条候选链路。")
+    candidate_evidence = collect_candidate_evidence(context, config, logs, settings)
+    logs.append(f"已整理 {len(candidate_evidence)} 条候选市场证据，准备请求 AI 做逐市场相关度判断。")
+    verification_messages = verification_prompt(context, candidate_evidence, settings)
+    verification_payload, verification_meta = call_ai(verification_messages, config, logs)
+    if verification_payload is None:
+        logs.append(f"AI 相关度核实失败，切换到本地候选评分：{verification_meta.get('error')}")
+    verification = normalize_verification_result(verification_payload, context, candidate_evidence, logs, settings, verification_meta)
     evidence = collect_inference_evidence(context, config, logs, settings)
-    logs.append(f"已整理 {len(evidence)} 条新闻/市场证据。")
-    messages = ai_prompt(context, evidence, settings)
+    evidence = [*evidence, *candidate_evidence[:24]]
+    logs.append(f"已整理 {len(evidence)} 条新闻/市场/候选证据，用于生成最终因果脚本。")
+    messages = ai_prompt(context, evidence, settings, verification)
     ai_payload, meta = call_ai(messages, config, logs)
     if ai_payload is None:
         logs.append(f"AI 模型暂不可用，切换到本地结构化推演：{meta.get('error')}")
-        fallback_payload = fallback_inference(context, evidence, logs, meta.get("error"))
-        return normalize_ai_result(fallback_payload, context, evidence, logs, meta, settings, fallback=True)
-    return normalize_ai_result(ai_payload, context, evidence, logs, meta, settings, fallback=False)
+        fallback_payload = fallback_inference(context, evidence, logs, meta.get("error"), verification)
+        return normalize_ai_result(fallback_payload, context, evidence, logs, meta, settings, fallback=True, verification=verification)
+    return normalize_ai_result(ai_payload, context, evidence, logs, meta, settings, fallback=False, verification=verification)
 
 
 class Handler(BaseHTTPRequestHandler):
