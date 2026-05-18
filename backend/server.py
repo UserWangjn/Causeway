@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import html
 import json
 import math
+import os
 import re
 import sqlite3
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,6 +26,16 @@ GAMMA_EVENTS_URL = "https://gamma-api.polymarket.com/events"
 CLOB_PRICES_HISTORY_URL = "https://clob.polymarket.com/batch-prices-history"
 MAX_NETWORK_MARKETS = 25
 DEFAULT_SYNC_LIMIT = 1000
+DEFAULT_AI_CONFIG = {
+    "baseUrls": ["https://api.deepseek.com"],
+    "apiKey": "",
+    "apiFormat": "openai",
+    "modelPriority": ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-reasoner", "deepseek-chat"],
+    "reasoningEffort": "high",
+    "thinking": {"type": "enabled"},
+    "timeoutSeconds": 90,
+    "enableWebSearch": True,
+}
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
@@ -1503,6 +1517,664 @@ def market_price_history(query: dict[str, list[str]]) -> dict[str, Any]:
     return {"history": history, "source": CLOB_PRICES_HISTORY_URL, "generatedAt": utc_now()}
 
 
+def load_ai_config() -> dict[str, Any]:
+    config = dict(DEFAULT_AI_CONFIG)
+    for path in (ROOT / "config.local.json", ROOT / "backend" / "config.local.json"):
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        ai_payload = payload.get("ai") if isinstance(payload, dict) else None
+        if isinstance(ai_payload, dict):
+            config.update({key: value for key, value in ai_payload.items() if value not in (None, "")})
+
+    if os.environ.get("CAUSEWAY_AI_API_KEY"):
+        config["apiKey"] = os.environ["CAUSEWAY_AI_API_KEY"]
+    if os.environ.get("CAUSEWAY_AI_BASE_URL"):
+        config["baseUrls"] = [item.strip() for item in os.environ["CAUSEWAY_AI_BASE_URL"].split(",") if item.strip()]
+    if os.environ.get("CAUSEWAY_AI_MODEL"):
+        config["modelPriority"] = [item.strip() for item in os.environ["CAUSEWAY_AI_MODEL"].split(",") if item.strip()]
+    if os.environ.get("CAUSEWAY_AI_WEB_SEARCH"):
+        config["enableWebSearch"] = os.environ["CAUSEWAY_AI_WEB_SEARCH"].strip().lower() not in {"0", "false", "no"}
+    return config
+
+
+def ai_status() -> dict[str, Any]:
+    config = load_ai_config()
+    return {
+        "configured": bool(config.get("apiKey")),
+        "baseUrls": config.get("baseUrls") or [],
+        "apiFormat": config.get("apiFormat") or "openai",
+        "modelPriority": config.get("modelPriority") or [],
+        "enableWebSearch": bool(config.get("enableWebSearch", True)),
+        "generatedAt": utc_now(),
+    }
+
+
+def row_to_inference_market(row: sqlite3.Row) -> dict[str, Any]:
+    node = row_to_node(row, (50.0, 50.0))
+    node["url"] = polymarket_url(node)
+    node["ruleText"] = row["rules"] or row["description"] or ""
+    return node
+
+
+def polymarket_url(market: dict[str, Any]) -> str:
+    event_slug = market.get("eventSlug")
+    slug = market.get("slug")
+    if event_slug:
+        return f"https://polymarket.com/event/{event_slug}"
+    if slug:
+        return f"https://polymarket.com/market/{slug}"
+    return "https://polymarket.com"
+
+
+def inference_context(market_id: str) -> dict[str, Any]:
+    ensure_seed_data()
+    with db() as conn:
+        focus_row = conn.execute(
+            """
+            SELECT *
+            FROM markets
+            WHERE id = ? OR lower(slug) = ?
+            LIMIT 1
+            """,
+            [market_id, normalize_term(market_id)],
+        ).fetchone()
+        if not focus_row:
+            raise ValueError("未找到要推演的市场节点")
+
+        event_row = None
+        if focus_row["event_id"] or focus_row["event_slug"]:
+            event_row = conn.execute(
+                """
+                SELECT *
+                FROM events
+                WHERE id = ? OR lower(slug) = ?
+                LIMIT 1
+                """,
+                [focus_row["event_id"], normalize_term(focus_row["event_slug"])],
+            ).fetchone()
+
+        event_rows: list[sqlite3.Row] = []
+        if focus_row["event_id"] or focus_row["event_slug"]:
+            event_rows = conn.execute(
+                """
+                SELECT *
+                FROM markets
+                WHERE active = 1 AND closed = 0
+                  AND (event_id = ? OR lower(event_slug) = ?)
+                ORDER BY COALESCE(volume, 0) DESC, COALESCE(price, 0) DESC
+                LIMIT 25
+                """,
+                [focus_row["event_id"], normalize_term(focus_row["event_slug"])],
+            ).fetchall()
+
+        related_rows = conn.execute(
+            """
+            SELECT m.*, e.weight AS edge_weight, e.reason AS edge_reason, e.relation_type AS edge_relation_type
+            FROM market_edges e
+            JOIN markets m
+              ON m.id = CASE WHEN e.source = ? THEN e.target ELSE e.source END
+            WHERE ? IN (e.source, e.target)
+              AND m.active = 1 AND m.closed = 0
+            ORDER BY e.weight DESC, COALESCE(m.volume_24hr, 0) DESC, COALESCE(m.volume, 0) DESC
+            LIMIT 24
+            """,
+            [focus_row["id"], focus_row["id"]],
+        ).fetchall()
+
+        same_category_rows = conn.execute(
+            """
+            SELECT *
+            FROM markets
+            WHERE active = 1 AND closed = 0
+              AND id <> ?
+              AND COALESCE(category_key, 'other') = COALESCE(?, 'other')
+            ORDER BY COALESCE(volume_24hr, 0) DESC, COALESCE(volume, 0) DESC
+            LIMIT 18
+            """,
+            [focus_row["id"], focus_row["category_key"]],
+        ).fetchall()
+
+        candidate_rows = unique_rows([focus_row, *event_rows, *related_rows, *same_category_rows], 32)
+        edge_rows = fetch_edges_for_rows(conn, candidate_rows)
+
+    event_payload = None
+    if event_row:
+        event_payload = {
+            "id": event_row["id"],
+            "slug": event_row["slug"],
+            "title": event_row["title"],
+            "category": event_row["category_label"] or event_row["category"] or "其他",
+            "categoryKey": event_row["category_key"] or "other",
+            "tags": parse_jsonish(event_row["tags_json"], []),
+            "endDate": event_row["end_date"],
+            "volume": event_row["volume"],
+            "volume24hr": event_row["volume_24hr"],
+            "liquidity": event_row["liquidity"],
+            "description": event_row["description"],
+            "rules": event_row["rules"],
+            "marketsCount": event_row["markets_count"],
+            "url": f"https://polymarket.com/event/{event_row['slug']}" if event_row["slug"] else "https://polymarket.com",
+        }
+
+    return {
+        "focus": row_to_inference_market(focus_row),
+        "event": event_payload,
+        "eventMarkets": [row_to_inference_market(row) for row in event_rows[:25]],
+        "relatedMarkets": [row_to_inference_market(row) for row in candidate_rows if row["id"] != focus_row["id"]][:24],
+        "edges": [
+            {
+                "source": row["source"],
+                "target": row["target"],
+                "weight": row["weight"],
+                "relationType": row["relation_type"],
+                "reason": row["reason"],
+            }
+            for row in edge_rows[:36]
+        ],
+    }
+
+
+def compact_market_for_prompt(market: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": market.get("id"),
+        "title": market.get("title"),
+        "eventTitle": market.get("eventTitle"),
+        "category": market.get("category"),
+        "price": market.get("price"),
+        "volume": market.get("volume"),
+        "liquidity": market.get("liquidity"),
+        "endDate": market.get("endDate"),
+        "url": market.get("url"),
+        "rules": str(market.get("ruleText") or market.get("rules") or market.get("description") or "")[:1400],
+    }
+
+
+def ddg_search(query: str, limit: int = 5) -> list[dict[str, str]]:
+    params = urllib.parse.urlencode({"q": query})
+    request = urllib.request.Request(
+        f"https://duckduckgo.com/html/?{params}",
+        headers={"User-Agent": USER_AGENT, "Accept": "text/html"},
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        body = response.read().decode("utf-8", errors="ignore")
+
+    titles = re.findall(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', body, re.S)
+    snippets = re.findall(r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>', body, re.S)
+    cleaned_snippets = [
+        re.sub(r"\s+", " ", html.unescape(re.sub(r"<.*?>", "", first or second))).strip()
+        for first, second in snippets
+    ]
+    items: list[dict[str, str]] = []
+    for index, (href, raw_title) in enumerate(titles[:limit]):
+        title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<.*?>", "", raw_title))).strip()
+        url = html.unescape(href)
+        parsed = urllib.parse.urlparse(url)
+        nested = urllib.parse.parse_qs(parsed.query).get("uddg", [""])[0]
+        if nested:
+            url = nested
+        if title:
+            items.append(
+                {
+                    "source": urllib.parse.urlparse(url).netloc or "web",
+                    "title": title,
+                    "url": url,
+                    "snippet": cleaned_snippets[index] if index < len(cleaned_snippets) else "",
+                }
+            )
+    return items
+
+
+def collect_inference_evidence(
+    context: dict[str, Any],
+    config: dict[str, Any],
+    logs: list[str],
+    settings: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    focus = context["focus"]
+    event = context.get("event") or {}
+    evidence: list[dict[str, Any]] = [
+        {
+            "source": "Polymarket",
+            "title": event.get("title") or focus.get("eventTitle") or focus.get("title"),
+            "url": event.get("url") or focus.get("url"),
+            "snippet": str(event.get("description") or focus.get("description") or focus.get("ruleText") or "")[:420],
+        }
+    ]
+    for market in context["relatedMarkets"][:5]:
+        evidence.append(
+            {
+                "source": "Polymarket related market",
+                "title": market.get("title"),
+                "url": market.get("url"),
+                "snippet": f"{market.get('category')} · 当前价格 {market.get('price')}% · 成交量 {format_money(market.get('volume'))}",
+            }
+        )
+
+    include_web_search = True
+    if isinstance(settings, dict) and settings.get("includeWebSearch") is False:
+        include_web_search = False
+    if not config.get("enableWebSearch", True) or not include_web_search:
+        logs.append("已跳过网络搜索，使用 Polymarket 本地数据完成推演。")
+        return evidence
+
+    search_terms = [
+        str(focus.get("title") or ""),
+        str(event.get("title") or focus.get("eventTitle") or ""),
+        f"{focus.get('title')} latest news",
+    ]
+    seen_urls = {item.get("url") for item in evidence if item.get("url")}
+    for query in [term for term in search_terms if term.strip()][:3]:
+        try:
+            items = ddg_search(query, 4)
+            logs.append(f"网络搜索完成：{query}，返回 {len(items)} 条候选信息。")
+        except Exception as exc:
+            logs.append(f"网络搜索失败：{query}（{exc}）")
+            continue
+        for item in items:
+            if item.get("url") in seen_urls:
+                continue
+            seen_urls.add(item.get("url"))
+            evidence.append(item)
+            if len(evidence) >= 12:
+                return evidence
+    return evidence
+
+
+def format_money(value: Any) -> str:
+    amount = as_float(value)
+    if amount is None:
+        return "N/A"
+    if amount >= 1_000_000_000:
+        return f"${amount / 1_000_000_000:.1f}B"
+    if amount >= 1_000_000:
+        return f"${amount / 1_000_000:.1f}M"
+    if amount >= 1_000:
+        return f"${amount / 1_000:.1f}K"
+    return f"${amount:.0f}"
+
+
+def normalize_ai_base_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base[: -len("/chat/completions")]
+    if urllib.parse.urlparse(base).netloc.endswith("deepseek.com"):
+        return base
+    if not base.endswith("/v1"):
+        base = f"{base}/v1"
+    return base
+
+
+def chat_completions_endpoint(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{normalize_ai_base_url(base)}/chat/completions"
+
+
+def extract_json_payload(text: str) -> dict[str, Any] | None:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.I)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        payload = json.loads(cleaned)
+        return payload if isinstance(payload, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            payload = json.loads(cleaned[start : end + 1])
+            return payload if isinstance(payload, dict) else None
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def ai_prompt(context: dict[str, Any], evidence: list[dict[str, Any]], settings: dict[str, Any]) -> list[dict[str, str]]:
+    focus = compact_market_for_prompt(context["focus"])
+    related = [compact_market_for_prompt(market) for market in context["relatedMarkets"][:18]]
+    event_markets = [compact_market_for_prompt(market) for market in context["eventMarkets"][:18]]
+    user_payload = {
+        "rootMarket": focus,
+        "event": context.get("event"),
+        "eventMarkets": event_markets,
+        "relatedMarkets": related,
+        "edges": context.get("edges", [])[:24],
+        "evidence": evidence[:12],
+        "settings": settings,
+    }
+    schema = {
+        "summary": "一句话总结推演结论",
+        "thesis": "核心因果判断，中文，2-4 句",
+        "confidence": 0.0,
+        "causalLinks": [
+            {
+                "source": "市场或信号名称",
+                "target": "市场或信号名称",
+                "direction": "positive|negative|conditional|unknown",
+                "confidence": 0.0,
+                "rationale": "为什么存在因果/条件传导",
+            }
+        ],
+        "scenarios": [
+            {
+                "name": "情景名称",
+                "probabilityShift": "+/-x%",
+                "description": "触发条件和结果",
+                "signals": ["需要观察的信号"],
+            }
+        ],
+        "riskFactors": ["主要不确定性"],
+    }
+    return [
+        {
+            "role": "system",
+            "content": (
+                "你是 Causeway 的 Polymarket 因果推演分析员。"
+                "你需要综合预测市场价格、同事件盘口、相关市场、新闻和社交信息，分析 A 发生后 B 可能如何变化。"
+                "只输出严格 json 对象，不要输出 Markdown，不要给交易建议，不要编造来源。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "请基于以下数据生成中文推演结果。输出必须是合法 json，字段必须匹配 schema：\n"
+                f"schema={json.dumps(schema, ensure_ascii=False)}\n"
+                f"data={json.dumps(user_payload, ensure_ascii=False)}"
+            ),
+        },
+    ]
+
+
+def call_ai(messages: list[dict[str, str]], config: dict[str, Any], logs: list[str]) -> tuple[dict[str, Any] | None, dict[str, str]]:
+    api_key = str(config.get("apiKey") or "").strip()
+    if not api_key:
+        return None, {"error": "未配置 AI API key"}
+    base_urls = [str(item).strip() for item in config.get("baseUrls") or [] if str(item).strip()]
+    models = [str(item).strip() for item in config.get("modelPriority") or [] if str(item).strip()]
+    timeout = int(config.get("timeoutSeconds") or 90)
+    last_error = "未尝试模型"
+
+    for base_url in base_urls:
+        endpoint = chat_completions_endpoint(base_url)
+        for model in models:
+            request_payload: dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": 2200,
+                "response_format": {"type": "json_object"},
+            }
+            thinking = config.get("thinking")
+            if isinstance(thinking, dict) and "deepseek" in urllib.parse.urlparse(base_url).netloc:
+                request_payload["thinking"] = thinking
+            if config.get("reasoningEffort"):
+                request_payload["reasoning_effort"] = config.get("reasoningEffort")
+            body = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+            request = urllib.request.Request(
+                endpoint,
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": USER_AGENT,
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="ignore")[:360]
+                last_error = f"{base_url} {model} HTTP {exc.code}: {detail}"
+                logs.append(f"模型调用失败：{model} @ {base_url}（HTTP {exc.code}）")
+                continue
+            except Exception as exc:
+                last_error = f"{base_url} {model}: {exc}"
+                logs.append(f"模型调用失败：{model} @ {base_url}（{exc}）")
+                continue
+            content = ""
+            try:
+                content = payload["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                last_error = f"{base_url} {model}: 返回结构不符合 OpenAI Chat Completions"
+                logs.append(f"模型返回结构异常：{model} @ {base_url}")
+                continue
+            parsed = extract_json_payload(str(content))
+            if not parsed:
+                last_error = f"{base_url} {model}: 模型未返回可解析 JSON"
+                logs.append(f"模型未返回可解析 JSON：{model} @ {base_url}")
+                continue
+            logs.append(f"AI 模型调用成功：{model} @ {base_url}")
+            return parsed, {"model": model, "baseUrl": base_url}
+    return None, {"error": last_error}
+
+
+def configured_ai_for_settings(config: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+    next_config = dict(config)
+    preferred = str(settings.get("modelPreference") or "").strip()
+    current_models = [str(item).strip() for item in config.get("modelPriority") or [] if str(item).strip()]
+    if preferred and preferred != "auto":
+        next_config["modelPriority"] = [preferred, *[model for model in current_models if model != preferred]]
+    return next_config
+
+
+def settings_depth(settings: dict[str, Any]) -> int:
+    try:
+        return max(1, min(3, int(settings.get("depth", 2))))
+    except (TypeError, ValueError):
+        return 2
+
+
+def settings_threshold(settings: dict[str, Any]) -> float:
+    return clamp_confidence(settings.get("confidenceThreshold"), 0.55)
+
+
+def clamp_confidence(value: Any, default: float = 0.55) -> float:
+    number = as_float(value)
+    if number is None:
+        return default
+    return round(max(0.0, min(1.0, number)), 2)
+
+
+def fallback_inference(
+    context: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    logs: list[str],
+    ai_error: str | None = None,
+) -> dict[str, Any]:
+    focus = context["focus"]
+    related = context["relatedMarkets"][:8]
+    event_markets = [market for market in context["eventMarkets"] if market["id"] != focus["id"]][:6]
+    link_sources = event_markets or related
+    links = []
+    for market in link_sources[:8]:
+        relation = "conditional" if market.get("eventId") == focus.get("eventId") else "positive"
+        confidence = 0.68 if market.get("eventId") == focus.get("eventId") else 0.48
+        links.append(
+            {
+                "source": focus["title"],
+                "target": market["title"],
+                "direction": relation,
+                "confidence": confidence,
+                "rationale": (
+                    "同事件盘口会共享结算条件，价格变化通常体现概率在候选结果之间迁移。"
+                    if relation == "conditional"
+                    else "该市场在标签、类别或交易活跃度上与根节点接近，适合作为二阶传导观察对象。"
+                ),
+            }
+        )
+    if not links:
+        links.append(
+            {
+                "source": focus["title"],
+                "target": focus.get("eventTitle") or focus.get("category") or "相关主题",
+                "direction": "unknown",
+                "confidence": 0.36,
+                "rationale": "当前数据库中直接相关市场较少，需等待更多市场或外部信息源补充。",
+            }
+        )
+
+    scenarios = [
+        {
+            "name": "根节点利好兑现",
+            "probabilityShift": "+5% 至 +15%",
+            "description": "若相关新闻、官方数据或价格盘口继续支持根节点方向，直接相关市场可能出现同向或互斥重定价。",
+            "signals": ["根节点成交量放大", "同事件其他盘口价格同步变化", "权威来源确认关键条件"],
+        },
+        {
+            "name": "信号反转",
+            "probabilityShift": "-5% 至 -20%",
+            "description": "若出现与当前价格相反的官方消息或高可信市场流动性撤出，根节点及相邻盘口可能快速回撤。",
+            "signals": ["盘口价差扩大", "相关市场出现反向成交", "规则来源更新或辟谣"],
+        },
+    ]
+    return {
+        "summary": f"围绕「{focus['title']}」的主要传导来自同事件盘口、同类别活跃市场和外部消息验证。",
+        "thesis": (
+            f"当前根节点价格为 {focus.get('price')}%，成交量 {format_money(focus.get('volume'))}。"
+            "推演优先关注同事件盘口的概率迁移，其次观察同主题市场是否出现同步放量。"
+            "由于 AI 模型当前不可用，本结果使用本地 Polymarket 数据和可抓取信息生成。"
+        ),
+        "confidence": 0.52 if ai_error else 0.58,
+        "causalLinks": links,
+        "scenarios": scenarios,
+        "riskFactors": [
+            "外部新闻源可能存在延迟或噪声",
+            "Polymarket 盘口价格可能受短期流动性影响",
+            "同事件盘口存在互斥关系，不能简单按同向相关解释",
+            "市场规则或结算来源更新会改变推演路径",
+        ],
+        "evidence": evidence,
+    }
+
+
+def normalize_ai_result(
+    raw: dict[str, Any],
+    context: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    logs: list[str],
+    meta: dict[str, str],
+    settings: dict[str, Any] | None = None,
+    fallback: bool = False,
+) -> dict[str, Any]:
+    focus = context["focus"]
+    settings = settings or {}
+    depth = settings_depth(settings)
+    threshold = settings_threshold(settings)
+    max_links = {1: 4, 2: 8, 3: 12}[depth]
+    links = raw.get("causalLinks")
+    if not isinstance(links, list):
+        links = []
+    normalized_links = []
+    for link in links[:12]:
+        if not isinstance(link, dict):
+            continue
+        normalized_links.append(
+            {
+                "source": str(link.get("source") or focus["title"]),
+                "target": str(link.get("target") or "相关市场"),
+                "direction": str(link.get("direction") or "unknown"),
+                "confidence": clamp_confidence(link.get("confidence")),
+                "rationale": str(link.get("rationale") or "未提供原因"),
+            }
+        )
+    if normalized_links:
+        filtered_links = [link for link in normalized_links if link["confidence"] >= threshold]
+        if filtered_links:
+            normalized_links = filtered_links
+    normalized_links = normalized_links[:max_links]
+    scenarios = raw.get("scenarios")
+    if not isinstance(scenarios, list):
+        scenarios = []
+    normalized_scenarios = []
+    for scenario in scenarios[:5]:
+        if not isinstance(scenario, dict):
+            continue
+        signals = scenario.get("signals")
+        normalized_scenarios.append(
+            {
+                "name": str(scenario.get("name") or "未命名情景"),
+                "probabilityShift": str(scenario.get("probabilityShift") or "待观察"),
+                "description": str(scenario.get("description") or ""),
+                "signals": [str(item) for item in signals[:5]] if isinstance(signals, list) else [],
+            }
+        )
+    risks = raw.get("riskFactors")
+    normalized_risks = [str(item) for item in risks[:8]] if isinstance(risks, list) else []
+    related = []
+    related_limit = {1: 6, 2: 12, 3: 18}[depth]
+    for market in context["relatedMarkets"][:related_limit]:
+        related.append(
+            {
+                "id": market["id"],
+                "title": market["title"],
+                "category": market["category"],
+                "price": market.get("price"),
+                "volume": format_money(market.get("volume")),
+                "confidence": 0.68 if market.get("eventId") == focus.get("eventId") else 0.46,
+                "relation": "同事件盘口" if market.get("eventId") == focus.get("eventId") else "相关主题市场",
+                "url": market.get("url"),
+            }
+        )
+    return {
+        "runId": f"run_{uuid.uuid4().hex[:12]}",
+        "status": "fallback" if fallback else "completed",
+        "aiAvailable": not fallback,
+        "model": meta.get("model") or ("local-fallback" if fallback else "unknown"),
+        "providerBaseUrl": meta.get("baseUrl"),
+        "rootMarket": compact_market_for_prompt(focus),
+        "summary": str(raw.get("summary") or ""),
+        "thesis": str(raw.get("thesis") or ""),
+        "confidence": clamp_confidence(raw.get("confidence"), 0.52),
+        "causalLinks": normalized_links,
+        "scenarios": normalized_scenarios,
+        "riskFactors": normalized_risks,
+        "evidence": raw.get("evidence") if isinstance(raw.get("evidence"), list) else evidence,
+        "relatedMarkets": related,
+        "logs": logs,
+        "generatedAt": utc_now(),
+        "error": meta.get("error"),
+        "settings": {
+            "scope": settings.get("scope") or "all",
+            "depth": depth,
+            "confidenceThreshold": threshold,
+            "modelPreference": settings.get("modelPreference") or "auto",
+            "timeRange": settings.get("timeRange") or "until_close",
+        },
+    }
+
+
+def run_inference(payload: dict[str, Any]) -> dict[str, Any]:
+    market_id = str(payload.get("marketId") or "").strip()
+    if not market_id:
+        raise ValueError("marketId 不能为空")
+    settings = payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
+    logs = [
+        "已读取根节点市场与同事件盘口。",
+        "正在从 SQLite 读取直接关联边和同分类市场。",
+    ]
+    config = configured_ai_for_settings(load_ai_config(), settings)
+    context = inference_context(market_id)
+    logs.append(f"已整理 {len(context['relatedMarkets'])} 个相关市场、{len(context['edges'])} 条候选链路。")
+    evidence = collect_inference_evidence(context, config, logs, settings)
+    logs.append(f"已整理 {len(evidence)} 条新闻/市场证据。")
+    messages = ai_prompt(context, evidence, settings)
+    ai_payload, meta = call_ai(messages, config, logs)
+    if ai_payload is None:
+        logs.append(f"AI 模型暂不可用，切换到本地结构化推演：{meta.get('error')}")
+        fallback_payload = fallback_inference(context, evidence, logs, meta.get("error"))
+        return normalize_ai_result(fallback_payload, context, evidence, logs, meta, settings, fallback=True)
+    return normalize_ai_result(ai_payload, context, evidence, logs, meta, settings, fallback=False)
+
+
 class Handler(BaseHTTPRequestHandler):
     def end_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -1522,6 +2194,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def read_json_body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length") or "0")
+        if length <= 0:
+            return {}
+        body = self.rfile.read(min(length, 1_000_000)).decode("utf-8")
+        payload = json.loads(body)
+        return payload if isinstance(payload, dict) else {}
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
@@ -1529,6 +2209,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/health":
                 init_db()
                 self.json_response(200, {"ok": True, "db": str(DB_PATH)})
+            elif parsed.path == "/api/ai/status":
+                self.json_response(200, {"data": ai_status(), "requestId": f"req_{int(time.time() * 1000)}"})
             elif parsed.path == "/api/markets/categories":
                 self.json_response(200, {"data": market_categories(), "requestId": f"req_{int(time.time() * 1000)}"})
             elif parsed.path == "/api/markets/search":
@@ -1551,6 +2233,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/sync/polymarket":
                 limit = int(query.get("limit", [str(DEFAULT_SYNC_LIMIT)])[0])
                 self.json_response(200, {"data": sync_markets(limit), "requestId": f"req_{int(time.time() * 1000)}"})
+            elif parsed.path == "/api/inference/run":
+                self.json_response(200, {"data": run_inference(self.read_json_body()), "requestId": f"req_{int(time.time() * 1000)}"})
             else:
                 self.json_response(404, {"error": {"code": "NOT_FOUND", "message": parsed.path}})
         except Exception as exc:

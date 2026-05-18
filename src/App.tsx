@@ -179,6 +179,96 @@ type PriceHistoryResponse = {
   }
 }
 
+type InferenceEvidence = {
+  source: string
+  title: string
+  url?: string
+  snippet?: string
+  publishedAt?: string | null
+}
+
+type InferenceRelatedMarket = {
+  id: string
+  title: string
+  category: string
+  price: number | null
+  volume: string
+  confidence: number
+  relation: string
+  url?: string
+}
+
+type InferenceCausalLink = {
+  source: string
+  target: string
+  direction: 'positive' | 'negative' | 'conditional' | 'unknown' | string
+  confidence: number
+  rationale: string
+}
+
+type InferenceScenario = {
+  name: string
+  probabilityShift: string
+  description: string
+  signals: string[]
+}
+
+type InferenceResult = {
+  runId: string
+  status: 'completed' | 'fallback' | string
+  aiAvailable: boolean
+  model: string
+  providerBaseUrl?: string | null
+  rootMarket?: {
+    id?: string
+    title?: string
+    price?: number | null
+    volume?: number | null
+    liquidity?: number | null
+    endDate?: string | null
+  }
+  summary: string
+  thesis: string
+  confidence: number
+  causalLinks: InferenceCausalLink[]
+  scenarios: InferenceScenario[]
+  riskFactors: string[]
+  evidence: InferenceEvidence[]
+  relatedMarkets: InferenceRelatedMarket[]
+  logs: string[]
+  generatedAt: string
+  error?: string | null
+}
+
+type InferenceRunResponse = {
+  data: InferenceResult
+}
+
+type InferenceScope = 'news' | 'markets' | 'social' | 'all'
+type InferenceDepth = 1 | 2 | 3
+type InferenceModelPreference = 'auto' | 'deepseek-v4-pro' | 'deepseek-v4-flash'
+type ConfidenceMode = 'broad' | 'balanced' | 'strict'
+
+type InferenceSettingsState = {
+  scope: InferenceScope
+  timeRange: 'until_close' | '24h' | '7d' | '30d'
+  modelPreference: InferenceModelPreference
+  confidenceMode: ConfidenceMode
+  depth: InferenceDepth
+  confidenceThreshold: number
+  includeWebSearch: boolean
+}
+
+const defaultInferenceSettings: InferenceSettingsState = {
+  scope: 'all',
+  timeRange: 'until_close',
+  modelPreference: 'auto',
+  confidenceMode: 'balanced',
+  depth: 2,
+  confidenceThreshold: 0.55,
+  includeWebSearch: true,
+}
+
 type ApiMarketCategory = {
   key: string
   label: string
@@ -386,29 +476,6 @@ const scriptRows: ScriptRow[] = [
   { title: '中东局势升级影响分析', status: '已完成', created: '2024-07-07 22:10', points: [65, 54, 39, 62] },
 ]
 
-const causalColumns = [
-  [
-    { title: '美联储降息概率?', price: 71, delta: '+0.65', tone: 'green' },
-    { title: '美国国债收益率下降?', price: 75, delta: '+0.55', tone: 'green' },
-    { title: '科技股上涨?', price: 64, delta: '+0.50', tone: 'green' },
-  ],
-  [
-    { title: '原油价格上涨?', price: 68, delta: '+0.40', tone: 'orange' },
-    { title: '通胀预期上升?', price: 55, delta: '+0.35', tone: 'orange' },
-    { title: '能源股受益?', price: 69, delta: '+0.50', tone: 'orange' },
-  ],
-  [
-    { title: '美元汇率走势?', price: 41, delta: '-0.30', tone: 'red' },
-    { title: '新兴市场货币承压?', price: 39, delta: '-0.35', tone: 'red' },
-    { title: '美国出口竞争力下降?', price: 42, delta: '-0.25', tone: 'red' },
-  ],
-  [
-    { title: '黄金价格上涨?', price: 56, delta: '+0.45', tone: 'purple' },
-    { title: '避险情绪升温?', price: 61, delta: '+0.40', tone: 'purple' },
-    { title: '黄金ETF流入增加?', price: 58, delta: '+0.35', tone: 'purple' },
-  ],
-]
-
 const categoryTones: Record<string, Market['tone']> = {
   政治: 'blue',
   politics: 'blue',
@@ -455,8 +522,20 @@ function formatDate(value: string | null | undefined) {
   return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return '未提供'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 function formatProbability(value: number | null | undefined) {
   return value == null ? '' : `${Math.round(value * 100)}%`
+}
+
+function formatConfidence(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return 'N/A'
+  return `${Math.round(value * 100)}%`
 }
 
 function marketSubtitle(market: Market) {
@@ -1123,11 +1202,20 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
 function App() {
   const [view, setView] = useState<View>('network')
   const [selectedMarket, setSelectedMarket] = useState<Market>(rootMarket)
+  const [inferenceResult, setInferenceResult] = useState<InferenceResult | null>(null)
+  const [inferenceSettings, setInferenceSettings] = useState<InferenceSettingsState>(defaultInferenceSettings)
   const activeNav = view === 'scripts' ? 'scripts' : view === 'progress' ? 'monitor' : 'network'
 
   const openMarketDetail = useCallback((market: Market) => {
     setSelectedMarket(market)
+    setInferenceResult(null)
     setView('detail')
+  }, [])
+
+  const startInference = useCallback((settings: InferenceSettingsState) => {
+    setInferenceSettings(settings)
+    setInferenceResult(null)
+    setView('progress')
   }, [])
 
   return (
@@ -1136,9 +1224,18 @@ function App() {
       <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
         {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
         {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={() => setView('infer')} />}
-        {view === 'infer' && <InferenceSettings market={selectedMarket} onBack={() => setView('detail')} onStart={() => setView('progress')} />}
-        {view === 'progress' && <InferenceProgress market={selectedMarket} onBack={() => setView('infer')} onDone={() => setView('script')} />}
-        {view === 'script' && <CausalScript market={selectedMarket} onBack={() => setView('progress')} onScripts={() => setView('scripts')} />}
+        {view === 'infer' && <InferenceSettings initialSettings={inferenceSettings} market={selectedMarket} onBack={() => setView('detail')} onStart={startInference} />}
+        {view === 'progress' && (
+          <InferenceProgress
+            market={selectedMarket}
+            onBack={() => setView('infer')}
+            onDone={() => setView('script')}
+            onResult={setInferenceResult}
+            result={inferenceResult}
+            settings={inferenceSettings}
+          />
+        )}
+        {view === 'script' && <CausalScript market={selectedMarket} onBack={() => setView('progress')} onScripts={() => setView('scripts')} result={inferenceResult} />}
         {view === 'scripts' && <MyScripts onNew={() => setView('infer')} onOpen={() => setView('script')} />}
       </main>
     </div>
@@ -1494,7 +1591,76 @@ function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () 
   )
 }
 
-function InferenceSettings({ market, onBack, onStart }: { market: Market; onBack: () => void; onStart: () => void }) {
+function scopeLabel(scope: InferenceScope) {
+  return {
+    news: '相关新闻',
+    markets: '相关市场',
+    social: '社交媒体',
+    all: '全部',
+  }[scope]
+}
+
+function timeRangeLabel(range: InferenceSettingsState['timeRange'], market: Market) {
+  return {
+    until_close: `至市场结束：${formatDate(market.endDate)}`,
+    '24h': '最近 24 小时',
+    '7d': '最近 7 天',
+    '30d': '最近 30 天',
+  }[range]
+}
+
+function modelPreferenceLabel(model: InferenceModelPreference) {
+  return {
+    auto: 'DeepSeek v4 Pro / Flash',
+    'deepseek-v4-pro': 'DeepSeek v4 Pro',
+    'deepseek-v4-flash': 'DeepSeek v4 Flash',
+  }[model]
+}
+
+function confidenceModeLabel(mode: ConfidenceMode) {
+  return {
+    broad: '更广覆盖',
+    balanced: '平衡（推荐）',
+    strict: '高置信',
+  }[mode]
+}
+
+function estimateInference(settings: InferenceSettingsState) {
+  const scopeCost = settings.scope === 'all' ? 12 : settings.scope === 'markets' ? 5 : 8
+  const depthCost = settings.depth * 5
+  const modelCost = settings.modelPreference === 'deepseek-v4-flash' ? 3 : 8
+  const minutes = settings.modelPreference === 'deepseek-v4-flash' ? '1-2 分钟' : settings.depth === 3 ? '3-5 分钟' : '2-3 分钟'
+  return { minutes, points: scopeCost + depthCost + modelCost }
+}
+
+function InferenceSettings({
+  initialSettings,
+  market,
+  onBack,
+  onStart,
+}: {
+  initialSettings: InferenceSettingsState
+  market: Market
+  onBack: () => void
+  onStart: (settings: InferenceSettingsState) => void
+}) {
+  const [settings, setSettings] = useState<InferenceSettingsState>(initialSettings)
+  const updateSettings = useCallback((patch: Partial<InferenceSettingsState>) => {
+    setSettings((current) => ({ ...current, ...patch }))
+  }, [])
+  const selectConfidenceMode = useCallback((mode: ConfidenceMode) => {
+    updateSettings({
+      confidenceMode: mode,
+      confidenceThreshold: mode === 'broad' ? 0.35 : mode === 'strict' ? 0.7 : 0.55,
+    })
+  }, [updateSettings])
+  const estimate = estimateInference(settings)
+  const scopeOptions: Array<[InferenceScope, string, string]> = [
+    ['news', '相关新闻', '新闻报道和媒体'],
+    ['markets', '相关市场', 'Polymarket 市场'],
+    ['social', '社交媒体', '社交讨论和情绪'],
+    ['all', '全部', '所有可用数据源'],
+  ]
   return (
     <section className="page">
       <BackButton onClick={onBack} />
@@ -1522,13 +1688,13 @@ function InferenceSettings({ market, onBack, onStart }: { market: Market; onBack
           <Divider />
           <SectionHeader title="推演范围" note="选择要纳入分析的数据源范围。" />
           <div className="option-grid four">
-            {[
-              ['相关新闻', '新闻报道和媒体'],
-              ['相关市场', 'Polymarket 市场'],
-              ['社交媒体', '社交讨论和情绪'],
-              ['全部', '所有可用数据源'],
-            ].map(([title, subtitle], index) => (
-              <button className={index === 3 ? 'option-card selected' : 'option-card'} key={title} type="button">
+            {scopeOptions.map(([scope, title, subtitle], index) => (
+              <button
+                className={settings.scope === scope ? 'option-card selected' : 'option-card'}
+                key={scope}
+                type="button"
+                onClick={() => updateSettings({ scope, includeWebSearch: scope !== 'markets' })}
+              >
                 <span className="option-icon">{index + 1}</span>
                 <b>{title}</b>
                 <small>{subtitle}</small>
@@ -1537,23 +1703,58 @@ function InferenceSettings({ market, onBack, onStart }: { market: Market; onBack
           </div>
           <Divider />
           <div className="form-grid">
-            <Field label="时间周期" value="至市场结束" hint={`当前结束时间：${formatDate(market.endDate)}`} />
-            <Field label="AI 模型" value="GPT-4o" hint="更强的推理能力，更全面的分析" badge="推荐" />
-            <Field label="置信度偏好" value="平衡（推荐）" hint="平衡准确性和覆盖范围" />
+            <label className="field">
+              <span>时间周期</span>
+              <select value={settings.timeRange} onChange={(event) => updateSettings({ timeRange: event.target.value as InferenceSettingsState['timeRange'] })}>
+                <option value="until_close">至市场结束</option>
+                <option value="24h">最近 24 小时</option>
+                <option value="7d">最近 7 天</option>
+                <option value="30d">最近 30 天</option>
+              </select>
+              <small>{timeRangeLabel(settings.timeRange, market)}</small>
+            </label>
+            <label className="field">
+              <span>AI 模型</span>
+              <select value={settings.modelPreference} onChange={(event) => updateSettings({ modelPreference: event.target.value as InferenceModelPreference })}>
+                <option value="auto">自动：v4 Pro 优先，Flash 兜底</option>
+                <option value="deepseek-v4-pro">DeepSeek v4 Pro</option>
+                <option value="deepseek-v4-flash">DeepSeek v4 Flash</option>
+              </select>
+              <small>{settings.modelPreference === 'deepseek-v4-flash' ? '速度更快，适合快速预览' : '优先使用推理模型，适合正式推演'}</small>
+            </label>
+            <label className="field">
+              <span>置信度偏好</span>
+              <select value={settings.confidenceMode} onChange={(event) => selectConfidenceMode(event.target.value as ConfidenceMode)}>
+                <option value="broad">更广覆盖</option>
+                <option value="balanced">平衡（推荐）</option>
+                <option value="strict">高置信</option>
+              </select>
+              <small>{confidenceModeLabel(settings.confidenceMode)} · 阈值 {settings.confidenceThreshold.toFixed(2)}</small>
+            </label>
           </div>
           <SectionHeader title="推演层数" note="控制 AI 生成的解释和洞察的详细程度。" />
           <div className="segmented">
-            <button type="button">1 层</button>
-            <button className="active" type="button">2 层</button>
-            <button type="button">3 层</button>
+            {[1, 2, 3].map((depth) => (
+              <button className={settings.depth === depth ? 'active' : ''} key={depth} type="button" onClick={() => updateSettings({ depth: depth as InferenceDepth })}>{depth} 层</button>
+            ))}
           </div>
           <div className="range-block">
             <div className="range-label">
               <span>置信度阈值</span>
-              <b>0.55</b>
+              <b>{settings.confidenceThreshold.toFixed(2)}</b>
             </div>
+            <input
+              aria-label="置信度阈值"
+              className="confidence-slider"
+              max="0.85"
+              min="0.1"
+              onChange={(event) => updateSettings({ confidenceThreshold: Number(event.target.value) })}
+              step="0.05"
+              type="range"
+              value={settings.confidenceThreshold}
+            />
             <div className="range-track">
-              <span style={{ width: '55%' }} />
+              <span style={{ width: `${(settings.confidenceThreshold / 0.85) * 100}%` }} />
             </div>
             <div className="range-scale">
               <span>更广覆盖</span>
@@ -1563,20 +1764,20 @@ function InferenceSettings({ market, onBack, onStart }: { market: Market; onBack
           </div>
           <div className="estimate-strip">
             <span>
-              <Bot size={18} /> 预计处理时间：2-3 分钟
+              <Bot size={18} /> 预计处理时间：{estimate.minutes}
             </span>
             <span>
-              <ShieldCheck size={18} /> 预计消耗积分：25 积分
+              <ShieldCheck size={18} /> 预计消耗积分：{estimate.points} 积分
             </span>
           </div>
-          <button className="primary-action inside" type="button" onClick={onStart}>
+          <button className="primary-action inside" type="button" onClick={() => onStart(settings)}>
             <Play size={18} /> 启动 AI 推演
           </button>
         </Card>
         <div className="side-stack">
           <Card>
             <SectionHeader title="推演设置预览" note="以下是您将要运行的推演配置摘要。" />
-            <PreviewList market={market} />
+            <PreviewList market={market} settings={settings} />
           </Card>
           <Card>
             <SectionHeader title="预期分析内容" />
@@ -1604,40 +1805,94 @@ function InferenceSettings({ market, onBack, onStart }: { market: Market; onBack
   )
 }
 
-function InferenceProgress({ market, onBack, onDone }: { market: Market; onBack: () => void; onDone: () => void }) {
+function InferenceProgress({
+  market,
+  onBack,
+  onDone,
+  onResult,
+  result,
+  settings,
+}: {
+  market: Market
+  onBack: () => void
+  onDone: () => void
+  onResult: (result: InferenceResult) => void
+  result: InferenceResult | null
+  settings: InferenceSettingsState
+}) {
   const steps = ['已选择根节点', '正在检索相关市场', '正在收集消息面', '正在分析因果关系', '正在生成脚本']
+  const [loading, setLoading] = useState(!result)
+  const [error, setError] = useState<string | null>(null)
+  const hasCurrentResult = result?.rootMarket?.id === market.id
+  const progress = hasCurrentResult ? 100 : error ? 100 : loading ? 62 : 35
+  const currentStep = hasCurrentResult ? 5 : error ? 3 : loading ? 3 : 1
+
+  useEffect(() => {
+    if (result?.rootMarket?.id === market.id) {
+      return
+    }
+    const controller = new AbortController()
+    fetch('/api/inference/run', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        marketId: market.id,
+        settings,
+      }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.json() as Promise<InferenceRunResponse>
+      })
+      .then((payload) => {
+        onResult(payload.data)
+      })
+      .catch((fetchError: Error) => {
+        if (fetchError.name !== 'AbortError') setError(fetchError.message)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
+  }, [market.id, onResult, result?.rootMarket?.id, settings])
 
   return (
     <section className="page">
       <BackButton onClick={onBack} />
-      <PageTitle title="AI 推演进行中..." subtitle={`正在基于「${market.title}」构建因果链条。`} />
+      <PageTitle
+        title={hasCurrentResult ? 'AI 推演已完成' : 'AI 推演进行中...'}
+        subtitle={`正在基于「${market.title}」构建因果链条。`}
+      />
       <div className="progress-steps">
         {steps.map((step, index) => (
-          <div className={index < 2 ? 'step done' : index === 2 ? 'step current' : 'step'} key={step}>
+          <div className={index < currentStep - 1 ? 'step done' : index === currentStep - 1 ? 'step current' : 'step'} key={step}>
             <div className="step-circle">{index === 0 ? <CheckCircle2 size={26} /> : index + 1}</div>
             <strong>{step}</strong>
-            <span>{index < 2 ? `14:30:${index ? '35' : '21'}` : `预计 ${index === 2 ? 30 : 45} 秒`}</span>
+            <span>{index < currentStep - 1 ? '已完成' : index === currentStep - 1 ? '处理中' : `等待中`}</span>
           </div>
         ))}
       </div>
       <div className="global-progress">
-        <span style={{ width: '45%' }} />
+        <span style={{ width: `${progress}%` }} />
       </div>
       <div className="progress-caption">
-        <span>推演中... <b>45%</b></span>
-        <span>预计还需 1-2 分钟</span>
+        <span>{hasCurrentResult ? '推演完成' : error ? '推演异常' : '推演中...'} <b>{progress}%</b></span>
+        <span>{result?.model ? `模型：${result.model}` : 'DeepSeek 正在分析市场与外部信息'}</span>
       </div>
+      {error ? <div className="status-note error">推演请求失败：{error}</div> : null}
+      {result?.status === 'fallback' ? <div className="status-note warning">当前 AI 调用不可用，已使用本地市场数据生成结构化推演。{result.error ? `原因：${result.error}` : null}</div> : null}
       <div className="content-grid progress-grid">
         <Card>
           <SectionHeader title="实时发现的相关市场" />
-          <DiscoveryTable market={market} />
+          <DiscoveryTable market={market} relatedMarkets={result?.relatedMarkets} />
           <button className="link-button" type="button">
-            查看全部 12 个相关市场 <ArrowRight size={15} />
+            查看全部 {result?.relatedMarkets.length || 0} 个相关市场 <ArrowRight size={15} />
           </button>
         </Card>
         <Card>
           <SectionHeader title="实时推演日志" />
-          <LogList />
+          <LogList logs={result?.logs} loading={loading && !hasCurrentResult} />
         </Card>
       </div>
       <Card>
@@ -1645,10 +1900,10 @@ function InferenceProgress({ market, onBack, onDone }: { market: Market; onBack:
         <div className="info-strip-grid">
           {[ 
             ['根节点市场', market.title],
-            ['推演深度', '3 阶关联'],
-            ['时间范围', formatDate(market.endDate)],
-            ['分析维度', market.category],
-            ['AI 模型', 'GPT-4o'],
+            ['推演深度', `${settings.depth} 阶关联`],
+            ['时间范围', timeRangeLabel(settings.timeRange, market)],
+            ['分析维度', scopeLabel(settings.scope)],
+            ['AI 模型', result?.model || 'DeepSeek v4 Pro'],
           ].map(([label, value]) => (
             <div className="info-item" key={label}>
               <div className="info-icon">
@@ -1657,25 +1912,35 @@ function InferenceProgress({ market, onBack, onDone }: { market: Market; onBack:
               <span>{label}</span>
               <b>{value}</b>
             </div>
-          ))}
+        ))}
         </div>
-        <div className="soft-note">提示：AI 推演可能需要 1-3 分钟完成，请稍候。您可以在推演完成后查看详细的因果关系图谱和影响分析。</div>
+        <div className="soft-note">{result?.summary || '提示：AI 会综合 Polymarket 盘口、相关市场、新闻和社交信息生成因果推演。'}</div>
       </Card>
-      <button className="floating-next" type="button" onClick={onDone}>
+      <button className="floating-next" type="button" onClick={onDone} disabled={!hasCurrentResult}>
         查看已生成脚本 <ArrowRight size={18} />
       </button>
     </section>
   )
 }
 
-function CausalScript({ market, onBack, onScripts }: { market: Market; onBack: () => void; onScripts: () => void }) {
+function CausalScript({
+  market,
+  onBack,
+  onScripts,
+  result,
+}: {
+  market: Market
+  onBack: () => void
+  onScripts: () => void
+  result: InferenceResult | null
+}) {
   return (
     <section className="page">
       <BackButton onClick={onBack} />
       <div className="script-header">
         <PageTitle
           title="因果脚本"
-          subtitle={`基于 AI 分析的因果关系图谱，展示「${market.title}」对相关市场的潜在影响路径。`}
+          subtitle={result?.thesis || `基于 AI 分析的因果关系图谱，展示「${market.title}」对相关市场的潜在影响路径。`}
         />
         <div className="script-actions">
           <button className="outline-button" type="button">
@@ -1692,21 +1957,21 @@ function CausalScript({ market, onBack, onScripts }: { market: Market; onBack: (
       </div>
       <div className="content-grid script-grid">
         <Card className="script-map-card">
-          <CausalMap market={market} />
+          <CausalMap market={market} result={result} />
         </Card>
         <Card>
           <SectionHeader title="因果链路摘要" />
-          <p className="body-copy">基于当前市场价格、成交量和结构化因果模型，AI 识别出以下主要影响路径及逻辑关系。</p>
-          <SummaryList market={market} />
+          <p className="body-copy">{result?.summary || '基于当前市场价格、成交量和结构化因果模型，AI 识别出以下主要影响路径及逻辑关系。'}</p>
+          <SummaryList market={market} result={result} />
           <div className="soft-note">以上为 AI 基于当前数据与模型的推演结果，不构成任何投资建议，市场有风险，决策需谨慎。</div>
         </Card>
       </div>
       <Card className="script-footer-card">
         <div className="footer-meta">
-          <span><BrainCircuit size={16} /> 推演模型：因果图谱 v2.1</span>
-          <span><Globe2 size={16} /> 数据来源：Polymarket / CME / FRED / Bloomberg</span>
-          <span><Activity size={16} /> 推演时间：2024-07-15 14:30</span>
-          <span><Bot size={16} /> 耗时：36 秒</span>
+          <span><BrainCircuit size={16} /> 推演模型：{result?.model || 'DeepSeek / local-fallback'}</span>
+          <span><Globe2 size={16} /> 数据来源：Polymarket / 新闻搜索 / 相关市场</span>
+          <span><Activity size={16} /> 推演时间：{formatDateTime(result?.generatedAt)}</span>
+          <span><Bot size={16} /> 置信度：{formatConfidence(result?.confidence)}</span>
         </div>
         <div className="footer-actions">
           <button className="outline-button" type="button" onClick={onScripts}>保存到我的脚本</button>
@@ -2058,33 +2323,65 @@ function NetworkFlowCanvas({
   )
 }
 
-function CausalMap({ market }: { market: Market }) {
+function causalLinkTone(link: InferenceCausalLink): 'green' | 'orange' | 'red' | 'purple' {
+  if (link.direction === 'negative') return 'red'
+  if (link.direction === 'conditional') return 'orange'
+  if (link.confidence < 0.35) return 'purple'
+  return 'green'
+}
+
+function CausalMap({ market, result }: { market: Market; result: InferenceResult | null }) {
+  const fallbackLinks: InferenceCausalLink[] = [
+    {
+      source: market.title,
+      target: market.eventTitle || '同事件盘口',
+      direction: 'conditional',
+      confidence: 0.5,
+      rationale: '等待推演结果生成后展示完整因果链路。',
+    },
+  ]
+  const links = (result?.causalLinks.length ? result.causalLinks : fallbackLinks).slice(0, 8)
+  const pathTargets = [
+    [185, 265],
+    [300, 265],
+    [650, 265],
+    [850, 265],
+    [185, 430],
+    [300, 430],
+    [650, 430],
+    [850, 430],
+  ]
+  const columns = [0, 1, 2, 3].map((columnIndex) => links.filter((_, index) => index % 4 === columnIndex))
   return (
     <div className="causal-map">
       <div className="causal-root">
         <MarketIcon market={market} size="medium" />
         <b>{market.title}</b>
-        <strong>{market.price}% <span>{marketChangeText(market)}</span></strong>
-        <small>同步于 {formatDate(market.syncedAt)}</small>
+        <strong>{market.price}% <span>{formatConfidence(result?.confidence)}</span></strong>
+        <small>{result?.status === 'fallback' ? '本地结构化推演' : `同步于 ${formatDate(market.syncedAt)}`}</small>
       </div>
       <svg className="causal-lines" viewBox="0 0 1000 560" aria-hidden="true">
-        <path d="M500 155 C420 235 300 205 185 265" className="green" />
-        <path d="M500 155 C430 245 350 245 300 265" className="green" />
-        <path d="M500 155 C550 250 590 235 650 265" className="red" />
-        <path d="M500 155 C620 220 760 210 850 265" className="green" />
-        <path d="M185 330 V430" className="green dashed" />
-        <path d="M300 330 V430" className="orange dashed" />
-        <path d="M650 330 V430" className="red dashed" />
-        <path d="M850 330 V430" className="purple dashed" />
+        {links.map((link, index) => {
+          const [x, y] = pathTargets[index]
+          const controlX = x < 500 ? 390 - index * 18 : 610 + index * 18
+          const controlY = y < 330 ? 220 : 310
+          return (
+            <path
+              className={causalLinkTone(link)}
+              d={`M500 155 C${controlX} ${controlY}, ${x} ${Math.max(220, y - 70)}, ${x} ${y}`}
+              key={`${link.target}-${index}`}
+            />
+          )
+        })}
       </svg>
       <div className="causal-columns">
-        {causalColumns.map((column, columnIndex) => (
+        {columns.map((column, columnIndex) => (
           <div className="causal-column" key={columnIndex}>
             {column.map((item) => (
-              <div className={`causal-node ${item.tone}`} key={item.title}>
-                <b>{item.title}</b>
-                <strong>{item.price}%</strong>
-                <span>{item.delta} 中等置信度</span>
+              <div className={`causal-node ${causalLinkTone(item)}`} key={`${item.target}-${item.source}`}>
+                <b>{item.target}</b>
+                <strong>{formatConfidence(item.confidence)}</strong>
+                <span>{item.rationale}</span>
               </div>
             ))}
           </div>
@@ -2541,27 +2838,14 @@ function Divider() {
   return <div className="divider" />
 }
 
-function Field({ label, value, hint, badge }: { label: string; value: string; hint: string; badge?: string }) {
-  return (
-    <label className="field">
-      <span>{label}</span>
-      <div>
-        <b>{value}</b>
-        {badge ? <em>{badge}</em> : null}
-      </div>
-      <small>{hint}</small>
-    </label>
-  )
-}
-
-function PreviewList({ market }: { market: Market }) {
+function PreviewList({ market, settings }: { market: Market; settings: InferenceSettingsState }) {
   const items = [
     ['根节点市场', market.title],
-    ['推演范围', '全部（相关新闻 + 相关市场 + 社交媒体）'],
-    ['时间周期', `至市场结束：${formatDate(market.endDate)}`],
-    ['推演层数', '2 层'],
-    ['AI 模型', 'GPT-4o'],
-    ['置信度偏好', '平衡（推荐）'],
+    ['推演范围', scopeLabel(settings.scope)],
+    ['时间周期', timeRangeLabel(settings.timeRange, market)],
+    ['推演层数', `${settings.depth} 层`],
+    ['AI 模型', modelPreferenceLabel(settings.modelPreference)],
+    ['置信度偏好', `${confidenceModeLabel(settings.confidenceMode)} · ${settings.confidenceThreshold.toFixed(2)}`],
   ]
   return (
     <div className="preview-list">
@@ -2579,8 +2863,24 @@ function Checklist({ items }: { items: string[] }) {
   return <ul className="checklist">{items.map((item) => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>
 }
 
-function DiscoveryTable({ market }: { market?: Market }) {
+function DiscoveryTable({ market, relatedMarkets }: { market?: Market; relatedMarkets?: InferenceRelatedMarket[] }) {
   const seedMarket = market || rootMarket
+  if (relatedMarkets?.length) {
+    return (
+      <div className="discovery-table">
+        {relatedMarkets.slice(0, 6).map((item) => (
+          <div key={item.id}>
+            <MarketIcon market={{ icon: seedMarket.icon, iconUrl: null, tone: seedMarket.tone }} size="small" />
+            <b>{item.title}</b>
+            <span>{item.relation || item.category}</span>
+            <strong>{item.price == null ? 'N/A' : `${item.price}%`}</strong>
+            <em>{item.volume}</em>
+            <MiniPath values={[Math.round(item.confidence * 100), Math.max(1, item.price || 1), 100 - Math.round(item.confidence * 30)]} />
+          </div>
+        ))}
+      </div>
+    )
+  }
   const discoveryMarkets = [seedMarket, ...markets.filter((item) => item.id !== seedMarket.id)].slice(0, 5)
   return (
     <div className="discovery-table">
@@ -2598,30 +2898,51 @@ function DiscoveryTable({ market }: { market?: Market }) {
   )
 }
 
-function LogList() {
-  const logs = [
-    ['14:30:35', '正在检索根节点的直接关联市场...', '发现 8 个直接关联市场'],
-    ['14:30:42', '正在扩展二阶关联市场...', '新增发现 12 个相关市场'],
-    ['14:30:51', '正在收集政治领域消息面...', '解析 23 篇相关新闻'],
-    ['14:31:03', '正在收集经济领域消息面...', '解析 18 篇相关新闻'],
-    ['14:31:15', '正在收集加密货币领域消息面...', '解析 15 篇相关新闻'],
-    ['14:31:28', '正在分析因果关系强度...', '计算相关性矩阵'],
-  ]
+function LogList({ logs, loading }: { logs?: string[]; loading?: boolean }) {
+  const displayLogs = logs?.length
+    ? logs
+    : [
+        '正在检索根节点的直接关联市场...',
+        '正在扩展二阶关联市场...',
+        '正在收集新闻和社交信息...',
+        '正在请求 DeepSeek 推演模型...',
+      ]
   return (
     <div className="log-list">
-      {logs.map(([time, title, detail], index) => (
-        <div key={time}>
+      {displayLogs.map((title, index) => (
+        <div key={`${title}-${index}`}>
           <i className={`dot ${index > 3 ? 'green' : index > 1 ? 'cyan' : 'blue'}`} />
-          <span>{time}</span>
+          <span>{loading && index === displayLogs.length - 1 ? '进行中' : '完成'}</span>
           <b>{title}</b>
-          <small>{detail}</small>
+          <small>{index === 0 ? '根节点、同事件盘口和本地边已纳入上下文' : '用于生成因果链路、情景和风险提示'}</small>
         </div>
       ))}
     </div>
   )
 }
 
-function SummaryList({ market }: { market: Market }) {
+function SummaryList({ market, result }: { market: Market; result: InferenceResult | null }) {
+  if (result) {
+    const linkItems = result.causalLinks.slice(0, 4).map((link) => [link.target, link.rationale])
+    const scenarioItems = result.scenarios.slice(0, 2).map((scenario) => [scenario.name, `${scenario.probabilityShift}：${scenario.description}`])
+    const riskItems = result.riskFactors.slice(0, 2).map((risk, index) => [`风险 ${index + 1}`, risk])
+    const items = [
+      [market.title, result.thesis],
+      ...linkItems,
+      ...scenarioItems,
+      ...riskItems,
+    ]
+    return (
+      <div className="summary-list">
+        {items.slice(0, 8).map(([title, detail], index) => (
+          <div key={`${title}-${index}`}>
+            <span>{index + 1}</span>
+            <div><b>{title}</b><p>{detail}</p></div>
+          </div>
+        ))}
+      </div>
+    )
+  }
   const items = [
     [market.title, `市场当前价格为 ${market.price}%，成交量为 ${market.volume}，这是本次推演的根节点。`],
     ['同事件市场联动', market.eventTitle ? `优先检索「${market.eventTitle}」事件下的其他盘口，判断同事件内概率迁移。` : '优先检索同主题和同分类市场，判断相近盘口的概率迁移。'],

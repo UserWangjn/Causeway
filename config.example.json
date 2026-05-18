@@ -1,0 +1,21 @@
+{
+  "ai": {
+    "baseUrls": [
+      "https://api.deepseek.com"
+    ],
+    "apiKey": "",
+    "apiFormat": "openai",
+    "modelPriority": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "deepseek-reasoner",
+      "deepseek-chat"
+    ],
+    "reasoningEffort": "high",
+    "thinking": {
+      "type": "enabled"
+    },
+    "timeoutSeconds": 90,
+    "enableWebSearch": true
+  }
+}
