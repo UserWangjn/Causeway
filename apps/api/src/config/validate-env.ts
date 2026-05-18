@@ -7,6 +7,7 @@ const envSchema = z
     API_HOST: z.string().default('0.0.0.0'),
     API_PORT: z.coerce.number().int().positive().default(8000),
     API_PREFIX: z.string().default('/api/v1'),
+    API_TRUST_PROXY: z.enum(['true', 'false']).default('false'),
     API_CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
     DATABASE_URL: z.string().min(1),
     JWT_SECRET: z.string().min(1),
@@ -23,7 +24,12 @@ const envSchema = z
     ENABLE_REAL_ORDERS: z.enum(['true', 'false']).default('false'),
     DRY_RUN: z.enum(['true', 'false']).default('true'),
     INTERNAL_API_TOKEN: z.string().optional(),
-    REDIS_URL: z.string().optional(),
+    REDIS_URL: z.string().url().optional(),
+    RATE_LIMIT_ENABLED: z.enum(['true', 'false']).default('true'),
+    RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+    RATE_LIMIT_AUTH_MAX: z.coerce.number().int().positive().default(20),
+    RATE_LIMIT_INTERNAL_MAX: z.coerce.number().int().positive().default(300),
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV === 'production' && value.JWT_SECRET.length < 32) {
@@ -39,6 +45,14 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['INTERNAL_API_TOKEN'],
         message: 'INTERNAL_API_TOKEN is required in production',
+      });
+    }
+
+    if (value.NODE_ENV === 'production' && value.RATE_LIMIT_ENABLED !== 'false' && !value.REDIS_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['REDIS_URL'],
+        message: 'REDIS_URL is required for production rate limiting',
       });
     }
   });

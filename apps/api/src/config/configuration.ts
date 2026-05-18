@@ -3,6 +3,7 @@ export const configuration = () => ({
     host: process.env.API_HOST ?? '0.0.0.0',
     port: Number(process.env.API_PORT ?? 8000),
     prefix: process.env.API_PREFIX ?? '/api/v1',
+    trustProxy: process.env.API_TRUST_PROXY === 'true',
     corsOrigins: (process.env.API_CORS_ORIGINS ?? 'http://localhost:5173,http://127.0.0.1:5173')
       .split(',')
       .map((origin) => origin.trim())
@@ -37,5 +38,13 @@ export const configuration = () => ({
   },
   internal: {
     apiToken: process.env.INTERNAL_API_TOKEN,
+  },
+  rateLimit: {
+    enabled: process.env.RATE_LIMIT_ENABLED !== 'false',
+    windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000),
+    max: Number(process.env.RATE_LIMIT_MAX ?? 120),
+    authMax: Number(process.env.RATE_LIMIT_AUTH_MAX ?? 20),
+    internalMax: Number(process.env.RATE_LIMIT_INTERNAL_MAX ?? 300),
+    redisUrl: process.env.REDIS_URL,
   },
 });

@@ -20,16 +20,19 @@ export class OrderPreviewSelectionDto {
   orderMode!: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0.01)
   amountUsd?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0.000001)
   size?: number;
 
   @ValidateIf((selection: OrderPreviewSelectionDto) => selection.orderMode === 'limit')
+  @Type(() => Number)
   @IsNumber()
   @Min(0.0001)
   @Max(1)

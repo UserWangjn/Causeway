@@ -50,7 +50,47 @@ Authorization: Bearer <accessToken>
 
 除公开市场浏览接口外，推演、脚本、订单、资产组合和内部接口都需要登录。内部接口还需要服务端内部 token 或后台网络访问控制。
 
-## 2. Auth
+限流：
+
+- 默认所有非健康检查接口都会被限流；`GET /health` 和 `GET /health/ready` 不参与限流，避免影响部署平台探活。
+- 默认按路由和调用身份计数。已登录请求优先使用用户或 bearer token 维度，未登录请求使用客户端 IP 维度。
+- Auth 接口、内部接口和普通 API 使用独立限流额度；生产环境必须配置 Redis 作为跨实例限流存储。
+- 响应头会返回 `X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset`。超过额度时返回 `429 RATE_LIMITED`，并包含 `Retry-After`。
+
+## 2. Health
+
+### `GET /health`
+
+公开 liveness endpoint，不访问数据库。
+
+响应：
+
+```ts
+type HealthResponse = {
+  ok: true;
+  service: "causeway-api";
+  timestamp: string;
+};
+```
+
+### `GET /health/ready`
+
+公开 readiness endpoint，用于部署平台判断服务是否可以接流量。该接口会执行数据库探活；数据库不可用时返回 `503 READINESS_FAILED`，错误响应不能泄漏连接串、密码或内部异常。
+
+响应：
+
+```ts
+type ReadinessResponse = {
+  ok: true;
+  service: "causeway-api";
+  checks: {
+    database: "ok";
+  };
+  timestamp: string;
+};
+```
+
+## 3. Auth
 
 ### `POST /auth/nonce`
 
@@ -103,7 +143,7 @@ Authorization: Bearer <accessToken>
 }
 ```
 
-## 3. Markets
+## 4. Markets
 
 ### `GET /markets`
 
@@ -200,7 +240,7 @@ type OrderBook = {
 };
 ```
 
-## 4. Market Network
+## 5. Market Network
 
 ### `GET /market-network`
 
@@ -235,7 +275,7 @@ type MarketNetwork = {
 };
 ```
 
-## 5. Inference
+## 6. Inference
 
 ### `POST /inference-runs`
 
@@ -260,11 +300,15 @@ type MarketNetwork = {
   "data": {
     "runId": "run_x",
     "status": "queued",
-    "cacheKey": "inf_x"
+    "cacheKey": "inf_x",
+    "cacheHit": false,
+    "scriptId": null
   },
   "requestId": "req_x"
 }
 ```
+
+说明：一期后端支持 `mock-causeway-v1` 本地 mock 推演模型，用于开发和测试完整脚本链路。该模式可能同步返回 `status="completed"` 和 `scriptId`。真实 AI provider 或持久 worker 未配置时，非 mock 模型必须返回 `503 CAPABILITY_UNAVAILABLE`，不允许伪造成真实 AI 成功或留下不可恢复的后台任务。
 
 ### `GET /inference-runs/:runId`
 
@@ -288,7 +332,7 @@ type InferenceRunStatus = {
 };
 ```
 
-## 6. Scripts
+## 7. Scripts
 
 ### `GET /scripts/:scriptId`
 
@@ -386,7 +430,7 @@ type ScriptMarket = {
 }
 ```
 
-## 7. Orders
+## 8. Orders
 
 订单接口必须在真实 CLOB 下单能力不可用时仍保持协议可用。前后端统一使用 `executionMode` 和 capability 状态：
 
@@ -438,7 +482,7 @@ type OrderPreview = {
   estimatedMaxPayout: number;
   estimatedMaxLoss: number;
   requiresSignature: boolean;
-  submitMode: "dry_run_no_signature" | "signed_clob_order";
+  submitMode: "dry_run_no_signature" | "signed_clob_order" | "unavailable";
   refreshedAt: string;
   expiresAt: string;
   orders: {
@@ -545,7 +589,7 @@ type OrderIntentDetail = {
 };
 ```
 
-## 8. Portfolio
+## 9. Portfolio
 
 ### `GET /portfolio/summary`
 
@@ -592,6 +636,24 @@ type Position = {
 };
 ```
 
+### `POST /portfolio/positions/sync`
+
+触发当前登录用户的钱包持仓同步。后端从 Polymarket Data API 拉取公开 positions 数据，按 `clobTokenId` 关联本地 outcome，按 `conditionId` 辅助关联 market。同步结果写入本地 `ExternalPosition`，读取接口仍然只读本地数据库。
+
+响应：
+
+```ts
+type PortfolioPositionsSyncResponse = {
+  runId: string;
+  status: "completed";
+  capability: "available" | "degraded" | "unavailable";
+  fetchedCount: number;
+  upsertedCount: number;
+  skippedCount: number;
+  deletedStaleCount: number;
+};
+```
+
 ### `GET /portfolio/orders`
 
 查询参数：
@@ -609,6 +671,8 @@ type PortfolioOrdersResponse = {
   capability: "available" | "degraded" | "unavailable";
   dataSource: "clob" | "local" | "stub";
   items: unknown[];
+  nextCursor: string | null;
+  hasMore: boolean;
   refreshedAt: string;
   error: string | null;
 };
@@ -630,12 +694,14 @@ type PortfolioTradesResponse = {
   capability: "available" | "degraded" | "unavailable";
   dataSource: "polymarket_data_api" | "clob" | "stub";
   items: unknown[];
+  nextCursor: string | null;
+  hasMore: boolean;
   refreshedAt: string;
   error: string | null;
 };
 ```
 
-## 9. Sync
+## 10. Sync
 
 ### `POST /internal/sync/polymarket`
 
@@ -654,7 +720,17 @@ type PortfolioTradesResponse = {
 
 查看同步任务历史。
 
-## 10. 错误码
+## 11. Monitor
+
+### `POST /internal/monitor/order-statuses/refresh`
+
+内部接口，触发订单状态刷新边界。真实 CLOB 状态刷新未接通前，该接口必须记录 `SyncRun.failed`，并返回 capability reason，不能伪造成成功刷新。
+
+### `POST /internal/monitor/script-markets/refresh`
+
+内部接口，触发脚本市场监控刷新边界。未接通真实刷新逻辑前，该接口必须记录 `SyncRun.failed`，并返回 capability reason。
+
+## 12. 错误码
 
 ```text
 AUTH_REQUIRED
@@ -668,6 +744,9 @@ INSUFFICIENT_CASH
 INVALID_TICK_SIZE
 BELOW_MIN_ORDER_SIZE
 ORDER_PREVIEW_EXPIRED
+ORDER_INTENT_NOT_SUBMITTABLE
+REQUEST_VALIDATION_FAILED
+READINESS_FAILED
 CAPABILITY_UNAVAILABLE
 USER_REJECTED_SIGNATURE
 SIGNATURE_EXPIRED

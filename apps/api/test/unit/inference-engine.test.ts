@@ -1,0 +1,251 @@
+import { describe, expect, it } from 'vitest';
+import {
+  buildInferenceCacheKey,
+  buildMockInferenceOutput,
+  validateAiInferenceOutput,
+} from '../../src/modules/inference/inference-engine';
+import type { AiInferenceOutput, InferenceMarketInput, InferencePromptInput } from '../../src/modules/inference/inference.types';
+
+describe('inference engine helpers', () => {
+  it('builds a stable cache key independent of object key ordering', () => {
+    const candidates = [candidateMarket('market_1', ['outcome_1', 'outcome_2'])];
+
+    expect(
+      buildInferenceCacheKey({
+        rootMarketId: 'root_market',
+        rootOutcomeId: 'root_outcome',
+        depth: 2,
+        maxMarketsPerLayer: 3,
+        confidenceThreshold: 0.55,
+        candidateMarkets: candidates,
+        model: 'mock-causeway-v1',
+      }),
+    ).toBe(
+      buildInferenceCacheKey({
+        model: 'mock-causeway-v1',
+        candidateMarkets: candidates,
+        confidenceThreshold: 0.55,
+        maxMarketsPerLayer: 3,
+        depth: 2,
+        rootOutcomeId: 'root_outcome',
+        rootMarketId: 'root_market',
+      }),
+    );
+  });
+
+  it('generates a complete mock output and validates candidate market/outcome references', () => {
+    const promptInput = inferencePromptInput();
+
+    const output = buildMockInferenceOutput(promptInput);
+
+    expect(output.nodes.length).toBeGreaterThan(1);
+    expect(output.nodes[1]?.outcomes).toHaveLength(promptInput.candidateMarkets[0]?.outcomes.length);
+    expect(() => validateAiInferenceOutput(output, promptInput)).not.toThrow();
+  });
+
+  it('rejects output that references unknown outcomes', () => {
+    const promptInput = inferencePromptInput();
+    const output = validInferenceOutput(promptInput);
+    output.nodes[1].outcomes = [
+      {
+        outcomeId: 'unknown_outcome',
+        outcomeLabel: 'Unknown',
+        aiAction: 'buy',
+        confidence: 0.8,
+        reason: 'bad',
+      },
+    ];
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output referenced an unknown outcome');
+  });
+
+  it('rejects provider output that does not match the runtime schema', () => {
+    const promptInput = inferencePromptInput();
+    const output = validInferenceOutput(promptInput) as unknown as {
+      nodes: Array<{ outcomes: Array<{ aiAction: string }> }>;
+    };
+    output.nodes[1].outcomes[0].aiAction = 'sell';
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output schema is invalid');
+  });
+
+  it('rejects duplicate outcome recommendations', () => {
+    const promptInput = inferencePromptInput();
+    const output = validInferenceOutput(promptInput);
+    output.nodes[1].outcomes = [
+      { ...output.nodes[1].outcomes[0] },
+      { ...output.nodes[1].outcomes[0] },
+    ];
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow(
+      'AI output contains duplicate outcome recommendations',
+    );
+  });
+
+  it('rejects non-root nodes without an incoming edge', () => {
+    const promptInput = inferencePromptInput();
+    const output = validInferenceOutput(promptInput);
+    output.edges = [];
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow(
+      'AI output non-root nodes must have an incoming edge',
+    );
+  });
+
+  it('rejects edges that point backward across graph layers', () => {
+    const promptInput = inferencePromptInput();
+    const output = validInferenceOutput(promptInput);
+    output.edges.push({
+      sourceClientNodeId: 'candidate_1',
+      targetClientNodeId: 'root',
+      sourceOutcomeId: 'outcome_1',
+      targetOutcomeId: 'root_outcome',
+      relation: 'contradicts',
+      confidence: 0.7,
+      reason: 'backward edge',
+    });
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow(
+      'AI output edge must point from a lower layer to a higher layer',
+    );
+  });
+
+  it('rejects outputs that exceed maxMarketsPerLayer', () => {
+    const promptInput = {
+      ...inferencePromptInput(),
+      settings: {
+        depth: 2,
+        maxMarketsPerLayer: 1,
+        confidenceThreshold: 0.55,
+      },
+    };
+    const secondCandidate = promptInput.candidateMarkets[1];
+    const output = validInferenceOutput(promptInput);
+    output.nodes.push({
+      clientNodeId: 'candidate_2',
+      marketId: secondCandidate.marketId,
+      layer: 1,
+      confidence: 0.75,
+      impactDirection: 'supports',
+      reason: 'second candidate',
+      outcomes: secondCandidate.outcomes.map((outcome, index) => ({
+        outcomeId: outcome.outcomeId,
+        outcomeLabel: outcome.label,
+        aiAction: index === 0 ? 'buy' : 'avoid',
+        confidence: index === 0 ? 0.75 : 0.55,
+        reason: `recommendation ${index}`,
+      })),
+    });
+    output.edges.push({
+      sourceClientNodeId: 'root',
+      targetClientNodeId: 'candidate_2',
+      sourceOutcomeId: promptInput.root.selectedOutcome.outcomeId,
+      targetOutcomeId: secondCandidate.outcomes[0].outcomeId,
+      relation: 'supports',
+      confidence: 0.75,
+      reason: 'root to second candidate',
+    });
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output exceeds maxMarketsPerLayer');
+  });
+});
+
+function inferencePromptInput(): InferencePromptInput {
+  return {
+    root: {
+      marketId: 'root_market',
+      marketQuestion: 'Will the root event happen?',
+      selectedOutcome: {
+        outcomeId: 'root_outcome',
+        label: 'Yes',
+        tokenId: 'root_token',
+        price: 0.5,
+      },
+    },
+    settings: {
+      depth: 2,
+      maxMarketsPerLayer: 3,
+      confidenceThreshold: 0.55,
+    },
+    candidateMarkets: [
+      candidateMarket('market_1', ['outcome_1', 'outcome_2']),
+      candidateMarket('market_2', ['outcome_3', 'outcome_4']),
+    ],
+  };
+}
+
+function candidateMarket(marketId: string, outcomeIds: string[]): InferenceMarketInput {
+  return {
+    marketId,
+    eventTitle: 'Fixture Event',
+    question: `Question for ${marketId}?`,
+    description: null,
+    rules: null,
+    category: 'fixture',
+    tags: ['fixture'],
+    active: true,
+    closed: false,
+    acceptingOrders: true,
+    volume: 100,
+    liquidity: 50,
+    outcomes: outcomeIds.map((outcomeId, index) => ({
+      outcomeId,
+      label: index === 0 ? 'Yes' : 'No',
+      tokenId: `${outcomeId}_token`,
+      price: index === 0 ? 0.6 : 0.4,
+    })),
+  };
+}
+
+function validInferenceOutput(input: InferencePromptInput): AiInferenceOutput {
+  const candidate = input.candidateMarkets[0];
+  return {
+    summary: 'valid output',
+    warnings: [],
+    nodes: [
+      {
+        clientNodeId: 'root',
+        marketId: input.root.marketId,
+        layer: 0,
+        confidence: 1,
+        impactDirection: 'supports',
+        reason: 'root',
+        outcomes: [
+          {
+            outcomeId: input.root.selectedOutcome.outcomeId,
+            outcomeLabel: input.root.selectedOutcome.label,
+            aiAction: 'buy',
+            confidence: 1,
+            reason: 'root',
+          },
+        ],
+      },
+      {
+        clientNodeId: 'candidate_1',
+        marketId: candidate.marketId,
+        layer: 1,
+        confidence: 0.8,
+        impactDirection: 'supports',
+        reason: 'candidate',
+        outcomes: candidate.outcomes.map((outcome, index) => ({
+          outcomeId: outcome.outcomeId,
+          outcomeLabel: outcome.label,
+          aiAction: index === 0 ? 'buy' : 'avoid',
+          confidence: index === 0 ? 0.8 : 0.6,
+          reason: `recommendation ${index}`,
+        })),
+      },
+    ],
+    edges: [
+      {
+        sourceClientNodeId: 'root',
+        targetClientNodeId: 'candidate_1',
+        sourceOutcomeId: input.root.selectedOutcome.outcomeId,
+        targetOutcomeId: candidate.outcomes[0].outcomeId,
+        relation: 'supports',
+        confidence: 0.8,
+        reason: 'root to candidate',
+      },
+    ],
+  };
+}

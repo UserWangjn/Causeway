@@ -6,6 +6,7 @@ import { validateEnv } from './config/validate-env';
 import { DatabaseModule } from './database/database.module';
 import { AiIntegrationModule } from './integrations/ai/ai-integration.module';
 import { PolymarketIntegrationModule } from './integrations/polymarket/polymarket-integration.module';
+import { RateLimitModule } from './common/rate-limit/rate-limit.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
@@ -29,6 +30,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     DatabaseModule,
     PolymarketIntegrationModule,
     AiIntegrationModule,
+    RateLimitModule,
     HealthModule,
     AuthModule,
     WalletModule,
