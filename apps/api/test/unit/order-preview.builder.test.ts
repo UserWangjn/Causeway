@@ -55,4 +55,52 @@ describe('buildPreviewOrder', () => {
     expect(order.valid).toBe(false);
     expect(order.error).toBe('INVALID_TICK_SIZE');
   });
+
+  it('rejects inconsistent amount and size inputs', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'limit',
+        limitPrice: 0.25,
+        amountUsd: 10,
+        size: 10,
+      },
+      tradableContext,
+    );
+
+    expect(order.valid).toBe(false);
+    expect(order.error).toBe('REQUEST_VALIDATION_FAILED');
+  });
+
+  it('accepts amount and size inputs when they match the order price within currency precision', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'limit',
+        limitPrice: 0.25,
+        amountUsd: 10,
+        size: 40,
+      },
+      tradableContext,
+    );
+
+    expect(order.valid).toBe(true);
+    expect(order.amountUsd).toBe(10);
+    expect(order.size).toBe(40);
+  });
+
+  it('rejects limit-only order types on market orders', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'market',
+        amountUsd: 10,
+        orderType: 'GTC',
+      },
+      tradableContext,
+    );
+
+    expect(order.valid).toBe(false);
+    expect(order.error).toBe('REQUEST_VALIDATION_FAILED');
+  });
 });

@@ -1,6 +1,12 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
+import {
+  decodeOpaqueCursor,
+  encodeOpaqueCursor,
+  invalidPaginationCursor,
+  isRecord,
+} from '../../common/pagination/opaque-cursor';
 import { toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
 import { ClobClient } from '../../integrations/polymarket/services/clob.client';
@@ -81,11 +87,11 @@ export class MarketsService {
 
   async listMarkets(query: MarketQueryDto) {
     const limit = query.limit ?? 50;
+    const sort = normalizeMarketSort(query.sort);
+    const cursor = decodeMarketCursor(query.cursor, sort);
     const markets = await this.prisma.polymarketMarket.findMany({
-      where: this.buildWhere(query),
-      orderBy: this.buildOrderBy(query),
-      cursor: query.cursor ? { id: query.cursor } : undefined,
-      skip: query.cursor ? 1 : 0,
+      where: this.buildListMarketsWhere(query, cursor),
+      orderBy: this.buildOrderBy(sort),
       take: limit + 1,
       select: MARKET_LIST_SELECT,
     });
@@ -93,7 +99,7 @@ export class MarketsService {
 
     return {
       items: items.map((market) => this.formatMarketListItem(market)),
-      nextCursor: markets.length > limit ? items.at(-1)?.id ?? null : null,
+      nextCursor: markets.length > limit ? encodeMarketCursor(sort, items.at(-1)) : null,
       hasMore: markets.length > limit,
     };
   }
@@ -147,13 +153,29 @@ export class MarketsService {
     }
 
     const orderBook = await this.clobClient.getOrderBook(tokenId);
+    const tickSize = orderBook.tickSize ?? toNullableNumber(market.orderPriceMinTickSize);
+    const minOrderSize = orderBook.minOrderSize ?? toNullableNumber(market.orderMinSize);
+    if (tickSize == null || minOrderSize == null) {
+      throw new ApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'ORDERBOOK_UNAVAILABLE',
+        'Order book is missing required trading constraints',
+        {
+          marketId,
+          tokenId,
+          tickSize,
+          minOrderSize,
+        },
+      );
+    }
+
     return {
       marketId,
       tokenId,
       bids: orderBook.bids,
       asks: orderBook.asks,
-      tickSize: orderBook.tickSize ?? toNullableNumber(market.orderPriceMinTickSize),
-      minOrderSize: orderBook.minOrderSize ?? toNullableNumber(market.orderMinSize),
+      tickSize,
+      minOrderSize,
       negRisk: market.negRisk,
       refreshedAt: orderBook.refreshedAt,
     };
@@ -201,37 +223,54 @@ export class MarketsService {
 
   private buildWhere(query: MarketQueryDto, options: { includeCategory?: boolean } = {}): Prisma.PolymarketMarketWhereInput {
     const includeCategory = options.includeCategory ?? true;
+    const search = trimToUndefined(query.q);
+    const category = trimToUndefined(query.category);
     return {
       active: parseBoolean(query.active),
       closed: parseBoolean(query.closed),
-      OR: query.q
+      OR: search
         ? [
-            { question: { contains: query.q, mode: 'insensitive' } },
-            { slug: { contains: query.q, mode: 'insensitive' } },
-            { description: { contains: query.q, mode: 'insensitive' } },
+            { question: { contains: search, mode: 'insensitive' } },
+            { slug: { contains: search, mode: 'insensitive' } },
+            { description: { contains: search, mode: 'insensitive' } },
           ]
         : undefined,
-      event: includeCategory && query.category
+      event: includeCategory && category
         ? {
             tags: {
-              array_contains: [query.category],
+              array_contains: [category],
             },
           }
         : undefined,
     };
   }
 
+  private buildListMarketsWhere(
+    query: MarketQueryDto,
+    cursor: DecodedMarketCursor | null,
+  ): Prisma.PolymarketMarketWhereInput {
+    const base = this.buildWhere(query);
+    if (!cursor) return base;
+    return {
+      AND: [
+        base,
+        buildMarketCursorWhere(cursor),
+      ],
+    };
+  }
+
   private buildNetworkNodeWhere(query: MarketQueryDto): Prisma.MarketNetworkNodeWhereInput {
+    const category = trimToUndefined(query.category);
     return {
       market: this.buildWhere(query, { includeCategory: false }),
-      OR: query.category
+      OR: category
         ? [
-            { category: query.category },
+            { category },
             {
               market: {
                 event: {
                   tags: {
-                    array_contains: [query.category],
+                    array_contains: [category],
                   },
                 },
               },
@@ -241,10 +280,10 @@ export class MarketsService {
     };
   }
 
-  private buildOrderBy(query: MarketQueryDto): Prisma.PolymarketMarketOrderByWithRelationInput[] {
-    if (query.sort === 'endDate') return [{ endDate: 'asc' }, { id: 'asc' }];
-    if (query.sort === 'volume') return [{ volume: 'desc' }, { id: 'asc' }];
-    if (query.sort === 'volume24hr') return [{ volume24hr: 'desc' }, { id: 'asc' }];
+  private buildOrderBy(sort: MarketSort): Prisma.PolymarketMarketOrderByWithRelationInput[] {
+    if (sort === 'endDate') return [{ endDate: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }];
+    if (sort === 'volume') return [{ volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }];
+    if (sort === 'volume24hr') return [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }];
     return [{ syncedAt: 'desc' }, { id: 'asc' }];
   }
 
@@ -342,8 +381,11 @@ export class MarketsService {
       where: {
         eventId: market.eventId,
         id: { not: market.id },
+        active: true,
+        closed: false,
+        archived: false,
       },
-      orderBy: [{ volume24hr: 'desc' }, { id: 'asc' }],
+      orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
       take: 6,
       select: MARKET_LIST_SELECT,
     });
@@ -356,6 +398,149 @@ function parseBoolean(value: string | undefined): boolean | undefined {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return undefined;
+}
+
+type MarketSort = 'volume' | 'volume24hr' | 'endDate' | 'syncedAt';
+
+type DecodedMarketCursor = {
+  sort: MarketSort;
+  id: string;
+  value: string | null;
+};
+
+function normalizeMarketSort(sort: string | undefined): MarketSort {
+  if (sort === 'volume' || sort === 'volume24hr' || sort === 'endDate' || sort === 'syncedAt') {
+    return sort;
+  }
+  return 'syncedAt';
+}
+
+function encodeMarketCursor(sort: MarketSort, market: MarketListRecord | undefined): string | null {
+  if (!market) return null;
+  return encodeOpaqueCursor({
+    v: 1,
+    scope: 'markets',
+    sort,
+    id: market.id,
+    value: readMarketCursorValue(sort, market),
+  });
+}
+
+function decodeMarketCursor(cursor: string | undefined, expectedSort: MarketSort): DecodedMarketCursor | null {
+  if (!cursor) return null;
+  const decoded = decodeOpaqueCursor(cursor);
+  if (
+    !isRecord(decoded)
+    || decoded.v !== 1
+    || decoded.scope !== 'markets'
+    || decoded.sort !== expectedSort
+    || typeof decoded.id !== 'string'
+    || !isValidMarketCursorValue(expectedSort, decoded.value)
+  ) {
+    throw invalidPaginationCursor();
+  }
+
+  return {
+    sort: expectedSort,
+    id: decoded.id,
+    value: decoded.value,
+  };
+}
+
+function buildMarketCursorWhere(cursor: DecodedMarketCursor): Prisma.PolymarketMarketWhereInput {
+  if (cursor.sort === 'volume') return decimalDescCursorWhere('volume', cursor);
+  if (cursor.sort === 'volume24hr') return decimalDescCursorWhere('volume24hr', cursor);
+  if (cursor.sort === 'endDate') return nullableDateAscCursorWhere('endDate', cursor);
+  return dateDescCursorWhere('syncedAt', cursor);
+}
+
+function decimalDescCursorWhere(
+  field: 'volume' | 'volume24hr',
+  cursor: DecodedMarketCursor,
+): Prisma.PolymarketMarketWhereInput {
+  if (cursor.value == null) {
+    return {
+      AND: [
+        { [field]: null },
+        { id: { gt: cursor.id } },
+      ],
+    };
+  }
+
+  return {
+    OR: [
+      { [field]: { lt: cursor.value } },
+      { [field]: null },
+      {
+        AND: [
+          { [field]: cursor.value },
+          { id: { gt: cursor.id } },
+        ],
+      },
+    ],
+  };
+}
+
+function nullableDateAscCursorWhere(
+  field: 'endDate',
+  cursor: DecodedMarketCursor,
+): Prisma.PolymarketMarketWhereInput {
+  if (cursor.value == null) {
+    return {
+      AND: [
+        { [field]: null },
+        { id: { gt: cursor.id } },
+      ],
+    };
+  }
+  const value = new Date(cursor.value);
+  return {
+    OR: [
+      { [field]: { gt: value } },
+      { [field]: null },
+      {
+        AND: [
+          { [field]: value },
+          { id: { gt: cursor.id } },
+        ],
+      },
+    ],
+  };
+}
+
+function dateDescCursorWhere(field: 'syncedAt', cursor: DecodedMarketCursor): Prisma.PolymarketMarketWhereInput {
+  if (cursor.value == null) throw invalidPaginationCursor();
+  const value = new Date(cursor.value);
+  return {
+    OR: [
+      { [field]: { lt: value } },
+      {
+        AND: [
+          { [field]: value },
+          { id: { gt: cursor.id } },
+        ],
+      },
+    ],
+  };
+}
+
+function readMarketCursorValue(sort: MarketSort, market: MarketListRecord): string | null {
+  if (sort === 'endDate') return market.endDate?.toISOString() ?? null;
+  if (sort === 'syncedAt') return market.syncedAt.toISOString();
+  const value = sort === 'volume' ? market.volume : market.volume24hr;
+  return value == null ? null : String(value);
+}
+
+function isValidMarketCursorValue(sort: MarketSort, value: unknown): value is string | null {
+  if (value == null) return sort !== 'syncedAt';
+  if (typeof value !== 'string') return false;
+  if (sort === 'endDate' || sort === 'syncedAt') return !Number.isNaN(new Date(value).getTime());
+  return Number.isFinite(Number(value));
+}
+
+function trimToUndefined(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function firstNumber(...values: unknown[]): number | null {

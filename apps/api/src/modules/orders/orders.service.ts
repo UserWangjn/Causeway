@@ -104,6 +104,7 @@ export class OrdersService {
       await tx.auditEvent.create({
         data: {
           userId: user.id,
+          ...auditRequestId(user),
           actorType: 'user',
           entityType: 'order_intent',
           entityId: createdIntent.id,
@@ -222,7 +223,7 @@ export class OrdersService {
     }
 
     try {
-      return await this.submitDryRun(user.id, intent, dto.idempotencyKey, requestHash);
+      return await this.submitDryRun(user.id, user.requestId, intent, dto.idempotencyKey, requestHash);
     } catch (error) {
       if (!isUniqueConstraintError(error)) {
         throw error;
@@ -261,6 +262,7 @@ export class OrdersService {
 
   private async submitDryRun(
     userId: string,
+    requestId: string | undefined,
     intent: LoadedOrderIntent,
     idempotencyKey: string,
     requestHash: string,
@@ -328,6 +330,7 @@ export class OrdersService {
       await tx.auditEvent.create({
         data: {
           userId,
+          ...(requestId ? { requestId } : {}),
           actorType: 'user',
           entityType: 'order_intent',
           entityId: intent.id,
@@ -421,6 +424,10 @@ export class OrdersService {
     }
     return intent;
   }
+}
+
+function auditRequestId(user: CurrentUser): { requestId: string } | Record<string, never> {
+  return user.requestId ? { requestId: user.requestId } : {};
 }
 
 type LoadedOrderIntent = Prisma.OrderIntentGetPayload<{

@@ -186,7 +186,7 @@ describe('ScriptsService', () => {
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
     } as unknown as PrismaService);
 
-    const result = await service.updateOutcomeSelection(currentUser(), 'script_1', 'selection_1', {
+    const result = await service.updateOutcomeSelection(currentUser('req_script_1'), 'script_1', 'selection_1', {
       userAction: 'buy',
       orderMode: 'limit',
       limitPrice: 0.42,
@@ -205,6 +205,7 @@ describe('ScriptsService', () => {
     expect(auditCreate).toHaveBeenCalledWith({
       data: {
         userId: 'user_1',
+        requestId: 'req_script_1',
         actorType: 'user',
         entityType: 'script_outcome_selection',
         entityId: 'selection_1',
@@ -343,10 +344,11 @@ describe('ScriptsService', () => {
   });
 });
 
-function currentUser(): CurrentUser {
+function currentUser(requestId?: string): CurrentUser {
   return {
     id: 'user_1',
     walletAddress: '0x1111111111111111111111111111111111111111',
     chainId: 137,
+    requestId,
   };
 }

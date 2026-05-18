@@ -16,6 +16,7 @@ type JwtPayload = {
 
 type RequestWithAuth = {
   headers: Record<string, string | string[] | undefined>;
+  requestId?: string;
   user?: CurrentUser;
 };
 
@@ -91,6 +92,7 @@ export class AuthGuard implements CanActivate {
       id: user.id,
       walletAddress: user.walletAddress,
       chainId: payload.chainId,
+      requestId: request.requestId,
     };
 
     return true;

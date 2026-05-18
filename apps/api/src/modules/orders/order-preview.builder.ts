@@ -1,6 +1,8 @@
 import { roundCurrency, roundShares, toNullableNumber } from '../../common/utils/number.util';
 import type { OrderPreviewSelectionDto } from './dto/order-preview.dto';
 
+const AMOUNT_SIZE_TOLERANCE_USD = 0.01;
+
 export type OrderPreviewContext = {
   market: {
     id: string;
@@ -72,6 +74,10 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
     errors.push('INVALID_TICK_SIZE');
   }
 
+  if (orderMode === 'market' && input.orderType != null) {
+    errors.push('REQUEST_VALIDATION_FAILED');
+  }
+
   if (input.amountUsd == null && input.size == null) {
     errors.push('REQUEST_VALIDATION_FAILED');
   }
@@ -79,6 +85,13 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
   const priceForSizing = estimatedFillPrice ?? limitPrice;
   const amountUsd = input.amountUsd ?? (input.size != null && priceForSizing != null ? input.size * priceForSizing : 0);
   const size = input.size ?? (input.amountUsd != null && priceForSizing != null && priceForSizing > 0 ? input.amountUsd / priceForSizing : 0);
+
+  if (input.amountUsd != null && input.size != null && priceForSizing != null) {
+    const impliedAmountUsd = roundCurrency(input.size * priceForSizing);
+    if (Math.abs(roundCurrency(input.amountUsd) - impliedAmountUsd) > AMOUNT_SIZE_TOLERANCE_USD) {
+      errors.push('REQUEST_VALIDATION_FAILED');
+    }
+  }
 
   if (amountUsd <= 0 || size <= 0) {
     errors.push('REQUEST_VALIDATION_FAILED');

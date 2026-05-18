@@ -52,3 +52,9 @@ npm run test:api
 Copy `apps/api/.env.example` to `apps/api/.env` before running the API locally.
 
 Integration tests require a dedicated PostgreSQL database. See `apps/api/test/README.md`.
+
+The Polymarket market sync scheduler is disabled by default. Enable it explicitly with
+`POLYMARKET_MARKET_SYNC_ENABLED=true`; it runs incremental market syncs using
+`POLYMARKET_MARKET_SYNC_INTERVAL_MS`, `POLYMARKET_MARKET_SYNC_LIMIT`,
+`POLYMARKET_MARKET_SYNC_LOCK_TTL_MS`, and optional `POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP=true`.
+Multiple API instances coordinate through the `SchedulerLock` table so only one instance runs the market sync at a time.

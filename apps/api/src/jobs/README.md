@@ -4,7 +4,7 @@ This folder is reserved for BullMQ processors or scheduled jobs.
 
 Initial job boundaries:
 
-- `polymarket-market-sync`
+- `polymarket-market-sync` (implemented as a default-disabled scheduler in `modules/polymarket-sync`, guarded by the `SchedulerLock` table)
 - `polymarket-price-refresh`
 - `inference-run`
 - `order-status-refresh`

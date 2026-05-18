@@ -49,6 +49,7 @@ export async function resetTestDatabase(prisma: PrismaClient): Promise<void> {
     prisma.polymarketEvent.deleteMany(),
     prisma.walletSession.deleteMany(),
     prisma.user.deleteMany(),
+    prisma.schedulerLock.deleteMany(),
     prisma.syncRun.deleteMany(),
   ]);
 }

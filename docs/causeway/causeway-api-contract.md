@@ -42,6 +42,8 @@ type Page<T> = {
 };
 ```
 
+`cursor` 必须使用上一页响应里的 `nextCursor` 原样回传。它是后端生成的 opaque cursor，前端不能解析、拼接或假设它等于数据库 id。
+
 鉴权：
 
 ```text
@@ -159,6 +161,8 @@ cursor
 limit
 ```
 
+`cursor` 为服务端返回的 opaque cursor，和当前 `sort` 绑定。切换 `q`、`category`、`active`、`closed` 或 `sort` 后必须丢弃旧 cursor，从第一页重新请求。
+
 响应：
 
 ```ts
@@ -239,6 +243,8 @@ type OrderBook = {
   refreshedAt: string;
 };
 ```
+
+`tickSize` 和 `minOrderSize` 是前端下单校验必需字段。CLOB 和本地缓存都无法提供这两个数值时，接口返回 `ORDERBOOK_UNAVAILABLE`，不能返回 `null`。
 
 ## 5. Market Network
 
@@ -470,6 +476,11 @@ type LimitOrderType = "GTC" | "GTD" | "FOK" | "FAK";
 响应：
 
 ```ts
+// Validation rules:
+// - Each selection must provide at least one of amountUsd or size.
+// - If both are provided, amountUsd must match size * price within USD cent precision.
+// - orderType is valid only for limit orders; market orders return orderType=null.
+// - minOrderSize is enforced against amountUsd.
 type OrderPreview = {
   intentId: string;
   executionMode: "dry_run" | "real";
@@ -598,7 +609,7 @@ type OrderIntentDetail = {
 ```ts
 type PortfolioSummary = {
   capability: "available" | "degraded" | "unavailable";
-  dataSource: "polymarket_data_api" | "clob" | "chain" | "stub";
+  dataSource: "polymarket_data_api" | "clob" | "chain" | "local" | "stub";
   cashAvailable: number | null;
   portfolioValue: number | null;
   openPositionsValue: number | null;
@@ -608,6 +619,8 @@ type PortfolioSummary = {
   error: string | null;
 };
 ```
+
+`openOrdersValue` 只统计已经提交但未完全结束的订单，例如 `submitted`、`partially_filled`。`preview_ready` 和 `user_confirming` 只代表预览或确认中，不能计入资产敞口。
 
 ### `GET /portfolio/positions`
 
@@ -635,6 +648,8 @@ type Position = {
   pnl: number | null;
 };
 ```
+
+如果最近一次持仓同步已成功且本地没有持仓，返回 `capability="available"`、`dataSource="polymarket_data_api"` 和空 `items`。如果尚未同步或最近同步失败，必须通过 `degraded/unavailable` 和 `error` 区分，不能把“空持仓”和“数据源不可用”混在一起。
 
 ### `POST /portfolio/positions/sync`
 
@@ -664,17 +679,64 @@ cursor
 limit
 ```
 
+`cursor` 为服务端返回的 opaque cursor，按 `createdAt desc, id asc` 稳定分页。
+
 响应结构同样使用 capability wrapper：
 
 ```ts
 type PortfolioOrdersResponse = {
   capability: "available" | "degraded" | "unavailable";
   dataSource: "clob" | "local" | "stub";
-  items: unknown[];
+  items: PortfolioOrderIntent[];
   nextCursor: string | null;
   hasMore: boolean;
   refreshedAt: string;
   error: string | null;
+};
+
+type PortfolioOrderIntent = {
+  intentId: string;
+  status:
+    | "draft"
+    | "preview_ready"
+    | "user_confirming"
+    | "dry_run_completed"
+    | "submitted"
+    | "partially_submitted"
+    | "failed"
+    | "cancelled";
+  executionMode: "dry_run" | "real";
+  totalAmountUsd: number | null;
+  createdAt: string;
+  updatedAt: string;
+  orders: PortfolioOrder[];
+};
+
+type PortfolioOrder = {
+  id: string;
+  marketId: string;
+  outcomeId: string;
+  clobTokenId: string;
+  side: "BUY";
+  orderMode: "market" | "limit";
+  orderType: "GTC" | "GTD" | "FOK" | "FAK" | null;
+  limitPrice: number | null;
+  estimatedFillPrice: number | null;
+  size: number | null;
+  amountUsd: number | null;
+  externalOrderId: string | null;
+  status: string;
+  errorMessage: string | null;
+  market: {
+    id: string;
+    slug: string;
+    question: string;
+  };
+  outcome: {
+    id: string;
+    label: string;
+    clobTokenId: string;
+  };
 };
 ```
 
@@ -687,17 +749,51 @@ cursor
 limit
 ```
 
+`cursor` 为服务端返回的 opaque cursor，按 `updatedAt desc, id asc` 稳定分页。
+
+当前真实成交历史源未接通时，接口返回本地已完成订单作为 degraded trade history。没有本地成交时也返回 `dataSource="local"` 的空分页，而不是 `stub/unavailable`。
+
 响应结构：
 
 ```ts
 type PortfolioTradesResponse = {
   capability: "available" | "degraded" | "unavailable";
-  dataSource: "polymarket_data_api" | "clob" | "stub";
-  items: unknown[];
+  dataSource: "polymarket_data_api" | "clob" | "local" | "stub";
+  items: PortfolioTrade[];
   nextCursor: string | null;
   hasMore: boolean;
   refreshedAt: string;
   error: string | null;
+};
+
+type PortfolioTrade = {
+  tradeId: string;
+  orderId: string;
+  intentId: string;
+  executionMode: "dry_run" | "real";
+  intentStatus: string;
+  marketId: string;
+  outcomeId: string;
+  tokenId: string;
+  side: "BUY";
+  orderMode: "market" | "limit";
+  orderType: "GTC" | "GTD" | "FOK" | "FAK" | null;
+  price: number | null;
+  size: number | null;
+  amountUsd: number | null;
+  externalOrderId: string | null;
+  status: string;
+  market: {
+    id: string;
+    slug: string;
+    question: string;
+  };
+  outcome: {
+    id: string;
+    label: string;
+    clobTokenId: string;
+  };
+  tradedAt: string;
 };
 ```
 
@@ -724,11 +820,44 @@ type PortfolioTradesResponse = {
 
 ### `POST /internal/monitor/order-statuses/refresh`
 
-内部接口，触发订单状态刷新边界。真实 CLOB 状态刷新未接通前，该接口必须记录 `SyncRun.failed`，并返回 capability reason，不能伪造成成功刷新。
+内部接口，触发订单状态刷新边界。当前实现按批扫描本地订单状态，先记录 `SyncRun.running`，结束时更新为 `completed` 或 `failed`；真实 CLOB 状态刷新未接通前不能伪造成 available 或外部状态已刷新。
+
+响应：
+```ts
+type OrderStatusRefreshResult = {
+  runId: string;
+  jobType: "order_status_refresh";
+  status: "completed" | "failed";
+  capability: "degraded" | "unavailable";
+  source: "local_order_state";
+  reason: string;
+  inspectedOrderCount: number;
+  batchCount: number;
+  statusCounts: Record<string, number>;
+  intentStatusCounts: Record<string, number>;
+  refreshableExternalOrderCount: number;
+  missingExternalOrderIdCount: number;
+};
+```
 
 ### `POST /internal/monitor/script-markets/refresh`
 
-内部接口，触发脚本市场监控刷新边界。未接通真实刷新逻辑前，该接口必须记录 `SyncRun.failed`，并返回 capability reason。
+内部接口，触发脚本市场监控刷新边界。当前实现按批扫描非 archived 脚本相关市场，基于本地 Polymarket 缓存为 market 和 outcome 写入 `MarketSnapshot`，先记录 `SyncRun.running`，结束时更新为 `completed` 或 `failed`；未接通真实外部刷新前不能伪造为 available。
+
+响应：
+```ts
+type ScriptMarketRefreshResult = {
+  runId: string;
+  jobType: "script_market_refresh";
+  status: "completed" | "failed";
+  capability: "degraded" | "unavailable";
+  source: "local_polymarket_cache";
+  reason: string;
+  refreshedScriptMarketCount: number;
+  snapshotCount: number;
+  batchCount: number;
+};
+```
 
 ## 12. 错误码
 

@@ -65,18 +65,26 @@ describe('PolymarketSyncService', () => {
 
     const result = await service.syncPolymarket({ scope: 'markets', mode: 'incremental', limit: 101 });
 
-    expect(getMarkets).toHaveBeenNthCalledWith(1, {
-      limit: 100,
-      offset: 0,
-      active: true,
-      closed: false,
-    });
-    expect(getMarkets).toHaveBeenNthCalledWith(2, {
-      limit: 1,
-      offset: 100,
-      active: true,
-      closed: false,
-    });
+    expect(getMarkets).toHaveBeenNthCalledWith(
+      1,
+      {
+        limit: 100,
+        offset: 0,
+        active: true,
+        closed: false,
+      },
+      { signal: undefined },
+    );
+    expect(getMarkets).toHaveBeenNthCalledWith(
+      2,
+      {
+        limit: 1,
+        offset: 100,
+        active: true,
+        closed: false,
+      },
+      { signal: undefined },
+    );
     expect(marketFindUnique).toHaveBeenNthCalledWith(1, {
       where: { externalMarketId: 'external_market_0' },
       select: { id: true },
@@ -155,6 +163,62 @@ describe('PolymarketSyncService', () => {
           slug: 'invalid-market',
         },
       ],
+    });
+  });
+
+  it('records fetched and upserted progress when sync fails after a partial write', async () => {
+    const getMarkets = vi.fn().mockResolvedValueOnce([gammaMarket(1), gammaMarket(2)]);
+    const syncRunCreate = vi.fn().mockResolvedValue({ id: 'sync_run_1' });
+    const syncRunUpdate = vi.fn<(input: SyncRunUpdateInput) => Promise<SyncRunUpdateResult>>().mockResolvedValue({
+      id: 'sync_run_1',
+      status: 'failed',
+      fetchedCount: 2,
+      upsertedCount: 1,
+    });
+    const marketCreate = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 'market-1' })
+      .mockRejectedValueOnce(new Error('database unavailable'));
+    const tx = {
+      polymarketMarket: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: marketCreate,
+        update: vi.fn(),
+      },
+      polymarketOutcome: {
+        upsert: vi.fn(),
+      },
+    };
+    const service = new PolymarketSyncService(
+      { getMarkets } as unknown as GammaClient,
+      {
+        syncRun: {
+          create: syncRunCreate,
+          update: syncRunUpdate,
+        },
+        $transaction: vi.fn((callback: TransactionCallback) => callback(tx)),
+      } as unknown as PrismaService,
+    );
+
+    await expect(service.syncPolymarket({ scope: 'markets', mode: 'incremental', limit: 2 })).rejects.toThrow(
+      'database unavailable',
+    );
+
+    expect(syncRunUpdate).toHaveBeenCalledWith({
+      where: { id: 'sync_run_1' },
+      data: {
+        status: 'failed',
+        finishedAt: expect.any(Date) as Date,
+        fetchedCount: 2,
+        upsertedCount: 1,
+        error: 'database unavailable',
+        metadata: {
+          mode: 'incremental',
+          pageSize: 100,
+          skippedCount: 0,
+          skippedPayloads: [],
+        },
+      },
     });
   });
 });

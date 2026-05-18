@@ -11,6 +11,13 @@ describe('validateEnv', () => {
     expect(env.NODE_ENV).toBe('development');
     expect(env.RATE_LIMIT_ENABLED).toBe('true');
     expect(env.RATE_LIMIT_MAX).toBe(120);
+    expect(env.LOG_LEVEL).toBe('log');
+    expect(env.LOG_HTTP_REQUESTS).toBe('true');
+    expect(env.POLYMARKET_MARKET_SYNC_ENABLED).toBe('false');
+    expect(env.POLYMARKET_MARKET_SYNC_INTERVAL_MS).toBe(300_000);
+    expect(env.POLYMARKET_MARKET_SYNC_LIMIT).toBe(1000);
+    expect(env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS).toBe(900_000);
+    expect(env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP).toBe('false');
   });
 
   it('requires Redis for production rate limiting', () => {
@@ -35,5 +42,32 @@ describe('validateEnv', () => {
 
     expect(env.RATE_LIMIT_ENABLED).toBe('false');
     expect(env.REDIS_URL).toBeUndefined();
+  });
+
+  it('rejects unsafe market sync scheduler settings', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        POLYMARKET_MARKET_SYNC_ENABLED: 'true',
+        POLYMARKET_MARKET_SYNC_INTERVAL_MS: '1000',
+      }),
+    ).toThrow(/POLYMARKET_MARKET_SYNC_INTERVAL_MS/);
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        POLYMARKET_MARKET_SYNC_LIMIT: '5000',
+      }),
+    ).toThrow(/POLYMARKET_MARKET_SYNC_LIMIT/);
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        POLYMARKET_MARKET_SYNC_LOCK_TTL_MS: '1000',
+      }),
+    ).toThrow(/POLYMARKET_MARKET_SYNC_LOCK_TTL_MS/);
   });
 });

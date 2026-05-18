@@ -34,7 +34,7 @@ type VerifyResponse = {
   };
 };
 
-const account = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945386dfe4d13a4382d72aeb5c7e596d8c33e');
+const account = privateKeyToAccount('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80');
 
 describe('auth e2e', () => {
   let app: INestApplication;
@@ -53,8 +53,8 @@ describe('auth e2e', () => {
   });
 
   afterAll(async () => {
-    await app.close();
-    await prisma.$disconnect();
+    await app?.close();
+    await prisma?.$disconnect();
   });
 
   it('creates a nonce, verifies a wallet signature, records session audit events, and authorizes a protected route', async () => {

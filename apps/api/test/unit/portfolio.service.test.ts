@@ -39,7 +39,7 @@ describe('PortfolioService', () => {
     expect(causewayOrderFindMany).toHaveBeenCalledWith({
       where: {
         orderIntent: { userId: 'user_1' },
-        status: { in: ['preview_ready', 'submitted', 'partially_filled'] },
+        status: { in: ['submitted', 'partially_filled'] },
       },
       select: { amountUsd: true },
     });
@@ -98,16 +98,38 @@ describe('PortfolioService', () => {
       },
     });
 
-    const result = await service.orders(currentUser(), { status: 'filled', cursor: 'intent_before', limit: 25 });
+    const result = await service.orders(currentUser(), {
+      status: 'filled',
+      cursor: encodeTestCursor({
+        v: 1,
+        scope: 'portfolio_orders',
+        id: 'intent_before',
+        timestamp: '2026-05-18T00:00:00.000Z',
+      }),
+      limit: 25,
+    });
 
     expect(orderIntentFindMany).toHaveBeenCalledWith({
       where: {
-        userId: 'user_1',
-        status: { in: [OrderIntentStatus.dry_run_completed] },
+        AND: [
+          {
+            userId: 'user_1',
+            status: { in: [OrderIntentStatus.dry_run_completed] },
+          },
+          {
+            OR: [
+              { createdAt: { lt: new Date('2026-05-18T00:00:00.000Z') } },
+              {
+                AND: [
+                  { createdAt: new Date('2026-05-18T00:00:00.000Z') },
+                  { id: { gt: 'intent_before' } },
+                ],
+              },
+            ],
+          },
+        ],
       },
-      orderBy: { createdAt: 'desc' },
-      cursor: { id: 'intent_before' },
-      skip: 1,
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       take: 26,
       include: {
         orders: {
@@ -146,6 +168,33 @@ describe('PortfolioService', () => {
         },
       ],
     });
+  });
+
+  it('treats user-confirming intents as open portfolio orders', async () => {
+    const orderIntentFindMany = vi.fn().mockResolvedValue([]);
+    const service = createService({
+      orderIntent: {
+        findMany: orderIntentFindMany,
+      },
+    });
+
+    await service.orders(currentUser(), { status: 'open', limit: 10 });
+
+    expect(orderIntentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          userId: 'user_1',
+          status: {
+            in: [
+              OrderIntentStatus.preview_ready,
+              OrderIntentStatus.user_confirming,
+              OrderIntentStatus.submitted,
+              OrderIntentStatus.partially_submitted,
+            ],
+          },
+        },
+      }),
+    );
   });
 
   it('returns positions in the public contract shape', async () => {
@@ -255,6 +304,46 @@ describe('PortfolioService', () => {
       dataSource: 'polymarket_data_api',
       items: [],
       error: 'some positions are not linked to local markets yet',
+    });
+  });
+
+  it('returns an available empty positions page after a completed position sync', async () => {
+    const externalPositionFindMany = vi.fn().mockResolvedValue([]);
+    const syncRunFindFirst = vi.fn().mockResolvedValue({
+      status: 'completed',
+      error: null,
+    });
+    const service = createService({
+      externalPosition: {
+        findMany: externalPositionFindMany,
+      },
+      syncRun: {
+        findFirst: syncRunFindFirst,
+      },
+    });
+
+    const result = await service.positions(currentUser());
+
+    expect(syncRunFindFirst).toHaveBeenCalledWith({
+      where: {
+        jobType: 'portfolio_positions_sync',
+        scope: 'portfolio_positions',
+        metadata: {
+          path: ['userId'],
+          equals: 'user_1',
+        },
+      },
+      orderBy: { startedAt: 'desc' },
+      select: {
+        status: true,
+        error: true,
+      },
+    });
+    expect(result).toMatchObject({
+      capability: 'available',
+      dataSource: 'polymarket_data_api',
+      items: [],
+      error: null,
     });
   });
 
@@ -490,18 +579,141 @@ describe('PortfolioService', () => {
     });
   });
 
-  it('returns an explicit unavailable trades capability with pagination fields', () => {
-    const service = createService({});
+  it('lists local completed orders as degraded trade history', async () => {
+    const causewayOrderFindMany = vi.fn().mockResolvedValue([
+      {
+        id: 'order_1',
+        orderIntentId: 'intent_1',
+        marketId: 'market_1',
+        outcomeId: 'outcome_1',
+        clobTokenId: 'token_1',
+        side: 'BUY',
+        orderMode: 'limit',
+        orderType: 'GTC',
+        limitPrice: '0.50',
+        estimatedFillPrice: '0.51',
+        size: '20',
+        amountUsd: '10.20',
+        externalOrderId: null,
+        status: 'dry_run_completed',
+        updatedAt: new Date('2026-05-18T00:02:00.000Z'),
+        orderIntent: {
+          id: 'intent_1',
+          executionMode: 'dry_run',
+          status: 'dry_run_completed',
+        },
+        market: {
+          id: 'market_1',
+          slug: 'market-one',
+          question: 'Will market one resolve Yes?',
+        },
+        outcome: {
+          id: 'outcome_1',
+          label: 'Yes',
+          clobTokenId: 'token_1',
+        },
+      },
+    ]);
+    const service = createService({
+      causewayOrder: {
+        findMany: causewayOrderFindMany,
+      },
+    });
 
-    const result = service.trades(currentUser(), { cursor: 'trade_before', limit: 10 });
+    const result = await service.trades(currentUser(), {
+      cursor: encodeTestCursor({
+        v: 1,
+        scope: 'portfolio_trades',
+        id: 'order_before',
+        timestamp: '2026-05-18T00:02:00.000Z',
+      }),
+      limit: 25,
+    });
+
+    expect(causewayOrderFindMany).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          {
+            orderIntent: { userId: 'user_1' },
+            status: { in: ['dry_run_completed', 'filled', 'partially_filled'] },
+          },
+          {
+            OR: [
+              { updatedAt: { lt: new Date('2026-05-18T00:02:00.000Z') } },
+              {
+                AND: [
+                  { updatedAt: new Date('2026-05-18T00:02:00.000Z') },
+                  { id: { gt: 'order_before' } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+      take: 26,
+      include: {
+        orderIntent: {
+          select: {
+            id: true,
+            executionMode: true,
+            status: true,
+          },
+        },
+        market: {
+          select: { id: true, slug: true, question: true },
+        },
+        outcome: {
+          select: { id: true, label: true, clobTokenId: true },
+        },
+      },
+    });
+    expect(result).toMatchObject({
+      capability: 'degraded',
+      dataSource: 'local',
+      nextCursor: null,
+      hasMore: false,
+      error: 'real trade history source is not wired yet; returning local completed orders',
+      items: [
+        {
+          tradeId: 'order_1',
+          orderId: 'order_1',
+          intentId: 'intent_1',
+          executionMode: 'dry_run',
+          price: 0.51,
+          size: 20,
+          amountUsd: 10.2,
+          status: 'dry_run_completed',
+          tradedAt: '2026-05-18T00:02:00.000Z',
+        },
+      ],
+    });
+  });
+
+  it('returns a local empty trades page when no local trades exist', async () => {
+    const service = createService({
+      causewayOrder: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    });
+
+    const result = await service.trades(currentUser(), {
+      cursor: encodeTestCursor({
+        v: 1,
+        scope: 'portfolio_trades',
+        id: 'trade_before',
+        timestamp: '2026-05-18T00:02:00.000Z',
+      }),
+      limit: 10,
+    });
 
     expect(result).toMatchObject({
-      capability: 'unavailable',
-      dataSource: 'stub',
+      capability: 'degraded',
+      dataSource: 'local',
       items: [],
       nextCursor: null,
       hasMore: false,
-      error: 'trades source is not wired yet',
+      error: 'real trade history source is not wired yet; returning local completed orders',
     });
   });
 });
@@ -517,6 +729,10 @@ function createService(prisma: unknown, dataApiOverrides: Partial<DataApiClient>
   } as unknown as DataApiClient;
 
   return new PortfolioService(dataApiClient, prisma as PrismaService);
+}
+
+function encodeTestCursor(payload: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
 function currentUser(): CurrentUser {

@@ -19,12 +19,15 @@ export class PolymarketSyncService {
     private readonly prisma: PrismaService,
   ) {}
 
-  async syncPolymarket(dto: SyncPolymarketDto) {
+  async syncPolymarket(dto: SyncPolymarketDto, options: { abortSignal?: AbortSignal } = {}) {
     const scope = dto.scope ?? 'markets';
     const mode = dto.mode ?? 'incremental';
     if (scope !== 'markets') {
       throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', `${scope} sync is not implemented yet`);
     }
+    let fetchedCount = 0;
+    let upsertedCount = 0;
+    let skippedPayloads: SkippedGammaPayload[] = [];
 
     const syncRun = await this.prisma.syncRun.create({
       data: {
@@ -36,23 +39,28 @@ export class PolymarketSyncService {
     });
 
     try {
-      const payloads = await this.fetchMarkets(dto.limit ?? 100, mode);
-      const { normalizedMarkets, skippedPayloads } = this.normalizePayloads(payloads);
+      throwIfSyncAborted(options.abortSignal);
+      const payloads = await this.fetchMarkets(dto.limit ?? 100, mode, options.abortSignal);
+      fetchedCount = payloads.length;
+      throwIfSyncAborted(options.abortSignal);
+      const normalizedResult = this.normalizePayloads(payloads);
+      skippedPayloads = normalizedResult.skippedPayloads;
 
-      let upsertedCount = 0;
-      for (const market of normalizedMarkets) {
-        await this.upsertMarket(market);
+      for (const market of normalizedResult.normalizedMarkets) {
+        throwIfSyncAborted(options.abortSignal);
+        await this.upsertMarket(market, options.abortSignal);
         upsertedCount += 1;
       }
+      throwIfSyncAborted(options.abortSignal);
 
       const completedRun = await this.prisma.syncRun.update({
         where: { id: syncRun.id },
         data: {
           status: 'completed',
           finishedAt: new Date(),
-          fetchedCount: payloads.length,
+          fetchedCount,
           upsertedCount,
-          cursor: String(payloads.length),
+          cursor: String(fetchedCount),
           metadata: toJson({
             mode,
             pageSize: this.pageSize,
@@ -77,7 +85,15 @@ export class PolymarketSyncService {
         data: {
           status: 'failed',
           finishedAt: new Date(),
+          fetchedCount,
+          upsertedCount,
           error: error instanceof Error ? error.message : String(error),
+          metadata: toJson({
+            mode,
+            pageSize: this.pageSize,
+            skippedCount: skippedPayloads.length,
+            skippedPayloads: skippedPayloads.slice(0, 50),
+          }),
         },
       });
       throw error;
@@ -129,18 +145,23 @@ export class PolymarketSyncService {
     return { normalizedMarkets, skippedPayloads };
   }
 
-  private async fetchMarkets(limit: number, mode: string) {
+  private async fetchMarkets(limit: number, mode: string, abortSignal?: AbortSignal) {
     const payloads: Record<string, unknown>[] = [];
 
     for (let offset = 0; payloads.length < limit; offset += this.pageSize) {
+      throwIfSyncAborted(abortSignal);
       const remaining = limit - payloads.length;
       const pageLimit = Math.min(this.pageSize, remaining);
-      const page = await this.gammaClient.getMarkets({
-        limit: pageLimit,
-        offset,
-        active: mode === 'incremental' ? true : undefined,
-        closed: false,
-      });
+      const page = await this.gammaClient.getMarkets(
+        {
+          limit: pageLimit,
+          offset,
+          active: mode === 'incremental' ? true : undefined,
+          closed: false,
+        },
+        { signal: abortSignal },
+      );
+      throwIfSyncAborted(abortSignal);
 
       payloads.push(...page);
       if (page.length < pageLimit) break;
@@ -149,8 +170,10 @@ export class PolymarketSyncService {
     return payloads;
   }
 
-  private async upsertMarket(market: NormalizedGammaMarket): Promise<void> {
+  private async upsertMarket(market: NormalizedGammaMarket, abortSignal?: AbortSignal): Promise<void> {
+    throwIfSyncAborted(abortSignal);
     await this.prisma.$transaction(async (tx) => {
+      throwIfSyncAborted(abortSignal);
       const syncedAt = new Date();
       const event = market.event
         ? await tx.polymarketEvent.upsert({
@@ -194,6 +217,7 @@ export class PolymarketSyncService {
             },
           })
         : null;
+      throwIfSyncAborted(abortSignal);
 
       const marketData = {
         eventId: event?.id ?? null,
@@ -236,6 +260,7 @@ export class PolymarketSyncService {
           });
 
       for (const outcome of market.outcomes) {
+        throwIfSyncAborted(abortSignal);
         await tx.polymarketOutcome.upsert({
           where: { clobTokenId: outcome.clobTokenId },
           update: {
@@ -330,4 +355,12 @@ function readStringField(payload: Record<string, unknown>, field: string): strin
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return null;
+}
+
+function throwIfSyncAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+  throw new Error(signal.reason ? String(signal.reason) : 'Polymarket sync aborted');
 }

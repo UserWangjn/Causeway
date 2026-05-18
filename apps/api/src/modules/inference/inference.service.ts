@@ -75,12 +75,13 @@ export class InferenceService {
       },
     });
 
-    return this.processRun(run.id, user.id, dto, root, promptInput, cacheKey);
+    return this.processRun(run.id, user.id, user.requestId, dto, root, promptInput, cacheKey);
   }
 
   private async processRun(
     runId: string,
     userId: string,
+    requestId: string | undefined,
     dto: CreateInferenceRunDto,
     root: LoadedRootMarket,
     promptInput: InferencePromptInput,
@@ -109,7 +110,7 @@ export class InferenceService {
         await this.storeInferenceCache(dto, promptInput, cacheKey, validatedOutput);
       }
 
-      const script = await this.persistScript(userId, runId, root, validatedOutput);
+      const script = await this.persistScript(userId, requestId, runId, root, validatedOutput);
       await this.prisma.inferenceRun.update({
         where: { id: runId },
         data: {
@@ -243,6 +244,7 @@ export class InferenceService {
 
   private async persistScript(
     userId: string,
+    requestId: string | undefined,
     runId: string,
     root: LoadedRootMarket,
     output: AiInferenceOutput,
@@ -310,6 +312,7 @@ export class InferenceService {
       await tx.auditEvent.create({
         data: {
           userId,
+          ...(requestId ? { requestId } : {}),
           actorType: 'system',
           entityType: 'causal_script',
           entityId: script.id,

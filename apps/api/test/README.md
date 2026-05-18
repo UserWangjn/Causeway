@@ -10,7 +10,8 @@ npm run test:api
 
 ## Integration Tests
 
-Integration tests require a dedicated PostgreSQL database. `NODE_ENV` must be `test`, and the database name must be exactly `causeway_test` or `causeway-test`; the helper rejects other names to reduce the chance of destructive cleanup against a development or production database.
+Integration tests require a dedicated PostgreSQL database. The test setup defaults `TEST_DATABASE_URL` to `postgresql://causeway:causeway@127.0.0.1:5432/causeway_test?schema=public`; override it when local credentials differ. `NODE_ENV` must be `test`, and the database name must be exactly `causeway_test` or `causeway-test`; the helper rejects other names to reduce the chance of destructive cleanup against a development or production database.
+Integration and e2e test files run serially because they share one test database and reset it between cases. If the suite grows enough to need parallel database tests, use one isolated schema or database per worker before enabling file parallelism.
 
 Example local setup:
 
@@ -37,7 +38,20 @@ The integration fixture creates:
 ## E2E Tests
 
 E2E tests should boot the Nest application through `test/support/e2e-app.ts` and mock external clients by default.
+Current e2e coverage includes wallet auth plus the local core workflow: market reads, mock inference, script reads/selection patch, order preview, dry-run submit, and idempotent submit replay.
 
 ```powershell
 npm run test:api:e2e
 ```
+
+## CI Coverage
+
+`.github/workflows/ci.yml` runs two lanes:
+
+- `quality`: install, Prisma client generation, Prisma schema validation, lint, unit tests, build, and dependency audit.
+- `database-tests`: PostgreSQL service, Prisma migrations, integration tests, and e2e tests.
+
+The CI database URL uses `causeway_test`, matching the safety check in `test/support/prisma-test-client.ts`.
+
+CI sets `LOG_LEVEL=log` and enables HTTP request logging by default. Local test env files can set
+`LOG_LEVEL=warn` and `LOG_HTTP_REQUESTS=false` to reduce noise while keeping the same structured logger path.

@@ -528,6 +528,16 @@ model SyncRun {
   @@index([status, startedAt(sort: Desc)])
 }
 
+model SchedulerLock {
+  name        String   @id
+  ownerId     String
+  lockedUntil DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([lockedUntil])
+}
+
 model AuditEvent {
   id         String   @id @default(uuid())
   userId     String?

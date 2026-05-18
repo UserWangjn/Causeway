@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feature/**
+      - features/**
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+  LOG_LEVEL: log
+  LOG_HTTP_REQUESTS: 'true'
+  POLYMARKET_MARKET_SYNC_ENABLED: 'false'
+  POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP: 'false'
+
+jobs:
+  quality:
+    name: Unit, lint, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Validate Prisma schema
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost:5432/causeway
+        run: npx --workspace @causeway/api prisma validate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:api
+
+      - name: Build
+        run: npm run build
+
+      - name: Dependency audit
+        run: npm audit --omit=dev
+
+  database-tests:
+    name: Integration and e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: causeway
+          POSTGRES_PASSWORD: causeway
+          POSTGRES_DB: causeway_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U causeway -d causeway_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      API_HOST: 127.0.0.1
+      API_PORT: 8001
+      API_PREFIX: /api/v1
+      API_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      DATABASE_URL: postgresql://causeway:causeway@127.0.0.1:5432/causeway_test?schema=public
+      TEST_DATABASE_URL: postgresql://causeway:causeway@127.0.0.1:5432/causeway_test?schema=public
+      JWT_SECRET: test-secret-change-me-32-characters
+      JWT_EXPIRES_IN: 1h
+      SUPPORTED_CHAIN_IDS: '137'
+      POLYMARKET_GAMMA_BASE_URL: https://gamma-api.polymarket.com
+      POLYMARKET_CLOB_BASE_URL: https://clob.polymarket.com
+      POLYMARKET_DATA_BASE_URL: https://data-api.polymarket.com
+      POLYMARKET_HTTP_TIMEOUT_MS: '1000'
+      POLYMARKET_HTTP_RETRIES: '0'
+      POLYMARKET_MARKET_SYNC_INTERVAL_MS: '300000'
+      POLYMARKET_MARKET_SYNC_LIMIT: '1000'
+      POLYMARKET_MARKET_SYNC_LOCK_TTL_MS: '900000'
+      ENABLE_REAL_ORDERS: 'false'
+      DRY_RUN: 'true'
+      INTERNAL_API_TOKEN: test-internal-token
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Deploy test database migrations
+        run: npm run db:deploy
+
+      - name: Integration tests
+        run: npm run test:api:integration
+
+      - name: E2E tests
+        run: npm run test:api:e2e

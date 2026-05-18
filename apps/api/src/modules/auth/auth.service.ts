@@ -21,7 +21,7 @@ export class AuthService {
     private readonly audit: AuditService,
   ) {}
 
-  async createNonce(dto: AuthNonceDto) {
+  async createNonce(dto: AuthNonceDto, requestId?: string) {
     this.assertSupportedChain(dto.chainId);
     const walletAddress = getAddress(dto.address);
     const now = new Date();
@@ -38,6 +38,7 @@ export class AuthService {
     });
     await this.safeAudit({
       userId: null,
+      requestId,
       actorType: 'wallet',
       entityType: 'wallet_session',
       entityId: session.id,
@@ -55,7 +56,7 @@ export class AuthService {
     };
   }
 
-  async verify(dto: AuthVerifyDto) {
+  async verify(dto: AuthVerifyDto, requestId?: string) {
     this.assertSupportedChain(dto.chainId);
     const walletAddress = getAddress(dto.address);
     const session = await this.prisma.walletSession.findFirst({
@@ -76,6 +77,7 @@ export class AuthService {
     if (!session) {
       await this.safeAudit({
         userId: null,
+        requestId,
         actorType: 'wallet',
         entityType: 'wallet',
         entityId: walletAddress,
@@ -97,6 +99,7 @@ export class AuthService {
     if (!verified) {
       await this.safeAudit({
         userId: session.userId,
+        requestId,
         actorType: 'wallet',
         entityType: 'wallet_session',
         entityId: session.id,
@@ -147,6 +150,7 @@ export class AuthService {
     if (consumed.count !== 1) {
       await this.safeAudit({
         userId: user.id,
+        requestId,
         actorType: 'wallet',
         entityType: 'wallet_session',
         entityId: session.id,
@@ -165,6 +169,7 @@ export class AuthService {
 
     await this.safeAudit({
       userId: user.id,
+      requestId,
       actorType: 'wallet',
       entityType: 'wallet_session',
       entityId: session.id,
@@ -220,6 +225,7 @@ export class AuthService {
 
   private async safeAudit(input: {
     userId?: string | null;
+    requestId?: string | null;
     actorType: string;
     entityType: string;
     entityId: string;

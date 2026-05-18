@@ -108,6 +108,7 @@ export class ScriptsService {
       await tx.auditEvent.create({
         data: {
           userId: user.id,
+          ...auditRequestId(user),
           actorType: 'user',
           entityType: 'script_outcome_selection',
           entityId: selectionId,
@@ -336,4 +337,8 @@ function assertSelectionState(state: SelectionState): void {
 
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
+function auditRequestId(user: CurrentUser): { requestId: string } | Record<string, never> {
+  return user.requestId ? { requestId: user.requestId } : {};
 }

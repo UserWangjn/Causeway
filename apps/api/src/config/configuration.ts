@@ -26,6 +26,13 @@ export const configuration = () => ({
     dataBaseUrl: process.env.POLYMARKET_DATA_BASE_URL ?? 'https://data-api.polymarket.com',
     httpTimeoutMs: Number(process.env.POLYMARKET_HTTP_TIMEOUT_MS ?? 10_000),
     httpRetries: Number(process.env.POLYMARKET_HTTP_RETRIES ?? 2),
+    marketSync: {
+      enabled: process.env.POLYMARKET_MARKET_SYNC_ENABLED === 'true',
+      intervalMs: Number(process.env.POLYMARKET_MARKET_SYNC_INTERVAL_MS ?? 300_000),
+      limit: Number(process.env.POLYMARKET_MARKET_SYNC_LIMIT ?? 1000),
+      lockTtlMs: Number(process.env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS ?? 900_000),
+      runOnStartup: process.env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP === 'true',
+    },
   },
   ai: {
     baseUrl: process.env.AI_BASE_URL,
@@ -38,6 +45,10 @@ export const configuration = () => ({
   },
   internal: {
     apiToken: process.env.INTERNAL_API_TOKEN,
+  },
+  logging: {
+    level: process.env.LOG_LEVEL ?? 'log',
+    httpRequests: process.env.LOG_HTTP_REQUESTS !== 'false',
   },
   rateLimit: {
     enabled: process.env.RATE_LIMIT_ENABLED !== 'false',

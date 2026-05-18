@@ -188,7 +188,7 @@ describe('OrdersService', () => {
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
     });
 
-    const result = await service.submit(currentUser(), dto);
+    const result = await service.submit(currentUser('req_order_1'), dto);
 
     expect(result).toMatchObject({
       intentId: dto.intentId,
@@ -223,6 +223,7 @@ describe('OrdersService', () => {
     expect(auditCreate).toHaveBeenCalledWith({
       data: {
         userId: 'user_1',
+        requestId: 'req_order_1',
         actorType: 'user',
         entityType: 'order_intent',
         entityId: dto.intentId,
@@ -423,11 +424,12 @@ function createService(
   return new OrdersService(clobClient, prisma as PrismaService);
 }
 
-function currentUser(): CurrentUser {
+function currentUser(requestId?: string): CurrentUser {
   return {
     id: 'user_1',
     walletAddress: '0x1111111111111111111111111111111111111111',
     chainId: 137,
+    requestId,
   };
 }
 

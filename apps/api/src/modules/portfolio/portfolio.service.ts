@@ -2,6 +2,12 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { OrderIntentStatus, Prisma } from '@prisma/client';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ApiException } from '../../common/errors/api.exception';
+import {
+  decodeOpaqueCursor,
+  encodeOpaqueCursor,
+  invalidPaginationCursor,
+  isRecord,
+} from '../../common/pagination/opaque-cursor';
 import { roundCurrency, toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
 import {
@@ -28,7 +34,7 @@ export class PortfolioService {
     const openOrders = await this.prisma.causewayOrder.findMany({
       where: {
         orderIntent: { userId: user.id },
-        status: { in: ['preview_ready', 'submitted', 'partially_filled'] },
+        status: { in: ['submitted', 'partially_filled'] },
       },
       select: { amountUsd: true },
     });
@@ -38,7 +44,7 @@ export class PortfolioService {
 
     return {
       capability: positions.length || openOrders.length ? 'degraded' : capability.status,
-      dataSource: positions.length ? 'polymarket_data_api' : 'stub',
+      dataSource: resolvePortfolioSummaryDataSource(positions.length, openOrders.length),
       cashAvailable: null,
       portfolioValue: openPositionsValue,
       openPositionsValue,
@@ -93,18 +99,38 @@ export class PortfolioService {
       ];
     });
     const hasUnresolvedPositions = items.length !== positions.length;
+    const latestSync = items.length || hasUnresolvedPositions ? null : await this.findLatestPositionSync(user.id);
+    const emptyPositionState = resolveEmptyPositionState(latestSync);
 
     return {
-      capability: items.length || hasUnresolvedPositions ? 'degraded' : 'unavailable',
-      dataSource: items.length || hasUnresolvedPositions ? 'polymarket_data_api' : 'stub',
+      capability: items.length || hasUnresolvedPositions ? 'degraded' : emptyPositionState.capability,
+      dataSource: items.length || hasUnresolvedPositions ? 'polymarket_data_api' : emptyPositionState.dataSource,
       items,
       refreshedAt: new Date().toISOString(),
       error: hasUnresolvedPositions
         ? 'some positions are not linked to local markets yet'
         : items.length
           ? 'external position sync is not fully automated yet'
-          : 'positions source is not wired yet',
+          : emptyPositionState.error,
     };
+  }
+
+  private findLatestPositionSync(userId: string) {
+    return this.prisma.syncRun.findFirst({
+      where: {
+        jobType: 'portfolio_positions_sync',
+        scope: 'portfolio_positions',
+        metadata: {
+          path: ['userId'],
+          equals: userId,
+        },
+      },
+      orderBy: { startedAt: 'desc' },
+      select: {
+        status: true,
+        error: true,
+      },
+    });
   }
 
   async syncPositions(user: CurrentUser) {
@@ -245,14 +271,11 @@ export class PortfolioService {
 
   async orders(user: CurrentUser, query: PortfolioOrdersQueryDto = {}) {
     const limit = query.limit ?? 50;
+    const cursor = decodeTimestampCursor(query.cursor, 'portfolio_orders');
+    const where = buildPortfolioOrdersWhere(user.id, query.status, cursor);
     const intents = await this.prisma.orderIntent.findMany({
-      where: {
-        userId: user.id,
-        status: query.status ? mapPortfolioOrderStatus(query.status) : undefined,
-      },
-      orderBy: { createdAt: 'desc' },
-      cursor: query.cursor ? { id: query.cursor } : undefined,
-      skip: query.cursor ? 1 : 0,
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       take: limit + 1,
       include: {
         orders: {
@@ -299,22 +322,79 @@ export class PortfolioService {
           outcome: order.outcome,
         })),
       })),
-      nextCursor: intents.length > limit ? items.at(-1)?.id ?? null : null,
+      nextCursor: intents.length > limit ? encodeTimestampCursor('portfolio_orders', items.at(-1)) : null,
       hasMore: intents.length > limit,
       refreshedAt: new Date().toISOString(),
       error: null,
     };
   }
 
-  trades(_user: CurrentUser, _query: PortfolioTradesQueryDto = {}) {
+  async trades(user: CurrentUser, query: PortfolioTradesQueryDto = {}) {
+    const limit = query.limit ?? 50;
+    const cursor = decodeTimestampCursor(query.cursor, 'portfolio_trades');
+    const where = buildPortfolioTradesWhere(user.id, cursor);
+    const orders = await this.prisma.causewayOrder.findMany({
+      where,
+      orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+      take: limit + 1,
+      include: {
+        orderIntent: {
+          select: {
+            id: true,
+            executionMode: true,
+            status: true,
+          },
+        },
+        market: {
+          select: { id: true, slug: true, question: true },
+        },
+        outcome: {
+          select: { id: true, label: true, clobTokenId: true },
+        },
+      },
+    });
+    const items = orders.slice(0, limit);
+
+    if (!items.length) {
+      return {
+        capability: 'degraded',
+        dataSource: 'local',
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+        refreshedAt: new Date().toISOString(),
+        error: 'real trade history source is not wired yet; returning local completed orders',
+      };
+    }
+
     return {
-      capability: 'unavailable',
-      dataSource: 'stub',
-      items: [],
-      nextCursor: null,
-      hasMore: false,
+      capability: 'degraded',
+      dataSource: 'local',
+      items: items.map((order) => ({
+        tradeId: order.id,
+        orderId: order.id,
+        intentId: order.orderIntentId,
+        executionMode: order.orderIntent.executionMode,
+        intentStatus: order.orderIntent.status,
+        marketId: order.marketId,
+        outcomeId: order.outcomeId,
+        tokenId: order.clobTokenId,
+        side: order.side,
+        orderMode: order.orderMode,
+        orderType: order.orderType,
+        price: firstNullableNumber(order.estimatedFillPrice, order.limitPrice),
+        size: toNullableNumber(order.size),
+        amountUsd: toNullableNumber(order.amountUsd),
+        externalOrderId: order.externalOrderId,
+        status: order.status,
+        market: order.market,
+        outcome: order.outcome,
+        tradedAt: order.updatedAt.toISOString(),
+      })),
+      nextCursor: orders.length > limit ? encodeTimestampCursor('portfolio_trades', items.at(-1)) : null,
+      hasMore: orders.length > limit,
       refreshedAt: new Date().toISOString(),
-      error: 'trades source is not wired yet',
+      error: 'real trade history source is not wired yet; returning local completed orders',
     };
   }
 }
@@ -373,10 +453,159 @@ function sumNullable(values: unknown[]): number | null {
   return roundCurrency(numbers.reduce((sum, value) => sum + value, 0));
 }
 
+function firstNullableNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = toNullableNumber(value);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+function resolvePortfolioSummaryDataSource(positionCount: number, openOrderCount: number): 'polymarket_data_api' | 'local' | 'stub' {
+  if (positionCount > 0) return 'polymarket_data_api';
+  if (openOrderCount > 0) return 'local';
+  return 'stub';
+}
+
+function resolveEmptyPositionState(latestSync: { status: string; error: string | null } | null): {
+  capability: 'available' | 'degraded' | 'unavailable';
+  dataSource: 'polymarket_data_api' | 'stub';
+  error: string | null;
+} {
+  if (latestSync?.status === 'completed') {
+    return {
+      capability: 'available',
+      dataSource: 'polymarket_data_api',
+      error: null,
+    };
+  }
+  if (latestSync?.status === 'failed') {
+    return {
+      capability: 'unavailable',
+      dataSource: 'stub',
+      error: latestSync.error ?? 'positions sync failed',
+    };
+  }
+  return {
+    capability: 'degraded',
+    dataSource: 'stub',
+    error: 'positions have not been synced yet',
+  };
+}
+
+type TimestampCursorScope = 'portfolio_orders' | 'portfolio_trades';
+
+type TimestampCursorRecord = {
+  id: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+};
+
+type DecodedTimestampCursor = {
+  id: string;
+  timestamp: Date;
+};
+
+function buildPortfolioOrdersWhere(
+  userId: string,
+  status: string | undefined,
+  cursor: DecodedTimestampCursor | null,
+): Prisma.OrderIntentWhereInput {
+  const base: Prisma.OrderIntentWhereInput = {
+    userId,
+    status: status ? mapPortfolioOrderStatus(status) : undefined,
+  };
+  if (!cursor) return base;
+
+  return {
+    AND: [
+      base,
+      {
+        OR: [
+          { createdAt: { lt: cursor.timestamp } },
+          {
+            AND: [
+              { createdAt: cursor.timestamp },
+              { id: { gt: cursor.id } },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function buildPortfolioTradesWhere(userId: string, cursor: DecodedTimestampCursor | null): Prisma.CausewayOrderWhereInput {
+  const base: Prisma.CausewayOrderWhereInput = {
+    orderIntent: { userId },
+    status: { in: ['dry_run_completed', 'filled', 'partially_filled'] },
+  };
+  if (!cursor) return base;
+
+  return {
+    AND: [
+      base,
+      {
+        OR: [
+          { updatedAt: { lt: cursor.timestamp } },
+          {
+            AND: [
+              { updatedAt: cursor.timestamp },
+              { id: { gt: cursor.id } },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function encodeTimestampCursor(scope: TimestampCursorScope, record: TimestampCursorRecord | undefined): string | null {
+  if (!record) return null;
+  const timestamp = scope === 'portfolio_orders' ? record.createdAt : record.updatedAt;
+  if (!timestamp) return null;
+
+  return encodeOpaqueCursor({
+    v: 1,
+    scope,
+    id: record.id,
+    timestamp: timestamp.toISOString(),
+  });
+}
+
+function decodeTimestampCursor(cursor: string | undefined, expectedScope: TimestampCursorScope): DecodedTimestampCursor | null {
+  if (!cursor) return null;
+  const decoded = decodeOpaqueCursor(cursor);
+  if (
+    !isRecord(decoded)
+    || decoded.v !== 1
+    || decoded.scope !== expectedScope
+    || typeof decoded.id !== 'string'
+    || typeof decoded.timestamp !== 'string'
+  ) {
+    throw invalidPaginationCursor();
+  }
+
+  const timestamp = new Date(decoded.timestamp);
+  if (Number.isNaN(timestamp.getTime())) {
+    throw invalidPaginationCursor();
+  }
+
+  return {
+    id: decoded.id,
+    timestamp,
+  };
+}
+
 function mapPortfolioOrderStatus(status: string): Prisma.EnumOrderIntentStatusFilter<'OrderIntent'> | undefined {
   if (status === 'open') {
     return {
-      in: [OrderIntentStatus.preview_ready, OrderIntentStatus.submitted, OrderIntentStatus.partially_submitted],
+      in: [
+        OrderIntentStatus.preview_ready,
+        OrderIntentStatus.user_confirming,
+        OrderIntentStatus.submitted,
+        OrderIntentStatus.partially_submitted,
+      ],
     };
   }
   if (status === 'filled') return { in: [OrderIntentStatus.dry_run_completed] };
