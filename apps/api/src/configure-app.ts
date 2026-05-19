@@ -60,7 +60,7 @@ export function configureApp(app: INestApplication, config: ConfigService): void
         callback(null, true);
         return;
       }
-      callback(new Error('CORS origin is not allowed'), false);
+      callback(null, false);
     },
     credentials: true,
   });

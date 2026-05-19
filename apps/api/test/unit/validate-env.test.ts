@@ -27,9 +27,41 @@ describe('validateEnv', () => {
     expect(env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS).toBe(900_000);
     expect(env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP).toBe('false');
     expect(env.POLYMARKET_CLOB_SIGNATURE_TYPE).toBe(2);
+    expect(env.POLYMARKET_RELAYER_BASE_URL).toBe('https://relayer-v2.polymarket.com');
     expect(env.OUTBOUND_PROXY_URL).toBeUndefined();
+    expect(env.AUTH_SIWE_URI).toBeUndefined();
+    expect(env.AUTH_SIWE_STATEMENT).toBe('Sign in to Causeway.');
+    expect(env.AUTH_POLYGON_RPC_URL).toBeUndefined();
     expect(env.AI_HTTP_TIMEOUT_MS).toBe(30_000);
     expect(env.AI_MAX_OUTPUT_TOKENS).toBe(4_000);
+  });
+
+  it('validates SIWE frontend and Polygon RPC URLs', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+      JWT_SECRET: 'dev-secret',
+      AUTH_SIWE_URI: 'http://localhost:5173',
+      AUTH_POLYGON_RPC_URL: 'http://127.0.0.1:8545',
+    });
+
+    expect(env.AUTH_SIWE_URI).toBe('http://localhost:5173');
+    expect(env.AUTH_POLYGON_RPC_URL).toBe('http://127.0.0.1:8545');
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        AUTH_SIWE_URI: 'http://example.com',
+      }),
+    ).toThrow(/AUTH_SIWE_URI/);
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        AUTH_POLYGON_RPC_URL: 'http://polygon.example.com',
+      }),
+    ).toThrow(/AUTH_POLYGON_RPC_URL/);
   });
 
   it('accepts http or https outbound proxy URLs and host:port shorthand', () => {

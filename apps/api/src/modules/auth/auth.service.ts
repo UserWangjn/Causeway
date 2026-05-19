@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger, UnauthorizedException, UnprocessableEntityException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
-import { getAddress, verifyMessage } from 'viem';
+import { createPublicClient, getAddress, http, verifyMessage, type Hex } from 'viem';
+import { polygon } from 'viem/chains';
+import { createSiweMessage, generateSiweNonce, parseSiweMessage, verifySiweMessage } from 'viem/siwe';
+import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuditService } from '../audit/audit.service';
 import { addAuthDuration } from '../../common/utils/duration.util';
 import { hashToken } from '../../common/utils/token-hash.util';
@@ -10,9 +12,15 @@ import { PrismaService } from '../../database/prisma.service';
 import { AuthNonceDto } from './dto/auth-nonce.dto';
 import { AuthVerifyDto } from './dto/auth-verify.dto';
 
+type AuthRequestContext = {
+  origin?: string | null;
+  requestId?: string | null;
+};
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+  private readonly publicClients = new Map<number, ReturnType<typeof createPublicClient>>();
 
   constructor(
     @Inject(ConfigService)
@@ -25,12 +33,24 @@ export class AuthService {
     private readonly audit: AuditService,
   ) {}
 
-  async createNonce(dto: AuthNonceDto, requestId?: string) {
+  async createNonce(dto: AuthNonceDto, context: AuthRequestContext = {}) {
     this.assertSupportedChain(dto.chainId);
     const walletAddress = getAddress(dto.address);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
-    const nonce = this.buildSignInMessage(walletAddress, dto.chainId, now);
+    const siweUrl = this.resolveSiweUrl(context.origin);
+    const nonce = createSiweMessage({
+      address: walletAddress,
+      chainId: dto.chainId,
+      domain: siweUrl.host,
+      expirationTime: expiresAt,
+      issuedAt: now,
+      nonce: generateSiweNonce(),
+      requestId: context.requestId ?? undefined,
+      statement: this.config.get<string>('auth.siweStatement', 'Sign in to Causeway.'),
+      uri: siweUrl.toString(),
+      version: '1',
+    });
 
     const session = await this.prisma.walletSession.create({
       data: {
@@ -42,7 +62,7 @@ export class AuthService {
     });
     await this.safeAudit({
       userId: null,
-      requestId,
+      requestId: context.requestId,
       actorType: 'wallet',
       entityType: 'wallet_session',
       entityId: session.id,
@@ -50,6 +70,7 @@ export class AuthService {
       after: {
         walletAddress,
         chainId: dto.chainId,
+        domain: siweUrl.host,
         expiresAt: expiresAt.toISOString(),
       },
     });
@@ -98,7 +119,33 @@ export class AuthService {
       });
     }
 
-    const verified = await this.verifyWalletSignature(walletAddress, dto.message, dto.signature);
+    let siweMessage: { domain: string; nonce: string };
+    try {
+      siweMessage = this.parseAndAssertSiweMessage(dto.message, walletAddress, dto.chainId);
+    } catch (error) {
+      await this.safeAudit({
+        userId: session.userId,
+        requestId,
+        actorType: 'wallet',
+        entityType: 'wallet_session',
+        entityId: session.id,
+        action: 'auth.verify_failed',
+        reason: 'invalid_siwe_message',
+        after: {
+          walletAddress,
+          chainId: dto.chainId,
+        },
+      });
+      throw error;
+    }
+    const verified = await this.verifyWalletSignature({
+      chainId: dto.chainId,
+      domain: siweMessage.domain,
+      message: dto.message,
+      nonce: siweMessage.nonce,
+      signature: dto.signature,
+      walletAddress,
+    });
 
     if (!verified) {
       await this.safeAudit({
@@ -186,6 +233,7 @@ export class AuthService {
 
     return {
       accessToken,
+      expiresAt: sessionExpiresAt.toISOString(),
       user: {
         id: user.id,
         walletAddress: user.walletAddress,
@@ -193,15 +241,39 @@ export class AuthService {
     };
   }
 
-  private buildSignInMessage(walletAddress: string, chainId: number, issuedAt: Date): string {
-    return [
-      'Sign in to Causeway',
-      '',
-      `Address: ${walletAddress}`,
-      `Chain ID: ${chainId}`,
-      `Nonce: ${randomUUID()}`,
-      `Issued At: ${issuedAt.toISOString()}`,
-    ].join('\n');
+  async logout(user: CurrentUser, accessToken: string, requestId?: string) {
+    const loggedOutAt = new Date();
+    const revoked = await this.prisma.walletSession.updateMany({
+      where: {
+        id: user.sessionId,
+        userId: user.id,
+        sessionTokenHash: hashToken(accessToken),
+        sessionExpiresAt: {
+          gt: loggedOutAt,
+        },
+      },
+      data: {
+        sessionExpiresAt: loggedOutAt,
+      },
+    });
+
+    await this.safeAudit({
+      userId: user.id,
+      requestId,
+      actorType: 'wallet',
+      entityType: 'wallet_session',
+      entityId: user.sessionId,
+      action: 'auth.logged_out',
+      after: {
+        walletAddress: user.walletAddress,
+        chainId: user.chainId,
+        revoked: revoked.count === 1,
+      },
+    });
+
+    return {
+      revoked: revoked.count === 1,
+    };
   }
 
   private assertSupportedChain(chainId: number) {
@@ -215,15 +287,115 @@ export class AuthService {
     }
   }
 
-  private async verifyWalletSignature(walletAddress: string, message: string, signature: string): Promise<boolean> {
+  private parseAndAssertSiweMessage(message: string, walletAddress: string, chainId: number): { domain: string; nonce: string } {
+    const parsed = parseSiweMessage(message);
+    if (
+      !parsed.address ||
+      parsed.address.toLowerCase() !== walletAddress.toLowerCase() ||
+      parsed.chainId !== chainId ||
+      !parsed.domain ||
+      !parsed.nonce
+    ) {
+      throw new UnauthorizedException({
+        code: 'INVALID_SIGNATURE',
+        message: 'Sign-in message does not match the requested wallet session',
+      });
+    }
+
+    return {
+      domain: parsed.domain,
+      nonce: parsed.nonce,
+    };
+  }
+
+  private async verifyWalletSignature(input: {
+    chainId: number;
+    domain: string;
+    message: string;
+    nonce: string;
+    signature: string;
+    walletAddress: string;
+  }): Promise<boolean> {
     try {
-      return await verifyMessage({
-        address: walletAddress as `0x${string}`,
-        message,
-        signature: signature as `0x${string}`,
+      const eoaVerified = await verifyMessage({
+        address: input.walletAddress as `0x${string}`,
+        message: input.message,
+        signature: input.signature as Hex,
+      });
+      if (eoaVerified) return true;
+
+      return await verifySiweMessage(this.getPublicClient(input.chainId), {
+        address: input.walletAddress as `0x${string}`,
+        domain: input.domain,
+        message: input.message,
+        nonce: input.nonce,
+        signature: input.signature as Hex,
       });
     } catch {
       return false;
+    }
+  }
+
+  private getPublicClient(chainId: number): ReturnType<typeof createPublicClient> {
+    const cached = this.publicClients.get(chainId);
+    if (cached) return cached;
+    if (chainId !== polygon.id) {
+      throw new UnprocessableEntityException({
+        code: 'UNSUPPORTED_CHAIN',
+        message: `Chain ${chainId} is not supported for SIWE verification`,
+        details: { supportedChainIds: [polygon.id] },
+      });
+    }
+
+    const client = createPublicClient({
+      chain: polygon,
+      transport: http(this.config.get<string>('auth.polygonRpcUrl') || undefined),
+    });
+    this.publicClients.set(chainId, client);
+    return client;
+  }
+
+  private resolveSiweUrl(origin?: string | null): URL {
+    if (origin) {
+      const originUrl = this.parseUrl(origin, 'Origin');
+      if (!this.isAllowedSiweOrigin(originUrl)) {
+        throw new UnprocessableEntityException({
+          code: 'UNTRUSTED_ORIGIN',
+          message: 'Sign-in origin is not allowed',
+        });
+      }
+      return originUrl;
+    }
+
+    const configuredUri = this.config.get<string>('auth.siweUri');
+    if (configuredUri) return this.parseUrl(configuredUri, 'AUTH_SIWE_URI');
+
+    const [firstCorsOrigin] = this.config.get<string[]>('api.corsOrigins', []);
+    if (firstCorsOrigin) return this.parseUrl(firstCorsOrigin, 'API_CORS_ORIGINS');
+
+    throw new UnprocessableEntityException({
+      code: 'AUTH_CONFIGURATION_INVALID',
+      message: 'A trusted frontend origin is required for SIWE login',
+    });
+  }
+
+  private isAllowedSiweOrigin(originUrl: URL): boolean {
+    const configuredUri = this.config.get<string>('auth.siweUri');
+    const allowedOrigins = new Set(this.config.get<string[]>('api.corsOrigins', []));
+    if (configuredUri) {
+      allowedOrigins.add(this.parseUrl(configuredUri, 'AUTH_SIWE_URI').origin);
+    }
+    return allowedOrigins.has(originUrl.origin);
+  }
+
+  private parseUrl(value: string, field: string): URL {
+    try {
+      return new URL(value);
+    } catch {
+      throw new UnprocessableEntityException({
+        code: 'AUTH_CONFIGURATION_INVALID',
+        message: `${field} must be a valid URL`,
+      });
     }
   }
 

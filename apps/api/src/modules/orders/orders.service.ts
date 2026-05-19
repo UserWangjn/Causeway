@@ -213,8 +213,9 @@ export class OrdersService {
     };
 
     if (result.signingStatus === 'ready') {
+      const funderAddress = await this.clobClient.resolveFunderAddress(dto.walletAddress, dto.funderAddress);
       result.payloads = this.clobClient.prepareSignaturePayloads(
-        intent.orders.map((order) => toClobSignaturePayloadInput(order, dto.walletAddress, dto.funderAddress, dto.chainId)),
+        intent.orders.map((order) => toClobSignaturePayloadInput(order, dto.walletAddress, funderAddress, dto.chainId)),
         intent.previewExpiresAt ?? new Date(Date.now() + 60_000),
       );
 
@@ -731,7 +732,7 @@ function resolvePreviewRefreshedAt(orders: Array<{ orderBookRefreshedAt: string 
 function toClobSignaturePayloadInput(
   order: LoadedOrderIntent['orders'][number],
   walletAddress: string,
-  funderAddress: string | undefined,
+  funderAddress: string | null | undefined,
   chainId: number,
 ) {
   const tickSize = readSubmitPayloadNumber(order.submitPayload, 'tickSize') ?? toNullableNumber(order.market.orderPriceMinTickSize);

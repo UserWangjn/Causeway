@@ -93,6 +93,7 @@ export class AuthGuard implements CanActivate {
 
     request.user = {
       id: user.id,
+      sessionId: payload.sid,
       walletAddress: user.walletAddress,
       chainId: payload.chainId,
       requestId: request.requestId,

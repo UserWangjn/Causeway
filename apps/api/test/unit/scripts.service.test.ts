@@ -45,6 +45,10 @@ describe('ScriptsService', () => {
           confidence: '1',
           market: {
             question: 'Will market one resolve Yes?',
+            orderMinSize: '5',
+            orderPriceMinTickSize: '0.01',
+            bestAsk: '0.42',
+            lastTradePrice: '0.39',
             outcomes: [
               {
                 id: 'outcome_yes',
@@ -111,10 +115,14 @@ describe('ScriptsService', () => {
             marketId: true,
             layer: true,
             confidence: true,
-            market: {
-              select: {
-                question: true,
-                outcomes: {
+                market: {
+                  select: {
+                    question: true,
+                    orderMinSize: true,
+                    orderPriceMinTickSize: true,
+                    bestAsk: true,
+                    lastTradePrice: true,
+                    outcomes: {
                   orderBy: { outcomeIndex: 'asc' },
                   select: {
                     id: true,
@@ -189,18 +197,183 @@ describe('ScriptsService', () => {
           scriptMarketId: 'script_market_1',
           marketId: 'market_1',
           title: 'Will market one resolve Yes?',
+          orderMinSize: 5,
+          tickSize: 0.01,
           outcomes: [
             {
               selectionId: 'selection_1',
               outcomeId: 'outcome_yes',
               label: 'Yes',
               tokenId: 'token_yes',
+              price: 0.42,
               userAction: 'buy',
               side: 'BUY',
               orderMode: 'limit',
               limitPrice: 0.42,
               amountUsd: 25,
               confidence: 0.91,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('creates a direct order script from a selected market outcome', async () => {
+    const market = {
+      id: 'market_1',
+      eventId: 'event_1',
+      question: 'Will market one resolve Yes?',
+      active: true,
+      closed: false,
+      archived: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      staleDetectedAt: null,
+      orderMinSize: '5',
+      orderPriceMinTickSize: '0.01',
+      bestAsk: '0.43',
+      lastTradePrice: '0.41',
+      outcomes: [
+        {
+          id: 'outcome_yes',
+          label: 'Yes',
+          clobTokenId: 'token_yes',
+          price: '0.41',
+          bestBid: '0.4',
+          bestAsk: '0.42',
+          lastTradePrice: '0.39',
+        },
+      ],
+    };
+    const scriptForGet = {
+      id: 'script_direct',
+      title: 'Order: Will market one resolve Yes?',
+      status: 'draft',
+      rootMarketId: 'market_1',
+      rootOutcomeId: 'outcome_yes',
+      graphJson: {
+        root: {
+          marketId: 'market_1',
+          outcomeId: 'outcome_yes',
+          outcomeLabel: 'Yes',
+        },
+        nodes: [],
+        edges: [],
+      },
+      summary: 'Manual order draft for Yes.',
+      createdAt: new Date('2026-05-18T00:00:00.000Z'),
+      updatedAt: new Date('2026-05-18T00:01:00.000Z'),
+      markets: [
+        {
+          id: 'script_market_1',
+          marketId: 'market_1',
+          layer: 0,
+          confidence: '1',
+          market: {
+            question: 'Will market one resolve Yes?',
+            orderMinSize: '5',
+            orderPriceMinTickSize: '0.01',
+            bestAsk: '0.43',
+            lastTradePrice: '0.41',
+            outcomes: market.outcomes,
+          },
+          selections: [
+            {
+              id: 'selection_1',
+              outcomeId: 'outcome_yes',
+              aiAction: 'buy',
+              userAction: 'buy',
+              side: 'BUY',
+              orderMode: 'market',
+              limitPrice: null,
+              size: null,
+              amountUsd: '10',
+              confidence: '1',
+              reason: 'User selected this outcome from the market detail page.',
+              outcome: market.outcomes[0],
+            },
+          ],
+        },
+      ],
+    };
+    const causalScriptCreate = vi.fn().mockResolvedValue({ id: 'script_direct' });
+    const auditCreate = vi.fn();
+    const tx = {
+      inferenceRun: {
+        create: vi.fn().mockResolvedValue({ id: 'run_direct' }),
+      },
+      causalScript: {
+        create: causalScriptCreate,
+      },
+      auditEvent: {
+        create: auditCreate,
+      },
+    };
+    const service = new ScriptsService({
+      polymarketMarket: {
+        findFirst: vi.fn().mockResolvedValue(market),
+      },
+      causalScript: {
+        findFirst: vi.fn().mockResolvedValue(scriptForGet),
+      },
+      $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
+    } as unknown as PrismaService);
+
+    const result = await service.createDirectOrderScript(currentUser('req_direct'), {
+      marketId: 'market_1',
+      outcomeId: 'outcome_yes',
+      orderMode: 'market',
+      amountUsd: 10,
+    });
+
+    expect(causalScriptCreate).toHaveBeenCalledTimes(1);
+    expect(causalScriptCreate.mock.calls[0]?.[0]).toMatchObject({
+      data: {
+        userId: 'user_1',
+        inferenceRunId: 'run_direct',
+        rootMarketId: 'market_1',
+        rootOutcomeId: 'outcome_yes',
+        markets: {
+          create: [
+            {
+              marketId: 'market_1',
+              selections: {
+                create: [
+                  {
+                    outcomeId: 'outcome_yes',
+                    userAction: 'buy',
+                    orderMode: 'market',
+                    amountUsd: 10,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      select: { id: true },
+    });
+    expect(auditCreate).toHaveBeenCalledTimes(1);
+    expect(auditCreate.mock.calls[0]?.[0]).toMatchObject({
+      data: {
+        requestId: 'req_direct',
+        action: 'script.direct_order_created',
+      },
+    });
+    expect(result).toMatchObject({
+      id: 'script_direct',
+      markets: [
+        {
+          marketId: 'market_1',
+          tickSize: 0.01,
+          orderMinSize: 5,
+          outcomes: [
+            {
+              selectionId: 'selection_1',
+              outcomeId: 'outcome_yes',
+              orderMode: 'market',
+              amountUsd: 10,
             },
           ],
         },
@@ -405,6 +578,7 @@ describe('ScriptsService', () => {
 function currentUser(requestId?: string): CurrentUser {
   return {
     id: 'user_1',
+    sessionId: 'session_1',
     walletAddress: '0x1111111111111111111111111111111111111111',
     chainId: 137,
     requestId,

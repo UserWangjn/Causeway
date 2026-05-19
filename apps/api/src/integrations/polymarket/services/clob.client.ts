@@ -148,6 +148,7 @@ export type ClobPriceHistory = {
 @Injectable()
 export class ClobClient {
   private readonly baseUrl: string;
+  private readonly relayerBaseUrl: string;
   private readonly timeoutMs: number;
   private readonly retries: number;
   private readonly realOrdersEnabled: boolean;
@@ -160,6 +161,7 @@ export class ClobClient {
 
   constructor(@Inject(ConfigService) config: ConfigService) {
     this.baseUrl = config.get<string>('polymarket.clobBaseUrl', 'https://clob.polymarket.com');
+    this.relayerBaseUrl = config.get<string>('polymarket.relayerBaseUrl', 'https://relayer-v2.polymarket.com');
     this.timeoutMs = config.get<number>('polymarket.httpTimeoutMs', 10_000);
     this.retries = config.get<number>('polymarket.httpRetries', 2);
     this.realOrdersEnabled = config.get<boolean>('orders.enableRealOrders', false);
@@ -324,6 +326,31 @@ export class ClobClient {
     };
   }
 
+  async resolveFunderAddress(walletAddress: string, requestedFunderAddress?: string | null): Promise<string | null> {
+    const normalizedWallet = normalizeAddress(walletAddress, 'walletAddress');
+    if (this.signatureType === SignatureTypeV2.EOA) {
+      return null;
+    }
+
+    const requested = normalizeOptionalAddress(requestedFunderAddress);
+    if (requested) return requested;
+    if (this.defaultFunderAddress) return this.defaultFunderAddress;
+
+    if (this.signatureType === SignatureTypeV2.POLY_GNOSIS_SAFE) {
+      return this.fetchRelayerFunderAddress(normalizedWallet, 'SAFE');
+    }
+    if (this.signatureType === SignatureTypeV2.POLY_PROXY) {
+      return this.fetchRelayerFunderAddress(normalizedWallet, 'PROXY');
+    }
+
+    throw new ApiException(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      'REQUEST_VALIDATION_FAILED',
+      'funderAddress is required for smart contract wallet signatures',
+      { signatureType: this.signatureType },
+    );
+  }
+
   prepareSignaturePayloads(orders: ClobSignaturePayloadInput[], expiresAt: Date): PreparedClobOrder[] {
     const capability = this.getCapability();
     if (capability.status !== 'available') {
@@ -438,6 +465,49 @@ export class ClobClient {
         builder: ZERO_BYTES32,
       },
     };
+  }
+
+  private async fetchRelayerFunderAddress(ownerAddress: string, accountType: 'SAFE' | 'PROXY'): Promise<string> {
+    const url = new URL('/relay-payload', this.relayerBaseUrl);
+    url.searchParams.set('address', ownerAddress);
+    url.searchParams.set('type', accountType);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error('Polymarket relayer request timed out')), this.timeoutMs);
+    try {
+      const response = await fetch(url, {
+        headers: {
+          accept: 'application/json',
+          'user-agent': 'causeway-api/0.1',
+        },
+        signal: controller.signal,
+      });
+      const json: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Polymarket relayer funder lookup failed', {
+          status: response.status,
+          accountType,
+          body: json,
+        });
+      }
+
+      const funderAddress = readRelayerAddress(json);
+      if (!funderAddress) {
+        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Polymarket relayer returned no funder address', {
+          accountType,
+          body: json,
+        });
+      }
+      return normalizeAddress(funderAddress, 'funderAddress');
+    } catch (error) {
+      if (error instanceof ApiException) throw error;
+      throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Polymarket relayer funder lookup failed', {
+        accountType,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async postJson(path: string, body: string): Promise<unknown> {
@@ -623,6 +693,12 @@ function readClobSuccess(value: unknown): boolean {
   if (typeof value.success === 'boolean') return value.success;
   if (typeof value.status === 'string') return value.status.toLowerCase() !== 'failed';
   return true;
+}
+
+function readRelayerAddress(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const rawAddress = value.address ?? value.walletAddress ?? value.proxyAddress ?? value.safeAddress;
+  return typeof rawAddress === 'string' && rawAddress.trim() ? rawAddress.trim() : null;
 }
 
 function readExternalOrderId(value: unknown): string | null {

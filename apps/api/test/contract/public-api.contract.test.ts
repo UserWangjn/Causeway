@@ -44,6 +44,38 @@ const MARKET_LIST_ITEM_KEYS = [
   'outcomes',
 ] as const;
 const MARKET_OUTCOME_KEYS = ['outcomeId', 'label', 'tokenId', 'price', 'bestBid', 'bestAsk', 'lastTradePrice'] as const;
+const EXPLORER_MARKET_NODE_KEYS = [
+  'id',
+  'slug',
+  'title',
+  'groupItemTitle',
+  'eventId',
+  'eventSlug',
+  'eventTitle',
+  'category',
+  'categoryKey',
+  'officialCategory',
+  'tags',
+  'icon',
+  'image',
+  'price',
+  'volume',
+  'volume24hr',
+  'liquidity',
+  'endDate',
+  'description',
+  'rules',
+  'acceptingOrders',
+  'outcomes',
+  'bestBid',
+  'bestAsk',
+  'lastTradePrice',
+  'orderMinSize',
+  'tickSize',
+  'syncedAt',
+  'x',
+  'y',
+] as const;
 
 describe('documented public API contracts', () => {
   let app: INestApplication;
@@ -177,7 +209,7 @@ describe('documented public API contracts', () => {
       'marketsCount',
       'syncedAt',
     ]);
-    expectKeys(readRecord(eventDetailData, 'selectedMarket'), ['id', 'slug', 'title', 'eventId', 'eventTitle', 'outcomes']);
+    expectKeys(readRecord(eventDetailData, 'selectedMarket'), EXPLORER_MARKET_NODE_KEYS);
     expect(eventDetailData.markets.length).toBeGreaterThan(0);
 
     const historyData = apiData<{ history: Record<string, unknown[]>; generatedAt: string; source: string }>(

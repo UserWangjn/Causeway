@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Inject, Param, Patch } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Patch, Post } from '@nestjs/common';
 import { CurrentUser, type CurrentUser as CurrentUserType } from '../../common/decorators/current-user.decorator';
 import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
+import { CreateDirectOrderScriptDto } from './dto/create-direct-order-script.dto';
 import { ScriptIdParamDto, ScriptSelectionParamDto } from './dto/script-route.dto';
 import { UpdateOutcomeSelectionDto } from './dto/update-outcome-selection.dto';
 import { ScriptsService } from './scripts.service';
@@ -8,6 +9,14 @@ import { ScriptsService } from './scripts.service';
 @Controller('scripts')
 export class ScriptsController {
   constructor(@Inject(ScriptsService) private readonly scriptsService: ScriptsService) {}
+
+  @Post('direct-order')
+  createDirectOrderScript(
+    @CurrentUser() user: CurrentUserType,
+    @Body(createDtoValidationPipe(CreateDirectOrderScriptDto)) dto: CreateDirectOrderScriptDto,
+  ) {
+    return this.scriptsService.createDirectOrderScript(user, dto);
+  }
 
   @Get(':scriptId')
   getScript(@CurrentUser() user: CurrentUserType, @Param(createDtoValidationPipe(ScriptIdParamDto)) params: ScriptIdParamDto) {

@@ -141,6 +141,27 @@ describe('ClobClient', () => {
     });
   });
 
+  it('resolves GNOSIS_SAFE funder addresses from the Polymarket relayer', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        address: '0x2222222222222222222222222222222222222222',
+        nonce: '0',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true, withCreds: true }));
+
+    await expect(client.resolveFunderAddress('0x1111111111111111111111111111111111111111')).resolves.toBe(
+      '0x2222222222222222222222222222222222222222',
+    );
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.origin).toBe('https://relayer-v2.polymarket.com');
+    expect(requestedUrl.pathname).toBe('/relay-payload');
+    expect(requestedUrl.searchParams.get('address')).toBe('0x1111111111111111111111111111111111111111');
+    expect(requestedUrl.searchParams.get('type')).toBe('SAFE');
+  });
+
   it('prepares GNOSIS_SAFE EIP-712 payloads for frontend signing', () => {
     const expiresAt = new Date('2026-05-19T00:00:00.000Z');
     const client = new ClobClient(configService({ retries: 0, enableRealOrders: true, withCreds: true }));
@@ -271,6 +292,7 @@ function configService(values: { retries: number; timeoutMs?: number; enableReal
     get: vi.fn((key: string, defaultValue?: unknown) => {
       const configValues: Record<string, unknown> = {
         'polymarket.clobBaseUrl': 'https://clob.polymarket.com',
+        'polymarket.relayerBaseUrl': 'https://relayer-v2.polymarket.com',
         'polymarket.httpTimeoutMs': values.timeoutMs ?? 1_000,
         'polymarket.httpRetries': values.retries,
         'orders.enableRealOrders': values.enableRealOrders ?? false,

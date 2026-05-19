@@ -2,6 +2,7 @@ import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 
 export type CurrentUser = {
   id: string;
+  sessionId: string;
   walletAddress: string;
   chainId: number;
   requestId?: string;

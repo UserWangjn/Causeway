@@ -111,7 +111,7 @@ type ReadinessResponse = {
 ```json
 {
   "data": {
-    "nonce": "Sign in to Causeway: ...",
+    "nonce": "example.com wants you to sign in with your Ethereum account:\n0x...\n\nSign in to Causeway.\n\nURI: https://example.com\nVersion: 1\nChain ID: 137\nNonce: ...",
     "expiresAt": "2026-05-17T10:00:00.000Z"
   },
   "requestId": "req_x"
@@ -137,10 +137,30 @@ type ReadinessResponse = {
 {
   "data": {
     "accessToken": "jwt",
+    "expiresAt": "2026-05-17T11:00:00.000Z",
     "user": {
       "id": "user_x",
       "walletAddress": "0x..."
     }
+  },
+  "requestId": "req_x"
+}
+```
+
+### `POST /auth/logout`
+
+请求头：
+
+```text
+Authorization: Bearer <accessToken>
+```
+
+响应：
+
+```json
+{
+  "data": {
+    "revoked": true
   },
   "requestId": "req_x"
 }
@@ -436,6 +456,23 @@ type InferenceRunStatus = {
 
 ## 7. Scripts
 
+### `POST /scripts/direct-order`
+
+用于市场详情页的单 outcome 下单入口。后端会把用户选择的 market/outcome 转成一个标准 `CausalScript`，后续仍复用 `PATCH /scripts/:scriptId/outcome-selections/:selectionId`、`POST /orders/preview`、`POST /orders/prepare-signature`、`POST /orders/submit`，不新增第二套订单模型。
+
+请求：
+
+```json
+{
+  "marketId": "market_x",
+  "outcomeId": "outcome_x",
+  "orderMode": "market",
+  "amountUsd": 10
+}
+```
+
+响应：同 `GET /scripts/:scriptId`。
+
 ### `GET /scripts/:scriptId`
 
 响应：
@@ -487,11 +524,16 @@ type ScriptMarket = {
   title: string;
   layer: 0 | 1 | 2 | 3;
   confidence: number;
+  orderMinSize: number | null;
+  tickSize: number | null;
+  bestAsk: number | null;
+  lastTradePrice: number | null;
   outcomes: {
     selectionId: string;
     outcomeId: string;
     label: string;
     tokenId: string;
+    price: number | null;
     aiAction: "buy" | "avoid";
     userAction: "buy" | "skip";
     side: "BUY";
@@ -629,12 +671,11 @@ type OrderPreview = {
   "intentId": "intent_x",
   "executionMode": "real",
   "walletAddress": "0x...",
-  "chainId": 137,
-  "funderAddress": "0x..."
+  "chainId": 137
 }
 ```
 
-`funderAddress` is required for Polymarket proxy, Gnosis Safe, or smart contract wallet signatures. Causeway defaults real CLOB order signing to Polymarket `signatureType=2` (`POLY_GNOSIS_SAFE`), so the frontend should pass the user's Gnosis Safe / Polymarket proxy funder address when `executionMode="real"`.
+`funderAddress` 仅作为高级调用方的可选覆盖字段。Causeway 默认真实 CLOB 订单使用 Polymarket `signatureType=2` (`POLY_GNOSIS_SAFE`)，后端会通过 Polymarket relayer `relay-payload` 自动解析用户钱包对应的 proxy / Safe funder，前端不应要求用户手工填写 funder 地址。
 
 响应：
 

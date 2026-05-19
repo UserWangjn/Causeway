@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { OrderMode, Prisma, UserSelectionAction } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
+import { CreateDirectOrderScriptDto } from './dto/create-direct-order-script.dto';
 import { UpdateOutcomeSelectionDto } from './dto/update-outcome-selection.dto';
 
 const SCRIPT_OUTCOME_SELECT = Prisma.validator<Prisma.PolymarketOutcomeSelect>()({
@@ -24,6 +26,10 @@ const SCRIPT_MARKET_SELECT = Prisma.validator<Prisma.ScriptMarketSelect>()({
   market: {
     select: {
       question: true,
+      orderMinSize: true,
+      orderPriceMinTickSize: true,
+      bestAsk: true,
+      lastTradePrice: true,
       outcomes: {
         orderBy: { outcomeIndex: 'asc' },
         select: SCRIPT_OUTCOME_SELECT,
@@ -67,6 +73,26 @@ const SCRIPT_SELECT = Prisma.validator<Prisma.CausalScriptSelect>()({
   },
 });
 
+const DIRECT_ORDER_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
+  id: true,
+  eventId: true,
+  question: true,
+  active: true,
+  closed: true,
+  archived: true,
+  acceptingOrders: true,
+  enableOrderBook: true,
+  staleDetectedAt: true,
+  orderMinSize: true,
+  orderPriceMinTickSize: true,
+  bestAsk: true,
+  lastTradePrice: true,
+  outcomes: {
+    orderBy: { outcomeIndex: 'asc' },
+    select: SCRIPT_OUTCOME_SELECT,
+  },
+});
+
 @Injectable()
 export class ScriptsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -99,11 +125,16 @@ export class ScriptsService {
         title: scriptMarket.market.question,
         layer: scriptMarket.layer,
         confidence: toNullableNumber(scriptMarket.confidence),
+        orderMinSize: toNullableNumber(scriptMarket.market.orderMinSize),
+        tickSize: toNullableNumber(scriptMarket.market.orderPriceMinTickSize),
+        bestAsk: toNullableNumber(scriptMarket.market.bestAsk),
+        lastTradePrice: toNullableNumber(scriptMarket.market.lastTradePrice),
         outcomes: scriptMarket.selections.map((selection) => ({
           selectionId: selection.id,
           outcomeId: selection.outcomeId,
           label: selection.outcome.label,
           tokenId: selection.outcome.clobTokenId,
+          price: firstNumber(selection.outcome.bestAsk, selection.outcome.price, selection.outcome.lastTradePrice, selection.outcome.bestBid),
           aiAction: selection.aiAction,
           userAction: selection.userAction,
           side: selection.side,
@@ -116,6 +147,141 @@ export class ScriptsService {
         })),
       })),
     };
+  }
+
+  async createDirectOrderScript(user: CurrentUser, dto: CreateDirectOrderScriptDto) {
+    const market = await this.prisma.polymarketMarket.findFirst({
+      where: { id: dto.marketId },
+      select: DIRECT_ORDER_MARKET_SELECT,
+    });
+    if (!market) {
+      throw new ApiException(HttpStatus.NOT_FOUND, 'MARKET_NOT_FOUND', 'Market was not found');
+    }
+
+    const outcome = market.outcomes.find((item) => item.id === dto.outcomeId);
+    if (!outcome) {
+      throw new ApiException(HttpStatus.NOT_FOUND, 'OUTCOME_NOT_FOUND', 'Outcome was not found for the selected market', {
+        marketId: dto.marketId,
+        outcomeId: dto.outcomeId,
+      });
+    }
+    assertDirectOrderMarketTradable(market);
+
+    const orderMode = (dto.orderMode ?? 'market') as OrderMode;
+    const tickSize = toNullableNumber(market.orderPriceMinTickSize);
+    const limitPrice = orderMode === 'limit'
+      ? resolveDirectLimitPrice(dto.limitPrice, tickSize, outcome, market)
+      : null;
+    const sizing = resolveDirectOrderSizing(dto);
+    const graphJson = buildDirectOrderGraph(market, outcome);
+    const cacheKey = `direct-order:${user.id}:${market.id}:${outcome.id}:${randomUUID()}`;
+    const now = new Date();
+
+    const createdScript = await this.prisma.$transaction(async (tx) => {
+      const inferenceRun = await tx.inferenceRun.create({
+        data: {
+          userId: user.id,
+          rootEventId: market.eventId,
+          rootMarketId: market.id,
+          rootOutcomeId: outcome.id,
+          rootClobTokenId: outcome.clobTokenId,
+          depth: 0,
+          maxMarketsPerLayer: 1,
+          confidenceThreshold: 1,
+          model: 'manual-order',
+          promptVersion: 'manual-order-v1',
+          outputSchemaVersion: 'manual-order-v1',
+          cacheEnabled: false,
+          cacheKey,
+          cacheHit: false,
+          status: 'completed',
+          stage: 'script_generation',
+          progress: 100,
+          inputJson: toJson({
+            source: 'market_detail_order',
+            marketId: market.id,
+            outcomeId: outcome.id,
+            orderMode,
+          }),
+          outputJson: toJson({
+            graph: graphJson,
+            selection: {
+              marketId: market.id,
+              outcomeId: outcome.id,
+              orderMode,
+              limitPrice,
+              ...sizing,
+            },
+          }),
+          completedAt: now,
+        },
+      });
+      const script = await tx.causalScript.create({
+        data: {
+          userId: user.id,
+          inferenceRunId: inferenceRun.id,
+          title: `Order: ${trimDirectOrderTitle(market.question)}`,
+          rootEventId: market.eventId,
+          rootMarketId: market.id,
+          rootOutcomeId: outcome.id,
+          graphJson: toJson(graphJson),
+          summary: `Manual order draft for ${outcome.label}.`,
+          markets: {
+            create: [
+              {
+                marketId: market.id,
+                layer: 0,
+                impactDirection: 'supports',
+                confidence: 1,
+                reason: 'Manual order created from market detail.',
+                metadata: toJson({
+                  source: 'market_detail_order',
+                  orderMinSize: toNullableNumber(market.orderMinSize),
+                  tickSize,
+                }),
+                selections: {
+                  create: [
+                    {
+                      outcomeId: outcome.id,
+                      aiAction: 'buy',
+                      userAction: 'buy',
+                      side: 'BUY',
+                      orderMode,
+                      limitPrice,
+                      size: sizing.size,
+                      amountUsd: sizing.amountUsd,
+                      confidence: 1,
+                      reason: 'User selected this outcome from the market detail page.',
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      await tx.auditEvent.create({
+        data: {
+          userId: user.id,
+          ...auditRequestId(user),
+          actorType: 'user',
+          entityType: 'causal_script',
+          entityId: script.id,
+          action: 'script.direct_order_created',
+          after: toJson({
+            marketId: market.id,
+            outcomeId: outcome.id,
+            orderMode,
+            limitPrice,
+            ...sizing,
+          }),
+        },
+      });
+      return script;
+    });
+
+    return this.getScript(user, createdScript.id);
   }
 
   async updateOutcomeSelection(user: CurrentUser, scriptId: string, selectionId: string, dto: UpdateOutcomeSelectionDto) {
@@ -217,6 +383,12 @@ type SelectionState = {
 type LoadedScriptMarket = Prisma.ScriptMarketGetPayload<{
   select: typeof SCRIPT_MARKET_SELECT;
 }>;
+
+type DirectOrderMarket = Prisma.PolymarketMarketGetPayload<{
+  select: typeof DIRECT_ORDER_MARKET_SELECT;
+}>;
+
+type DirectOrderOutcome = DirectOrderMarket['outcomes'][number];
 
 type ScriptGraphResponse = {
   root: {
@@ -337,6 +509,83 @@ function firstNumber(...values: unknown[]): number | null {
     if (parsed != null) return parsed;
   }
   return null;
+}
+
+function assertDirectOrderMarketTradable(market: DirectOrderMarket): void {
+  if (!market.active || market.closed || market.archived || market.staleDetectedAt != null) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'MARKET_NOT_TRADABLE', 'Market is not active for new orders', {
+      marketId: market.id,
+    });
+  }
+  if (!market.acceptingOrders || !market.enableOrderBook) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'MARKET_NOT_TRADABLE', 'Market is not currently accepting CLOB orders', {
+      marketId: market.id,
+    });
+  }
+}
+
+function resolveDirectLimitPrice(
+  requestedPrice: number | undefined,
+  tickSize: number | null,
+  outcome: DirectOrderOutcome,
+  market: DirectOrderMarket,
+): number {
+  const price = requestedPrice ?? firstNumber(outcome.bestAsk, outcome.price, outcome.lastTradePrice, outcome.bestBid, market.bestAsk, market.lastTradePrice);
+  if (price == null || price <= 0 || price > 1) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Limit orders require a valid limit price');
+  }
+  return roundToTick(price, tickSize);
+}
+
+function resolveDirectOrderSizing(dto: CreateDirectOrderScriptDto): { amountUsd: number | null; size: number | null } {
+  if (dto.size != null) {
+    return {
+      amountUsd: dto.amountUsd ?? null,
+      size: dto.size,
+    };
+  }
+  return {
+    amountUsd: dto.amountUsd ?? 10,
+    size: null,
+  };
+}
+
+function roundToTick(value: number, tickSize: number | null): number {
+  const step = tickSize && tickSize > 0 ? tickSize : 0.01;
+  return Number(Math.min(1, Math.max(0.0001, Math.round(value / step) * step)).toFixed(6));
+}
+
+function buildDirectOrderGraph(market: DirectOrderMarket, outcome: DirectOrderOutcome): Prisma.InputJsonObject {
+  return {
+    root: {
+      marketId: market.id,
+      outcomeId: outcome.id,
+      outcomeLabel: outcome.label,
+    },
+    nodes: [
+      {
+        nodeId: 'root',
+        marketId: market.id,
+        layer: 0,
+        recommendedOutcomes: [
+          {
+            outcomeId: outcome.id,
+            label: outcome.label,
+            tokenId: outcome.clobTokenId,
+          },
+        ],
+        confidence: 1,
+        direction: 'supports',
+        reason: 'Manual order created from market detail.',
+      },
+    ],
+    edges: [],
+  };
+}
+
+function trimDirectOrderTitle(title: string): string {
+  const trimmed = title.trim();
+  return trimmed.length <= 96 ? trimmed : `${trimmed.slice(0, 93)}...`;
 }
 
 function buildNextSelectionState(

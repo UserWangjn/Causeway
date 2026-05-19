@@ -361,6 +361,7 @@ describe('OrdersService', () => {
 
   it('prepares real CLOB signature payloads and persists them for submit', async () => {
     const preparedOrder = preparedClobOrder('order_1');
+    const resolveFunderAddress = vi.fn().mockResolvedValue('0x2222222222222222222222222222222222222222');
     const prepareSignaturePayloads = vi.fn().mockReturnValue([preparedOrder]);
     const tx = {
       orderIntent: {
@@ -375,13 +376,12 @@ describe('OrdersService', () => {
         findFirst: vi.fn().mockResolvedValue(realIntent('intent_1')),
       },
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
-    }, { status: 'available', reason: null }, { prepareSignaturePayloads });
+    }, { status: 'available', reason: null }, { prepareSignaturePayloads, resolveFunderAddress });
 
     const result = await service.prepareSignature(currentUser(), {
       intentId: 'intent_1',
       executionMode: 'real',
       walletAddress: '0x1111111111111111111111111111111111111111',
-      funderAddress: '0x2222222222222222222222222222222222222222',
       chainId: 137,
     });
 
@@ -392,6 +392,7 @@ describe('OrdersService', () => {
       protocol: 'polymarket_clob_eip712_v2',
       payloads: [preparedOrder],
     });
+    expect(resolveFunderAddress).toHaveBeenCalledWith('0x1111111111111111111111111111111111111111', undefined);
     expect(prepareSignaturePayloads).toHaveBeenCalledWith([
       expect.objectContaining({
         orderId: 'order_1',
@@ -622,6 +623,7 @@ function createService(
 ) {
   const clobClient = {
     getCapability: vi.fn().mockReturnValue(capability),
+    resolveFunderAddress: vi.fn().mockResolvedValue('0x2222222222222222222222222222222222222222'),
     prepareSignaturePayloads: vi.fn().mockReturnValue([]),
     postSignedOrders: vi.fn(),
     ...clobOverrides,
@@ -632,6 +634,7 @@ function createService(
 function currentUser(requestId?: string): CurrentUser {
   return {
     id: 'user_1',
+    sessionId: 'session_1',
     walletAddress: '0x1111111111111111111111111111111111111111',
     chainId: 137,
     requestId,

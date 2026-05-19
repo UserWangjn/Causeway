@@ -268,6 +268,7 @@ type InferenceRunCreateArgs = {
 function currentUser(): CurrentUser {
   return {
     id: 'user_1',
+    sessionId: 'session_1',
     walletAddress: '0x1111111111111111111111111111111111111111',
     chainId: 137,
   };

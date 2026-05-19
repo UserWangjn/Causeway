@@ -19,10 +19,14 @@ export const configuration = () => ({
       .split(',')
       .map((chainId) => Number(chainId.trim()))
       .filter((chainId) => Number.isInteger(chainId) && chainId > 0),
+    siweUri: process.env.AUTH_SIWE_URI,
+    siweStatement: process.env.AUTH_SIWE_STATEMENT ?? 'Sign in to Causeway.',
+    polygonRpcUrl: process.env.AUTH_POLYGON_RPC_URL,
   },
   polymarket: {
     gammaBaseUrl: process.env.POLYMARKET_GAMMA_BASE_URL ?? 'https://gamma-api.polymarket.com',
     clobBaseUrl: process.env.POLYMARKET_CLOB_BASE_URL ?? 'https://clob.polymarket.com',
+    relayerBaseUrl: process.env.POLYMARKET_RELAYER_BASE_URL ?? 'https://relayer-v2.polymarket.com',
     clobApi: {
       key: process.env.POLYMARKET_CLOB_API_KEY,
       secret: process.env.POLYMARKET_CLOB_API_SECRET,
