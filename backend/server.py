@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -36,6 +37,7 @@ DEFAULT_AI_CONFIG = {
     "timeoutSeconds": 90,
     "enableWebSearch": True,
 }
+SYNC_LOCK = threading.RLock()
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
@@ -721,56 +723,57 @@ def build_edges(conn: sqlite3.Connection) -> None:
 
 
 def sync_markets(limit: int = DEFAULT_SYNC_LIMIT) -> dict[str, Any]:
-    init_db()
-    started = time.time()
-    events = fetch_gamma_events(limit)
-    top_markets = fetch_gamma_markets(min(limit, 1000))
-    market_items: dict[str, tuple[dict[str, Any], dict[str, Any] | None]] = {}
-    for event in events:
-        for market in event.get("markets") or []:
+    with SYNC_LOCK:
+        init_db()
+        started = time.time()
+        events = fetch_gamma_events(limit)
+        top_markets = fetch_gamma_markets(min(limit, 1000))
+        market_items: dict[str, tuple[dict[str, Any], dict[str, Any] | None]] = {}
+        for event in events:
+            for market in event.get("markets") or []:
+                if not isinstance(market, dict) or market.get("id") is None:
+                    continue
+                market_items[str(market.get("id"))] = (market, event)
+        for market in top_markets:
             if not isinstance(market, dict) or market.get("id") is None:
                 continue
-            market_items[str(market.get("id"))] = (market, event)
-    for market in top_markets:
-        if not isinstance(market, dict) or market.get("id") is None:
-            continue
-        market_items.setdefault(str(market.get("id")), (market, None))
-    with db() as conn:
-        conn.execute("UPDATE events SET active = 0 WHERE active = 1")
-        conn.execute("UPDATE markets SET active = 0 WHERE active = 1")
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO events (
-              id, slug, title, category, category_key, category_label, tags_json,
-              icon, image, end_date, volume, volume_24hr, liquidity,
-              description, rules, markets_count, active, closed, updated_at,
-              synced_at, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [event_record(item) for item in events],
-        )
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO markets (
-              id, slug, question, event_id, event_slug, event_title, category,
-              category_key, category_label, tags_json, icon, image,
-              end_date, volume, volume_24hr, liquidity, price, outcomes_json,
-              description, rules, accepting_orders, active, closed, updated_at,
-              synced_at, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [market_record(item, parent_event) for item, parent_event in market_items.values()],
-        )
-        build_edges(conn)
-    return {
-        "syncedEvents": len(events),
-        "syncedMarkets": len(market_items),
-        "elapsedSeconds": round(time.time() - started, 2),
-        "source": {"events": GAMMA_EVENTS_URL, "markets": GAMMA_MARKETS_URL},
-    }
+            market_items.setdefault(str(market.get("id")), (market, None))
+        with db() as conn:
+            conn.execute("UPDATE events SET active = 0 WHERE active = 1")
+            conn.execute("UPDATE markets SET active = 0 WHERE active = 1")
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO events (
+                  id, slug, title, category, category_key, category_label, tags_json,
+                  icon, image, end_date, volume, volume_24hr, liquidity,
+                  description, rules, markets_count, active, closed, updated_at,
+                  synced_at, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [event_record(item) for item in events],
+            )
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO markets (
+                  id, slug, question, event_id, event_slug, event_title, category,
+                  category_key, category_label, tags_json, icon, image,
+                  end_date, volume, volume_24hr, liquidity, price, outcomes_json,
+                  description, rules, accepting_orders, active, closed, updated_at,
+                  synced_at, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [market_record(item, parent_event) for item, parent_event in market_items.values()],
+            )
+            build_edges(conn)
+        return {
+            "syncedEvents": len(events),
+            "syncedMarkets": len(market_items),
+            "elapsedSeconds": round(time.time() - started, 2),
+            "source": {"events": GAMMA_EVENTS_URL, "markets": GAMMA_MARKETS_URL},
+        }
 
 
-def ensure_seed_data() -> None:
+def needs_market_sync() -> bool:
     init_db()
     with db() as conn:
         count = conn.execute("SELECT COUNT(*) FROM markets").fetchone()[0]
@@ -781,8 +784,15 @@ def ensure_seed_data() -> None:
         missing_event_slug_count = conn.execute(
             "SELECT COUNT(*) FROM markets WHERE active = 1 AND closed = 0 AND event_id IS NOT NULL AND event_slug IS NULL"
         ).fetchone()[0]
-    if count == 0 or event_count == 0 or missing_category_count or missing_event_slug_count:
-        sync_markets(DEFAULT_SYNC_LIMIT)
+    return bool(count == 0 or event_count == 0 or missing_category_count or missing_event_slug_count)
+
+
+def ensure_seed_data() -> None:
+    if not needs_market_sync():
+        return
+    with SYNC_LOCK:
+        if needs_market_sync():
+            sync_markets(DEFAULT_SYNC_LIMIT)
 
 
 def focus_network_positions(rows: list[sqlite3.Row], edges: list[Any]) -> dict[str, tuple[float, float]]:
