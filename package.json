@@ -1,34 +1,17 @@
 {
-  "name": "causeway-frontend-prototype",
+  "name": "causeway-marketing-site",
+  "version": "1.0.0",
   "private": true,
-  "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "backend": "python backend/server.py",
-    "sync:polymarket": "python -c \"import urllib.request; req=urllib.request.Request('http://127.0.0.1:8000/api/sync/polymarket?limit=1000', method='POST'); print(urllib.request.urlopen(req).read().decode())\"",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "lint": "eslint ."
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^6.0.1",
-    "@xyflow/react": "^12.10.2",
-    "lucide-react": "^1.16.0",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6",
-    "vite": "^8.0.12"
+    "vite": "^7.0.0",
+    "typescript": "^5.8.0",
+    "three": "^0.178.0"
   },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/node": "^24.12.3",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "eslint": "^10.3.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.6.0",
-    "typescript": "~6.0.2",
-    "typescript-eslint": "^8.59.2"
-  }
+  "devDependencies": {}
 }
