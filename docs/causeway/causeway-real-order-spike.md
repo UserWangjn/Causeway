@@ -125,6 +125,8 @@ Spike 完成前，不能冻结真实 CLOB 提交方案；但前后端订单协�
 
 输入一个真实 `clobTokenId`，验证：
 
+- 执行 `SMOKE_POLYMARKET_ENABLED=true npm run smoke:api:polymarket`，验证 Gamma active market、CLOB health 和 CLOB order book 只读访问。
+- 如 Gamma 返回的 market 没有可用 token，使用 `SMOKE_CLOB_TOKEN_ID` 指定一个当前可交易 outcome token。
 - order book 可读取。
 - price 可读取。
 - tick size 可读取。

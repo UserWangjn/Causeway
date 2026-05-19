@@ -1,0 +1,26 @@
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { TrimString } from '../../../common/decorators/trim-string.decorator';
+
+export class MarketIdParamDto {
+  @TrimString()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
+  marketId!: string;
+}
+
+export class MarketSlugParamDto {
+  @TrimString()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(256)
+  slug!: string;
+}
+
+export class MarketOrderBookQueryDto {
+  @TrimString()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(256)
+  tokenId!: string;
+}

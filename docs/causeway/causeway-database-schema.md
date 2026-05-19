@@ -620,7 +620,23 @@ model SyncRun {
 }
 ```
 
-### 10.2 `AuditEvent`
+### 10.2 `SchedulerLock`
+
+Used by default-disabled scheduled jobs to coordinate across multiple API instances.
+
+```prisma
+model SchedulerLock {
+  name        String   @id
+  ownerId     String
+  lockedUntil DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([lockedUntil])
+}
+```
+
+### 10.3 `AuditEvent`
 
 ```prisma
 model AuditEvent {

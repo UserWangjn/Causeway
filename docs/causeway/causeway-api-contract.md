@@ -42,6 +42,8 @@ type Page<T> = {
 };
 ```
 
+`cursor` 必须使用上一页响应里的 `nextCursor` 原样回传。它是后端生成的 opaque cursor，前端不能解析、拼接或假设它等于数据库 id。
+
 鉴权：
 
 ```text
@@ -50,7 +52,48 @@ Authorization: Bearer <accessToken>
 
 除公开市场浏览接口外，推演、脚本、订单、资产组合和内部接口都需要登录。内部接口还需要服务端内部 token 或后台网络访问控制。
 
-## 2. Auth
+限流：
+
+- 默认所有非健康检查接口都会被限流；`GET /health` 和 `GET /health/ready` 不参与限流，避免影响部署平台探活。
+- 默认按路由和调用身份计数。已登录请求优先使用用户或 bearer token 维度，未登录请求使用客户端 IP 维度。
+- Auth 接口、内部接口和普通 API 使用独立限流额度；生产环境必须配置 Redis 作为跨实例限流存储。
+- 响应头会返回 `X-RateLimit-Limit`、`X-RateLimit-Remaining`、`X-RateLimit-Reset`。超过额度时返回 `429 RATE_LIMITED`，并包含 `Retry-After`。
+
+## 2. Health
+
+### `GET /health`
+
+公开 liveness endpoint，不访问数据库。
+
+响应：
+
+```ts
+type HealthResponse = {
+  ok: true;
+  service: "causeway-api";
+  timestamp: string;
+};
+```
+
+### `GET /health/ready`
+
+公开 readiness endpoint，用于部署平台判断服务是否可以接流量。该接口会执行数据库探活；限流启用时还会检查限流存储。数据库或限流存储不可用时返回 `503 READINESS_FAILED`，错误响应不能泄漏连接串、密码或内部异常。
+
+响应：
+
+```ts
+type ReadinessResponse = {
+  ok: true;
+  service: "causeway-api";
+  checks: {
+    database: "ok";
+    rateLimit?: "ok";
+  };
+  timestamp: string;
+};
+```
+
+## 3. Auth
 
 ### `POST /auth/nonce`
 
@@ -103,7 +146,7 @@ Authorization: Bearer <accessToken>
 }
 ```
 
-## 3. Markets
+## 4. Markets
 
 ### `GET /markets`
 
@@ -118,6 +161,8 @@ sort
 cursor
 limit
 ```
+
+`cursor` 为服务端返回的 opaque cursor，和当前 `sort` 绑定。切换 `q`、`category`、`active`、`closed` 或 `sort` 后必须丢弃旧 cursor，从第一页重新请求。
 
 响应：
 
@@ -200,7 +245,9 @@ type OrderBook = {
 };
 ```
 
-## 4. Market Network
+`tickSize` 和 `minOrderSize` 是前端下单校验必需字段。CLOB 和本地缓存都无法提供这两个数值时，接口返回 `ORDERBOOK_UNAVAILABLE`，不能返回 `null`。
+
+## 5. Market Network
 
 ### `GET /market-network`
 
@@ -235,7 +282,7 @@ type MarketNetwork = {
 };
 ```
 
-## 5. Inference
+## 6. Inference
 
 ### `POST /inference-runs`
 
@@ -260,11 +307,15 @@ type MarketNetwork = {
   "data": {
     "runId": "run_x",
     "status": "queued",
-    "cacheKey": "inf_x"
+    "cacheKey": "inf_x",
+    "cacheHit": false,
+    "scriptId": null
   },
   "requestId": "req_x"
 }
 ```
+
+说明：`POST /inference-runs` 始终只创建 `queued` 任务，前端通过 `GET /inference-runs/:runId` 轮询 `completed` 后再读取 `scriptId`。`mock-causeway-v1` 也走同一套异步任务语义。配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 后，非 mock 模型通过 OpenAI-compatible `POST /chat/completions` JSON 输出通道执行；`AI_BASE_URL` 必须是纯 base URL，生产环境必须使用 HTTPS，且请求中的 `model` 必须等于当前 `AI_MODEL`。真实 AI provider 未配置、请求模型不匹配或 provider 输出不能通过后端 schema 校验时，任务应进入 `failed` 并写入 `errorMessage`。
 
 ### `GET /inference-runs/:runId`
 
@@ -288,7 +339,7 @@ type InferenceRunStatus = {
 };
 ```
 
-## 6. Scripts
+## 7. Scripts
 
 ### `GET /scripts/:scriptId`
 
@@ -322,6 +373,7 @@ type ScriptNode = {
   }[];
   confidence: number;
   direction: "supports" | "opposes" | "unclear";
+  price: number | null;
 };
 
 type ScriptEdge = {
@@ -347,11 +399,13 @@ type ScriptMarket = {
     tokenId: string;
     aiAction: "buy" | "avoid";
     userAction: "buy" | "skip";
+    side: "BUY";
     orderMode: "market" | "limit";
     limitPrice: number | null;
     size: number | null;
     amountUsd: number | null;
-    reason: string | null;
+    confidence: number | null;
+    reason: string;
   }[];
 };
 ```
@@ -386,7 +440,7 @@ type ScriptMarket = {
 }
 ```
 
-## 7. Orders
+## 8. Orders
 
 订单接口必须在真实 CLOB 下单能力不可用时仍保持协议可用。前后端统一使用 `executionMode` 和 capability 状态：
 
@@ -426,6 +480,11 @@ type LimitOrderType = "GTC" | "GTD" | "FOK" | "FAK";
 响应：
 
 ```ts
+// Validation rules:
+// - Each selection must provide at least one of amountUsd or size.
+// - If both are provided, amountUsd must match size * price within USD cent precision.
+// - orderType is valid only for limit orders; market orders return orderType=null.
+// - minOrderSize is enforced against amountUsd.
 type OrderPreview = {
   intentId: string;
   executionMode: "dry_run" | "real";
@@ -438,7 +497,7 @@ type OrderPreview = {
   estimatedMaxPayout: number;
   estimatedMaxLoss: number;
   requiresSignature: boolean;
-  submitMode: "dry_run_no_signature" | "signed_clob_order";
+  submitMode: "dry_run_no_signature" | "signed_clob_order" | "unavailable";
   refreshedAt: string;
   expiresAt: string;
   orders: {
@@ -456,6 +515,7 @@ type OrderPreview = {
     size: number;
     tickSize: number | null;
     minOrderSize: number | null;
+    orderBookRefreshedAt: string | null;
     valid: boolean;
     warnings: string[];
     error: string | null;
@@ -474,9 +534,12 @@ type OrderPreview = {
   "intentId": "intent_x",
   "executionMode": "real",
   "walletAddress": "0x...",
-  "chainId": 137
+  "chainId": 137,
+  "funderAddress": "0x..."
 }
 ```
+
+`funderAddress` is required for Polymarket proxy, Gnosis Safe, or smart contract wallet signatures. Causeway defaults real CLOB order signing to Polymarket `signatureType=2` (`POLY_GNOSIS_SAFE`), so the frontend should pass the user's Gnosis Safe / Polymarket proxy funder address when `executionMode="real"`.
 
 响应：
 
@@ -485,12 +548,29 @@ type PrepareSignatureResult = {
   intentId: string;
   executionMode: "dry_run" | "real";
   signingStatus: "ready" | "not_required" | "unavailable";
-  protocol: "dry_run_no_signature" | "polymarket_clob_eip712";
+  protocol: "dry_run_no_signature" | "polymarket_clob_eip712_v2";
   expiresAt: string | null;
   payloads: {
     orderId: string;
-    tokenId: string;
-    payload: unknown;
+    protocol: "polymarket_clob_eip712_v2";
+    orderType: "GTC" | "GTD" | "FOK" | "FAK";
+    signatureType: 0 | 1 | 2 | 3;
+    makerAddress: string;
+    signerAddress: string;
+    funderAddress: string | null;
+    eip712: {
+      primaryType: "Order";
+      domain: {
+        name: "Polymarket CTF Exchange";
+        version: "2";
+        chainId: number;
+        verifyingContract: string;
+      };
+      types: {
+        Order: { name: string; type: string }[];
+      };
+      message: Record<string, string | number>;
+    };
   }[];
   error: string | null;
 };
@@ -503,9 +583,14 @@ type PrepareSignatureResult = {
 ```json
 {
   "intentId": "intent_x",
-  "executionMode": "dry_run",
+  "executionMode": "real",
   "idempotencyKey": "uuid-from-client",
-  "signedOrders": []
+  "signedOrders": [
+    {
+      "orderId": "order_x",
+      "signature": "0x..."
+    }
+  ]
 }
 ```
 
@@ -545,7 +630,7 @@ type OrderIntentDetail = {
 };
 ```
 
-## 8. Portfolio
+## 9. Portfolio
 
 ### `GET /portfolio/summary`
 
@@ -554,7 +639,7 @@ type OrderIntentDetail = {
 ```ts
 type PortfolioSummary = {
   capability: "available" | "degraded" | "unavailable";
-  dataSource: "polymarket_data_api" | "clob" | "chain" | "stub";
+  dataSource: "polymarket_data_api" | "clob" | "chain" | "local" | "stub";
   cashAvailable: number | null;
   portfolioValue: number | null;
   openPositionsValue: number | null;
@@ -564,6 +649,8 @@ type PortfolioSummary = {
   error: string | null;
 };
 ```
+
+`openOrdersValue` 只统计已经提交但未完全结束的订单，例如 `submitted`、`partially_filled`。`preview_ready` 和 `user_confirming` 只代表预览或确认中，不能计入资产敞口。现金余额源未接通时，`cashAvailable=null` 且 summary 必须返回 `capability="degraded"` 或 `capability="unavailable"`；不能因为 Data API 可配置就把空 summary 伪造成 `available`。没有本地持仓和订单时，summary 必须结合最近一次 positions sync 状态区分“未同步”“同步失败”和“已同步为空”。
 
 ### `GET /portfolio/positions`
 
@@ -592,6 +679,26 @@ type Position = {
 };
 ```
 
+如果最近一次持仓同步已成功且本地没有持仓，返回 `capability="available"`、`dataSource="polymarket_data_api"` 和空 `items`。如果尚未同步或最近同步失败，必须通过 `degraded/unavailable` 和 `error` 区分，不能把“空持仓”和“数据源不可用”混在一起。
+
+### `POST /portfolio/positions/sync`
+
+触发当前登录用户的钱包持仓同步。后端从 Polymarket Data API 拉取公开 positions 数据，按 `clobTokenId` 关联本地 outcome，按 `conditionId` 辅助关联 market。同步结果写入本地 `ExternalPosition`，读取接口仍然只读本地数据库。`POLYMARKET_DATA_API_ENABLED=false` 时，该接口返回 `503 CAPABILITY_UNAVAILABLE`，不会访问外部 Data API；上游失败响应不得把钱包地址 query 参数暴露给前端。
+
+响应：
+
+```ts
+type PortfolioPositionsSyncResponse = {
+  runId: string;
+  status: "completed";
+  capability: "available" | "degraded" | "unavailable";
+  fetchedCount: number;
+  upsertedCount: number;
+  skippedCount: number;
+  deletedStaleCount: number;
+};
+```
+
 ### `GET /portfolio/orders`
 
 查询参数：
@@ -602,15 +709,64 @@ cursor
 limit
 ```
 
+`cursor` 为服务端返回的 opaque cursor，按 `createdAt desc, id asc` 稳定分页。
+
 响应结构同样使用 capability wrapper：
 
 ```ts
 type PortfolioOrdersResponse = {
   capability: "available" | "degraded" | "unavailable";
   dataSource: "clob" | "local" | "stub";
-  items: unknown[];
+  items: PortfolioOrderIntent[];
+  nextCursor: string | null;
+  hasMore: boolean;
   refreshedAt: string;
   error: string | null;
+};
+
+type PortfolioOrderIntent = {
+  intentId: string;
+  status:
+    | "draft"
+    | "preview_ready"
+    | "user_confirming"
+    | "dry_run_completed"
+    | "submitted"
+    | "partially_submitted"
+    | "failed"
+    | "cancelled";
+  executionMode: "dry_run" | "real";
+  totalAmountUsd: number | null;
+  createdAt: string;
+  updatedAt: string;
+  orders: PortfolioOrder[];
+};
+
+type PortfolioOrder = {
+  id: string;
+  marketId: string;
+  outcomeId: string;
+  clobTokenId: string;
+  side: "BUY";
+  orderMode: "market" | "limit";
+  orderType: "GTC" | "GTD" | "FOK" | "FAK" | null;
+  limitPrice: number | null;
+  estimatedFillPrice: number | null;
+  size: number | null;
+  amountUsd: number | null;
+  externalOrderId: string | null;
+  status: string;
+  errorMessage: string | null;
+  market: {
+    id: string;
+    slug: string;
+    question: string;
+  };
+  outcome: {
+    id: string;
+    label: string;
+    clobTokenId: string;
+  };
 };
 ```
 
@@ -623,19 +779,55 @@ cursor
 limit
 ```
 
+`cursor` 为服务端返回的 opaque cursor，按 `updatedAt desc, id asc` 稳定分页。
+
+当前真实成交历史源未接通时，接口返回本地已完成订单作为 degraded trade history。没有本地成交时也返回 `dataSource="local"` 的空分页，而不是 `stub/unavailable`。
+
 响应结构：
 
 ```ts
 type PortfolioTradesResponse = {
   capability: "available" | "degraded" | "unavailable";
-  dataSource: "polymarket_data_api" | "clob" | "stub";
-  items: unknown[];
+  dataSource: "polymarket_data_api" | "clob" | "local" | "stub";
+  items: PortfolioTrade[];
+  nextCursor: string | null;
+  hasMore: boolean;
   refreshedAt: string;
   error: string | null;
 };
+
+type PortfolioTrade = {
+  tradeId: string;
+  orderId: string;
+  intentId: string;
+  executionMode: "dry_run" | "real";
+  intentStatus: string;
+  marketId: string;
+  outcomeId: string;
+  tokenId: string;
+  side: "BUY";
+  orderMode: "market" | "limit";
+  orderType: "GTC" | "GTD" | "FOK" | "FAK" | null;
+  price: number | null;
+  size: number | null;
+  amountUsd: number | null;
+  externalOrderId: string | null;
+  status: string;
+  market: {
+    id: string;
+    slug: string;
+    question: string;
+  };
+  outcome: {
+    id: string;
+    label: string;
+    clobTokenId: string;
+  };
+  tradedAt: string;
+};
 ```
 
-## 9. Sync
+## 10. Sync
 
 ### `POST /internal/sync/polymarket`
 
@@ -654,7 +846,82 @@ type PortfolioTradesResponse = {
 
 查看同步任务历史。
 
-## 10. 错误码
+查询参数：
+```text
+jobType
+scope
+status=running|completed|failed
+cursor
+limit
+```
+
+`cursor` 为服务端返回的 opaque cursor，按 `startedAt desc, id asc` 稳定分页。`limit` 默认 50，最大 100。
+
+响应：
+```ts
+type SyncRunsResponse = {
+  items: SyncRunItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
+type SyncRunItem = {
+  id: string;
+  jobType: string;
+  scope: string;
+  status: "running" | "completed" | "failed";
+  fetchedCount: number;
+  upsertedCount: number;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
+```
+
+## 11. Monitor
+
+### `POST /internal/monitor/order-statuses/refresh`
+
+内部接口，触发订单状态刷新边界。当前实现按批扫描本地订单状态，先记录 `SyncRun.running`，结束时更新为 `completed` 或 `failed`；真实 CLOB 状态刷新未接通前不能伪造成 available 或外部状态已刷新。
+
+响应：
+```ts
+type OrderStatusRefreshResult = {
+  runId: string;
+  jobType: "order_status_refresh";
+  status: "completed" | "failed";
+  capability: "degraded" | "unavailable";
+  source: "local_order_state";
+  reason: string;
+  inspectedOrderCount: number;
+  batchCount: number;
+  statusCounts: Record<string, number>;
+  intentStatusCounts: Record<string, number>;
+  refreshableExternalOrderCount: number;
+  missingExternalOrderIdCount: number;
+};
+```
+
+### `POST /internal/monitor/script-markets/refresh`
+
+内部接口，触发脚本市场监控刷新边界。当前实现按批扫描非 archived 脚本相关市场，基于本地 Polymarket 缓存为 market 和 outcome 写入 `MarketSnapshot`，先记录 `SyncRun.running`，结束时更新为 `completed` 或 `failed`；未接通真实外部刷新前不能伪造为 available。
+
+响应：
+```ts
+type ScriptMarketRefreshResult = {
+  runId: string;
+  jobType: "script_market_refresh";
+  status: "completed" | "failed";
+  capability: "degraded" | "unavailable";
+  source: "local_polymarket_cache";
+  reason: string;
+  refreshedScriptMarketCount: number;
+  snapshotCount: number;
+  batchCount: number;
+};
+```
+
+## 12. 错误码
 
 ```text
 AUTH_REQUIRED
@@ -668,6 +935,9 @@ INSUFFICIENT_CASH
 INVALID_TICK_SIZE
 BELOW_MIN_ORDER_SIZE
 ORDER_PREVIEW_EXPIRED
+ORDER_INTENT_NOT_SUBMITTABLE
+REQUEST_VALIDATION_FAILED
+READINESS_FAILED
 CAPABILITY_UNAVAILABLE
 USER_REJECTED_SIGNATURE
 SIGNATURE_EXPIRED
@@ -676,4 +946,5 @@ RATE_LIMITED
 INFERENCE_FAILED
 CACHE_ENTRY_EXPIRED
 POLYMARKET_API_ERROR
+POLYMARKET_IDENTITY_CONFLICT
 ```
