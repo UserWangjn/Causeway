@@ -30,7 +30,8 @@
     "quality:api:full": "npm run quality:api && npm run test:api:integration && npm run test:api:contract && npm run test:api:e2e",
     "db:generate": "npm --workspace @causeway/api run db:generate",
     "db:migrate": "npm --workspace @causeway/api run db:migrate",
-    "db:deploy": "npm --workspace @causeway/api run db:deploy"
+    "db:deploy": "npm --workspace @causeway/api run db:deploy",
+    "db:seed:demo": "npm --workspace @causeway/api run db:seed:demo"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^6.0.1",

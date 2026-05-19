@@ -21,10 +21,11 @@ describe('validateEnv', () => {
     expect(env.LOG_HTTP_REQUESTS).toBe('true');
     expect(env.POLYMARKET_MARKET_SYNC_ENABLED).toBe('false');
     expect(env.POLYMARKET_DATA_API_ENABLED).toBe('true');
-    expect(env.POLYMARKET_MARKET_SYNC_INTERVAL_MS).toBe(300_000);
+    expect(env.POLYMARKET_MARKET_SYNC_INTERVAL_MS).toBe(900_000);
     expect(env.POLYMARKET_MARKET_SYNC_LIMIT).toBe(1000);
     expect(env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS).toBe(900_000);
     expect(env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP).toBe('false');
+    expect(env.POLYMARKET_CLOB_SIGNATURE_TYPE).toBe(2);
     expect(env.AI_HTTP_TIMEOUT_MS).toBe(30_000);
     expect(env.AI_MAX_OUTPUT_TOKENS).toBe(4_000);
   });
@@ -179,9 +180,19 @@ describe('validateEnv', () => {
       AI_BASE_URL: '',
       AI_API_KEY: '',
       AI_MODEL: '',
+      AI_THINKING_MODE: 'disabled',
     });
 
     expect(env.AI_BASE_URL).toBe('');
+    expect(env.AI_THINKING_MODE).toBe('disabled');
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        AI_BASE_URL: 'https://provider.test/v1',
+        AI_THINKING_MODE: 'auto',
+      }),
+    ).toThrow(/AI_THINKING_MODE/);
 
     expect(() =>
       validateEnv({
@@ -270,6 +281,30 @@ describe('validateEnv', () => {
         POLYMARKET_MARKET_SYNC_LOCK_TTL_MS: '1000',
       }),
     ).toThrow(/POLYMARKET_MARKET_SYNC_LOCK_TTL_MS/);
+  });
+
+  it('requires CLOB API credentials only when real orders are enabled in production', () => {
+    const base = {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+      RATE_LIMIT_ENABLED: 'false',
+      ...productionSecrets,
+      ENABLE_REAL_ORDERS: 'true',
+    };
+
+    expect(() => validateEnv(base)).toThrow(/POLYMARKET_CLOB_API_KEY/);
+
+    const env = validateEnv({
+      ...base,
+      POLYMARKET_CLOB_API_KEY: 'api-key',
+      POLYMARKET_CLOB_API_SECRET: 'api-secret',
+      POLYMARKET_CLOB_API_PASSPHRASE: 'api-passphrase',
+      POLYMARKET_CLOB_API_ADDRESS: '0x1111111111111111111111111111111111111111',
+      POLYMARKET_CLOB_SIGNATURE_TYPE: '2',
+    });
+
+    expect(env.ENABLE_REAL_ORDERS).toBe('true');
+    expect(env.POLYMARKET_CLOB_SIGNATURE_TYPE).toBe(2);
   });
 });
 

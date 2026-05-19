@@ -1,4 +1,5 @@
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ApiException } from '../../common/errors/api.exception';
@@ -18,13 +19,20 @@ import {
 import type { AiInferenceOutput, AiMarketNode, InferenceMarketInput, InferencePromptInput } from './inference.types';
 
 @Injectable()
-export class InferenceService {
+export class InferenceService implements OnModuleDestroy {
+  private readonly processingRunIds = new Set<string>();
+  private isShuttingDown = false;
+
   constructor(
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
     @Inject(AiClientService)
     private readonly aiClient: AiClientService,
   ) {}
+
+  onModuleDestroy(): void {
+    this.isShuttingDown = true;
+  }
 
   async createRun(user: CurrentUser, dto: CreateInferenceRunDto) {
     if (dto.model !== MOCK_INFERENCE_MODEL) {
@@ -87,7 +95,78 @@ export class InferenceService {
       },
     });
 
-    return this.processRun(run.id, user.id, user.requestId, dto, root, promptInput, cacheKey);
+    return {
+      runId: run.id,
+      status: 'queued',
+      cacheKey,
+      cacheHit: false,
+      scriptId: null,
+    };
+  }
+
+  @Interval(1_000)
+  async processQueuedRuns(): Promise<void> {
+    if (this.isShuttingDown) return;
+    const capacity = Math.max(0, 2 - this.processingRunIds.size);
+    if (capacity === 0) return;
+
+    const runs = await this.prisma.inferenceRun.findMany({
+      where: { status: 'queued' },
+      orderBy: { createdAt: 'asc' },
+      take: capacity,
+      select: { id: true },
+    });
+    for (const run of runs) {
+      void this.processQueuedRun(run.id);
+    }
+  }
+
+  async processQueuedRun(runId: string) {
+    if (this.processingRunIds.has(runId)) return null;
+    this.processingRunIds.add(runId);
+    try {
+      const claim = await this.prisma.inferenceRun.updateMany({
+        where: { id: runId, status: 'queued' },
+        data: {
+          status: 'running',
+          stage: 'candidate_retrieval',
+          progress: 10,
+          errorMessage: null,
+        },
+      });
+      if (claim.count !== 1) return null;
+
+      const run = await this.prisma.inferenceRun.findUnique({
+        where: { id: runId },
+        select: {
+          id: true,
+          userId: true,
+          rootMarketId: true,
+          rootOutcomeId: true,
+          depth: true,
+          maxMarketsPerLayer: true,
+          confidenceThreshold: true,
+          model: true,
+          cacheEnabled: true,
+          cacheKey: true,
+          inputJson: true,
+        },
+      });
+      if (!run) {
+        await this.markRunFailed(runId, 'Inference run was not found after it was claimed');
+        return null;
+      }
+
+      const dto = dtoFromRun(run);
+      const root = await this.loadRootMarket(run.rootMarketId, run.rootOutcomeId);
+      const promptInput = readStoredPromptInput(run.inputJson);
+      return await this.processRun(run.id, run.userId, undefined, dto, root, promptInput, run.cacheKey);
+    } catch (error) {
+      await this.markRunFailed(runId, error instanceof Error ? error.message : String(error));
+      return null;
+    } finally {
+      this.processingRunIds.delete(runId);
+    }
   }
 
   private async processRun(
@@ -143,17 +222,21 @@ export class InferenceService {
         scriptId: script.id,
       };
     } catch (error) {
-      await this.prisma.inferenceRun.update({
-        where: { id: runId },
-        data: {
-          status: 'failed',
-          progress: 100,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          completedAt: new Date(),
-        },
-      });
+      await this.markRunFailed(runId, error instanceof Error ? error.message : String(error));
       throw error;
     }
+  }
+
+  private async markRunFailed(runId: string, errorMessage: string): Promise<void> {
+    await this.prisma.inferenceRun.update({
+      where: { id: runId },
+      data: {
+        status: 'failed',
+        progress: 100,
+        errorMessage,
+        completedAt: new Date(),
+      },
+    });
   }
 
   async getRun(user: CurrentUser, runId: string) {
@@ -435,6 +518,96 @@ function buildPromptInput(
   };
 }
 
+function dtoFromRun(run: {
+  rootMarketId: string;
+  rootOutcomeId: string;
+  depth: number;
+  maxMarketsPerLayer: number;
+  confidenceThreshold: unknown;
+  model: string;
+  cacheEnabled: boolean;
+}): CreateInferenceRunDto {
+  const confidenceThreshold = toNullableNumber(run.confidenceThreshold);
+  if (confidenceThreshold == null) {
+    throw new ApiException(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      'INFERENCE_FAILED',
+      'Stored inference run confidenceThreshold is invalid',
+    );
+  }
+
+  return {
+    rootMarketId: run.rootMarketId,
+    rootOutcomeId: run.rootOutcomeId,
+    depth: run.depth,
+    maxMarketsPerLayer: run.maxMarketsPerLayer,
+    confidenceThreshold,
+    model: run.model,
+    cacheEnabled: run.cacheEnabled,
+  };
+}
+
+function readStoredPromptInput(value: unknown): InferencePromptInput {
+  const input = readRecord(value, 'inputJson');
+  const root = readRecord(input.root, 'inputJson.root');
+  const settings = readRecord(input.settings, 'inputJson.settings');
+  const selectedOutcome = readInferenceOutcome(root.selectedOutcome, 'inputJson.root.selectedOutcome');
+  const candidateMarketsValue = input.candidateMarkets;
+  if (!Array.isArray(candidateMarketsValue)) {
+    throw storedInputError('inputJson.candidateMarkets must be an array');
+  }
+
+  return {
+    root: {
+      marketId: readRequiredString(root.marketId, 'inputJson.root.marketId'),
+      marketQuestion: readRequiredString(root.marketQuestion, 'inputJson.root.marketQuestion'),
+      selectedOutcome,
+    },
+    settings: {
+      depth: readRequiredNumber(settings.depth, 'inputJson.settings.depth'),
+      maxMarketsPerLayer: readRequiredNumber(settings.maxMarketsPerLayer, 'inputJson.settings.maxMarketsPerLayer'),
+      confidenceThreshold: readRequiredNumber(settings.confidenceThreshold, 'inputJson.settings.confidenceThreshold'),
+    },
+    candidateMarkets: candidateMarketsValue.map((market, index) =>
+      readInferenceMarket(market, `inputJson.candidateMarkets.${index}`),
+    ),
+  };
+}
+
+function readInferenceMarket(value: unknown, path: string): InferenceMarketInput {
+  const market = readRecord(value, path);
+  const outcomes = market.outcomes;
+  if (!Array.isArray(outcomes)) {
+    throw storedInputError(`${path}.outcomes must be an array`);
+  }
+
+  return {
+    marketId: readRequiredString(market.marketId, `${path}.marketId`),
+    eventTitle: readNullableString(market.eventTitle, `${path}.eventTitle`),
+    question: readRequiredString(market.question, `${path}.question`),
+    description: readNullableString(market.description, `${path}.description`),
+    rules: readNullableString(market.rules, `${path}.rules`),
+    category: readNullableString(market.category, `${path}.category`),
+    tags: readStringArray(market.tags, `${path}.tags`),
+    active: readRequiredBoolean(market.active, `${path}.active`),
+    closed: readRequiredBoolean(market.closed, `${path}.closed`),
+    acceptingOrders: readRequiredBoolean(market.acceptingOrders, `${path}.acceptingOrders`),
+    volume: readNullableNumber(market.volume, `${path}.volume`),
+    liquidity: readNullableNumber(market.liquidity, `${path}.liquidity`),
+    outcomes: outcomes.map((outcome, index) => readInferenceOutcome(outcome, `${path}.outcomes.${index}`)),
+  };
+}
+
+function readInferenceOutcome(value: unknown, path: string) {
+  const outcome = readRecord(value, path);
+  return {
+    outcomeId: readRequiredString(outcome.outcomeId, `${path}.outcomeId`),
+    label: readRequiredString(outcome.label, `${path}.label`),
+    tokenId: readRequiredString(outcome.tokenId, `${path}.tokenId`),
+    price: readNullableNumber(outcome.price, `${path}.price`),
+  };
+}
+
 function formatMarketInput(
   market: Prisma.PolymarketMarketGetPayload<{
     include: {
@@ -524,6 +697,57 @@ function stringTags(value: unknown): string[] {
 
 function firstStringTag(value: unknown): string | null {
   return stringTags(value)[0] ?? null;
+}
+
+function readRecord(value: unknown, path: string): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  throw storedInputError(`${path} must be an object`);
+}
+
+function readRequiredString(value: unknown, path: string): string {
+  if (typeof value === 'string' && value.trim()) return value;
+  throw storedInputError(`${path} must be a non-empty string`);
+}
+
+function readNullableString(value: unknown, path: string): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') return value;
+  throw storedInputError(`${path} must be a string or null`);
+}
+
+function readRequiredNumber(value: unknown, path: string): number {
+  const parsed = toNullableNumber(value);
+  if (parsed != null) return parsed;
+  throw storedInputError(`${path} must be a number`);
+}
+
+function readNullableNumber(value: unknown, path: string): number | null {
+  if (value == null) return null;
+  const parsed = toNullableNumber(value);
+  if (parsed != null) return parsed;
+  throw storedInputError(`${path} must be a number or null`);
+}
+
+function readRequiredBoolean(value: unknown, path: string): boolean {
+  if (typeof value === 'boolean') return value;
+  throw storedInputError(`${path} must be a boolean`);
+}
+
+function readStringArray(value: unknown, path: string): string[] {
+  if (!isStringArray(value)) {
+    throw storedInputError(`${path} must be a string array`);
+  }
+  return value;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function storedInputError(message: string): ApiException {
+  return new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'INFERENCE_FAILED', `Stored inference input is invalid: ${message}`);
 }
 
 function toJson(value: unknown): Prisma.InputJsonValue {

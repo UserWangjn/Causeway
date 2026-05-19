@@ -4,7 +4,7 @@
 
 本文定义 Causeway API 从本地开发到生产部署的最低可重复流程。它补齐 B9 生产就绪要求：环境矩阵、迁移流程、健康检查、限流、备份恢复、日志监控和发布门禁。
 
-真实 CLOB 下单不属于本文的默认发布流程；在 Spike 验收前，生产环境应保持 `ENABLE_REAL_ORDERS=false`。
+真实 CLOB 下单不属于本文的默认发布流程；生产环境默认保持 `ENABLE_REAL_ORDERS=false`。启用真实订单前必须配置 CLOB L2 API 凭据，并确认前端按 `signatureType=2` / `POLY_GNOSIS_SAFE` 传入 `funderAddress` 和用户钱包签名。
 
 ## 2. 环境矩阵
 
@@ -73,7 +73,7 @@ API 推演接口使用同一组 AI provider 配置。`AI_BASE_URL` 必须是纯 
 
 Portfolio position sync 默认通过 Polymarket Data API 拉取公开 positions。需要保持本地只读或外部 Data API 不可用时，将 `POLYMARKET_DATA_API_ENABLED=false`；此时持仓同步返回 `503 CAPABILITY_UNAVAILABLE`。Data API 上游错误响应只允许暴露脱敏后的 endpoint，不记录或返回钱包地址 query 参数。
 
-`smoke:api:polymarket` 会读取真实 Gamma market，并使用一个 CLOB token id 检查只读 order book。可以通过 `SMOKE_CLOB_TOKEN_ID` 指定固定 token。`smoke:api:real-orders` 只保留安全边界；真实订单 Spike 通过前不会提交订单。
+`smoke:api:polymarket` 会读取真实 Gamma market，并使用一个 CLOB token id 检查只读 order book。可以通过 `SMOKE_CLOB_TOKEN_ID` 指定固定 token。默认不设置 `SMOKE_*_ENABLED` 时，所有 smoke 命令只返回 skipped，不访问外部服务。`smoke:api:real-orders` 只做配置 preflight；即使设置 `SMOKE_REAL_ORDERS_ENABLED=true` 和 `SMOKE_REAL_ORDERS_ACKNOWLEDGE_RISK=true`，也不会提交真实订单。
 
 ## 5. 生产部署流程
 

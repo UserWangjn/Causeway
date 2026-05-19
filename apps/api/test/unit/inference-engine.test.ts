@@ -69,6 +69,33 @@ describe('inference engine helpers', () => {
     expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output schema is invalid');
   });
 
+  it('normalizes numeric strings from provider output at the schema boundary', () => {
+    const promptInput = inferencePromptInput();
+    const output = validInferenceOutput(promptInput) as unknown as {
+      nodes: Array<{
+        layer: string | number;
+        confidence: string | number;
+        outcomes: Array<{ confidence: string | number }>;
+      }>;
+      edges: Array<{ confidence: string | number }>;
+    };
+    output.nodes[0].layer = '0';
+    output.nodes[0].confidence = '1';
+    output.nodes[0].outcomes[0].confidence = '1';
+    output.nodes[1].layer = '1';
+    output.nodes[1].confidence = '0.8';
+    output.nodes[1].outcomes[0].confidence = '0.8';
+    output.nodes[1].outcomes[1].confidence = '0.6';
+    output.edges[0].confidence = '0.8';
+
+    const validated = validateAiInferenceOutput(output, promptInput);
+
+    expect(validated.nodes[0].layer).toBe(0);
+    expect(validated.nodes[1].layer).toBe(1);
+    expect(validated.nodes[1].confidence).toBe(0.8);
+    expect(validated.edges[0].confidence).toBe(0.8);
+  });
+
   it('rejects duplicate outcome recommendations', () => {
     const promptInput = inferencePromptInput();
     const output = validInferenceOutput(promptInput);
@@ -110,7 +137,38 @@ describe('inference engine helpers', () => {
     );
   });
 
-  it('rejects outputs that exceed maxMarketsPerLayer', () => {
+  it('validates all provider market references before truncating excess nodes', () => {
+    const promptInput = {
+      ...inferencePromptInput(),
+      settings: {
+        depth: 2,
+        maxMarketsPerLayer: 1,
+        confidenceThreshold: 0.55,
+      },
+    };
+    const output = validInferenceOutput(promptInput);
+    output.nodes.push({
+      clientNodeId: 'unknown_candidate',
+      marketId: 'unknown_market',
+      layer: 1,
+      confidence: 0.1,
+      impactDirection: 'supports',
+      reason: 'unknown market should still be rejected',
+      outcomes: [
+        {
+          outcomeId: 'unknown_outcome',
+          outcomeLabel: 'Unknown',
+          aiAction: 'buy',
+          confidence: 0.1,
+          reason: 'invalid provider reference',
+        },
+      ],
+    });
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output referenced an unknown market');
+  });
+
+  it('truncates outputs that exceed maxMarketsPerLayer', () => {
     const promptInput = {
       ...inferencePromptInput(),
       settings: {
@@ -146,7 +204,11 @@ describe('inference engine helpers', () => {
       reason: 'root to second candidate',
     });
 
-    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output exceeds maxMarketsPerLayer');
+    const validated = validateAiInferenceOutput(output, promptInput);
+
+    expect(validated.nodes.map((node) => node.clientNodeId)).toEqual(['root', 'candidate_1']);
+    expect(validated.edges.map((edge) => edge.targetClientNodeId)).toEqual(['candidate_1']);
+    expect(validated.warnings).toContain('truncated_to_max_markets_per_layer');
   });
 });
 

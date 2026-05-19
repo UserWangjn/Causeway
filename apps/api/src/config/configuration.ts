@@ -23,6 +23,14 @@ export const configuration = () => ({
   polymarket: {
     gammaBaseUrl: process.env.POLYMARKET_GAMMA_BASE_URL ?? 'https://gamma-api.polymarket.com',
     clobBaseUrl: process.env.POLYMARKET_CLOB_BASE_URL ?? 'https://clob.polymarket.com',
+    clobApi: {
+      key: process.env.POLYMARKET_CLOB_API_KEY,
+      secret: process.env.POLYMARKET_CLOB_API_SECRET,
+      passphrase: process.env.POLYMARKET_CLOB_API_PASSPHRASE,
+      address: process.env.POLYMARKET_CLOB_API_ADDRESS,
+      signatureType: Number(process.env.POLYMARKET_CLOB_SIGNATURE_TYPE ?? 2),
+      funderAddress: process.env.POLYMARKET_CLOB_FUNDER_ADDRESS,
+    },
     dataBaseUrl: process.env.POLYMARKET_DATA_BASE_URL ?? 'https://data-api.polymarket.com',
     dataApi: {
       enabled: process.env.POLYMARKET_DATA_API_ENABLED !== 'false',
@@ -31,7 +39,7 @@ export const configuration = () => ({
     httpRetries: Number(process.env.POLYMARKET_HTTP_RETRIES ?? 2),
     marketSync: {
       enabled: process.env.POLYMARKET_MARKET_SYNC_ENABLED === 'true',
-      intervalMs: Number(process.env.POLYMARKET_MARKET_SYNC_INTERVAL_MS ?? 300_000),
+      intervalMs: Number(process.env.POLYMARKET_MARKET_SYNC_INTERVAL_MS ?? 900_000),
       limit: Number(process.env.POLYMARKET_MARKET_SYNC_LIMIT ?? 1000),
       lockTtlMs: Number(process.env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS ?? 900_000),
       runOnStartup: process.env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP === 'true',
@@ -41,6 +49,7 @@ export const configuration = () => ({
     baseUrl: process.env.AI_BASE_URL,
     apiKey: process.env.AI_API_KEY,
     model: process.env.AI_MODEL,
+    thinkingMode: process.env.AI_THINKING_MODE,
     httpTimeoutMs: Number(process.env.AI_HTTP_TIMEOUT_MS ?? 30_000),
     maxOutputTokens: Number(process.env.AI_MAX_OUTPUT_TOKENS ?? 4_000),
   },

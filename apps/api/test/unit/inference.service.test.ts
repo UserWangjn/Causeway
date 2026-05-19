@@ -69,14 +69,36 @@ describe('InferenceService', () => {
       }),
       runStructuredInference: vi.fn((input: InferencePromptInput) => Promise.resolve(buildMockInferenceOutput(input))),
     };
+    let createdInputJson: unknown;
+    const inferenceRunCreate = vi.fn((args: InferenceRunCreateArgs) => {
+      createdInputJson = args.data.inputJson;
+      return Promise.resolve({ id: 'run_1' });
+    });
+    const inferenceRunUpdate = vi.fn().mockResolvedValue({});
     const service = createService({
       polymarketMarket: {
         findUnique: vi.fn().mockResolvedValue(rootMarket()),
         findMany: vi.fn().mockResolvedValue([candidateMarket()]),
       },
       inferenceRun: {
-        create: vi.fn().mockResolvedValue({ id: 'run_1' }),
-        update: vi.fn(),
+        create: inferenceRunCreate,
+        update: inferenceRunUpdate,
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findUnique: vi.fn().mockImplementation(() =>
+          Promise.resolve({
+            id: 'run_1',
+            userId: 'user_1',
+            rootMarketId: 'root_market',
+            rootOutcomeId: 'root_outcome',
+            depth: 1,
+            maxMarketsPerLayer: 2,
+            confidenceThreshold: 0.5,
+            model: 'gpt-test',
+            cacheEnabled: true,
+            cacheKey: 'cache_key_1',
+            inputJson: createdInputJson,
+          }),
+        ),
       },
       inferenceCacheEntry: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -88,6 +110,15 @@ describe('InferenceService', () => {
     const result = await service.createRun(currentUser(), createRunDto('gpt-test'));
 
     expect(result).toMatchObject({
+      runId: 'run_1',
+      status: 'queued',
+      scriptId: null,
+    });
+    expect(aiClient.runStructuredInference).not.toHaveBeenCalled();
+
+    const completed = await service.processQueuedRun('run_1');
+
+    expect(completed).toMatchObject({
       runId: 'run_1',
       status: 'completed',
       scriptId: 'script_1',
@@ -116,7 +147,7 @@ describe('InferenceService', () => {
     expect(aiClient.runStructuredInference).not.toHaveBeenCalled();
   });
 
-  it('keeps the mock model fast path and returns the completed script', async () => {
+  it('queues the mock model and completes it through the inference worker', async () => {
     const scriptMarketCreate = vi.fn().mockResolvedValueOnce({ id: 'script_market_root' }).mockResolvedValueOnce({
       id: 'script_market_candidate',
     });
@@ -142,6 +173,11 @@ describe('InferenceService', () => {
         create: vi.fn(),
       },
     };
+    let createdInputJson: unknown;
+    const inferenceRunCreate = vi.fn((args: InferenceRunCreateArgs) => {
+      createdInputJson = args.data.inputJson;
+      return Promise.resolve({ id: 'run_1' });
+    });
     const inferenceRunUpdate = vi.fn().mockResolvedValue({});
     const service = createService({
       polymarketMarket: {
@@ -149,8 +185,24 @@ describe('InferenceService', () => {
         findMany: vi.fn().mockResolvedValue([candidateMarket()]),
       },
       inferenceRun: {
-        create: vi.fn().mockResolvedValue({ id: 'run_1' }),
+        create: inferenceRunCreate,
         update: inferenceRunUpdate,
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findUnique: vi.fn().mockImplementation(() =>
+          Promise.resolve({
+            id: 'run_1',
+            userId: 'user_1',
+            rootMarketId: 'root_market',
+            rootOutcomeId: 'root_outcome',
+            depth: 1,
+            maxMarketsPerLayer: 2,
+            confidenceThreshold: 0.5,
+            model: MOCK_INFERENCE_MODEL,
+            cacheEnabled: true,
+            cacheKey: 'cache_key_1',
+            inputJson: createdInputJson,
+          }),
+        ),
       },
       inferenceCacheEntry: {
         findFirst: vi.fn().mockResolvedValue(null),
@@ -162,6 +214,14 @@ describe('InferenceService', () => {
     const result = await service.createRun(currentUser(), createRunDto(MOCK_INFERENCE_MODEL));
 
     expect(result).toMatchObject({
+      runId: 'run_1',
+      status: 'queued',
+      cacheHit: false,
+      scriptId: null,
+    });
+    const completed = await service.processQueuedRun('run_1');
+
+    expect(completed).toMatchObject({
       runId: 'run_1',
       status: 'completed',
       cacheHit: false,
@@ -198,6 +258,12 @@ function createService(
 ): InferenceService {
   return new InferenceService(prisma as PrismaService, aiClient as AiClientService);
 }
+
+type InferenceRunCreateArgs = {
+  data: {
+    inputJson: unknown;
+  };
+};
 
 function currentUser(): CurrentUser {
   return {

@@ -5,6 +5,7 @@ import {
   isEnabled,
   isRecord,
   printSummary,
+  type SmokeSummary,
   readEnv,
   readOptionalEnv,
   readPositiveInteger,
@@ -14,16 +15,15 @@ import {
 const SMOKE_NAME = 'polymarket-readonly';
 const ENABLED_ENV = 'SMOKE_POLYMARKET_ENABLED';
 
-async function main(): Promise<void> {
+export async function runPolymarketSmoke(): Promise<SmokeSummary> {
   if (!isEnabled(ENABLED_ENV)) {
-    printSummary({
+    return {
       name: SMOKE_NAME,
       status: 'skipped',
       details: {
         reason: `Set ${ENABLED_ENV}=true to run real Polymarket read-only smoke checks`,
       },
-    });
-    return;
+    };
   }
 
   const timeoutMs = readPositiveInteger('SMOKE_HTTP_TIMEOUT_MS', readPositiveInteger('POLYMARKET_HTTP_TIMEOUT_MS', 10_000));
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   const walletAddress = readOptionalEnv('SMOKE_POLYMARKET_WALLET_ADDRESS');
   const dataApiPositionCount = walletAddress ? await fetchPositionCount(dataBaseUrl, walletAddress, timeoutMs) : null;
 
-  printSummary({
+  return {
     name: SMOKE_NAME,
     status: 'passed',
     details: {
@@ -70,7 +70,11 @@ async function main(): Promise<void> {
       clobAskLevels: Array.isArray(bookPayload.asks) ? bookPayload.asks.length : 0,
       dataApiPositions: dataApiPositionCount ?? 'skipped',
     },
-  });
+  };
+}
+
+async function main(): Promise<void> {
+  printSummary(await runPolymarketSmoke());
 }
 
 function jsonHeaders(): RequestInit {
@@ -108,7 +112,9 @@ async function fetchPositionCount(baseUrl: string, walletAddress: string, timeou
   return payload.length;
 }
 
-main().catch((error: unknown) => {
-  console.error(JSON.stringify({ name: SMOKE_NAME, status: 'failed', error: formatUnknownError(error) }, null, 2));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error: unknown) => {
+    console.error(JSON.stringify({ name: SMOKE_NAME, status: 'failed', error: formatUnknownError(error) }, null, 2));
+    process.exitCode = 1;
+  });
+}

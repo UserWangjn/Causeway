@@ -4,9 +4,10 @@ import { getAddress } from 'viem';
 import { ApiException } from '../../common/errors/api.exception';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { hashJson } from '../../common/utils/hash.util';
-import { roundCurrency } from '../../common/utils/number.util';
+import { roundCurrency, toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
-import { ClobClient } from '../../integrations/polymarket/services/clob.client';
+import { ClobClient, PreparedClobOrder, SignedClobOrderInput } from '../../integrations/polymarket/services/clob.client';
+import type { OrderBookSnapshot } from '../../integrations/polymarket/types';
 import { OrderPreviewDto } from './dto/order-preview.dto';
 import { PrepareSignatureDto } from './dto/prepare-signature.dto';
 import { SubmitOrderDto } from './dto/submit-order.dto';
@@ -34,7 +35,9 @@ export class OrdersService {
 
     const capability = this.clobClient.getCapability();
     const expiresAt = new Date(Date.now() + 60 * 1000);
-    const previewOrders = dto.selections.map((selection) => {
+    const requireFreshOrderBook = dto.executionMode === 'real' && capability.status === 'available';
+    const orderBookByTokenId = new Map<string, Promise<OrderBookSnapshot | null>>();
+    const previewOrders = await Promise.all(dto.selections.map(async (selection) => {
       const row = selectionById.get(selection.selectionId);
       if (!row) {
         throw new ApiException(HttpStatus.NOT_FOUND, 'OUTCOME_NOT_FOUND', 'Script outcome selection was not found');
@@ -46,11 +49,18 @@ export class OrdersService {
         });
       }
 
+      const shouldRefreshOrderBook = requireFreshOrderBook || isLikelyRealClobTokenId(row.outcome.clobTokenId);
+      const orderBook = shouldRefreshOrderBook
+        ? await this.loadPreviewOrderBook(row.outcome.clobTokenId, orderBookByTokenId)
+        : null;
+
       return buildPreviewOrder(selection, {
         market: row.scriptMarket.market,
         outcome: row.outcome,
+        orderBook,
+        requireFreshOrderBook,
       });
-    });
+    }));
     const totalAmountUsd = roundCurrency(previewOrders.reduce((sum, order) => sum + order.amountUsd, 0));
     const estimatedMaxPayout = roundCurrency(previewOrders.reduce((sum, order) => sum + order.size, 0));
     const allOrdersValid = previewOrders.every((order) => order.valid);
@@ -98,6 +108,9 @@ export class OrdersService {
               orderMode: order.orderMode,
               orderType: order.orderType,
               limitPrice: order.limitPrice,
+              tickSize: order.tickSize,
+              minOrderSize: order.minOrderSize,
+              orderBookRefreshedAt: order.orderBookRefreshedAt,
             }),
           },
         });
@@ -137,7 +150,7 @@ export class OrdersService {
       estimatedMaxLoss: totalAmountUsd,
       requiresSignature: dto.executionMode === 'real' && capability.status === 'available' && allOrdersValid,
       submitMode: resolveSubmitMode(dto.executionMode, capability.status, allOrdersValid),
-      refreshedAt: intent.createdAt.toISOString(),
+      refreshedAt: resolvePreviewRefreshedAt(previewOrders, intent.createdAt),
       expiresAt: expiresAt.toISOString(),
       orders: previewOrders,
     };
@@ -152,6 +165,18 @@ export class OrdersService {
     return {
       ...response,
     };
+  }
+
+  private loadPreviewOrderBook(
+    tokenId: string,
+    orderBookByTokenId: Map<string, Promise<OrderBookSnapshot | null>>,
+  ): Promise<OrderBookSnapshot | null> {
+    const cached = orderBookByTokenId.get(tokenId);
+    if (cached) return cached;
+
+    const pending = this.clobClient.getOrderBook(tokenId).catch(() => null);
+    orderBookByTokenId.set(tokenId, pending);
+    return pending;
   }
 
   async prepareSignature(user: CurrentUser, dto: PrepareSignatureDto) {
@@ -169,20 +194,48 @@ export class OrdersService {
     assertIntentHasNoFailedOrders(intent);
 
     const capability = this.clobClient.getCapability();
-    const result = {
+    const result: {
+      intentId: string;
+      executionMode: string;
+      signingStatus: 'not_required' | 'ready' | 'unavailable';
+      protocol: 'dry_run_no_signature' | 'polymarket_clob_eip712_v2';
+      expiresAt: string | null;
+      payloads: PreparedClobOrder[];
+      error: string | null;
+    } = {
       intentId: dto.intentId,
       executionMode: dto.executionMode,
       signingStatus: dto.executionMode === 'dry_run' ? 'not_required' : capability.status === 'available' ? 'ready' : 'unavailable',
-      protocol: dto.executionMode === 'dry_run' ? 'dry_run_no_signature' : 'polymarket_clob_eip712',
-      expiresAt: null,
+      protocol: dto.executionMode === 'dry_run' ? 'dry_run_no_signature' : 'polymarket_clob_eip712_v2',
+      expiresAt: dto.executionMode === 'dry_run' ? null : intent.previewExpiresAt?.toISOString() ?? null,
       payloads: [],
       error: dto.executionMode === 'real' && capability.status !== 'available' ? capability.reason : null,
     };
 
     if (result.signingStatus === 'ready') {
-      await this.prisma.orderIntent.update({
-        where: { id: intent.id },
-        data: { status: OrderIntentStatus.user_confirming },
+      result.payloads = this.clobClient.prepareSignaturePayloads(
+        intent.orders.map((order) => toClobSignaturePayloadInput(order, dto.walletAddress, dto.funderAddress, dto.chainId)),
+        intent.previewExpiresAt ?? new Date(Date.now() + 60_000),
+      );
+
+      const payloadByOrderId = new Map(result.payloads.map((payload) => [payload.orderId, payload]));
+      await this.prisma.$transaction(async (tx) => {
+        await tx.orderIntent.update({
+          where: { id: intent.id },
+          data: { status: OrderIntentStatus.user_confirming },
+        });
+        for (const order of intent.orders) {
+          const preparedOrder = payloadByOrderId.get(order.id);
+          await tx.causewayOrder.update({
+            where: { id: order.id },
+            data: {
+              submitPayload: toJson({
+                ...readRecord(order.submitPayload),
+                preparedClobOrder: preparedOrder,
+              }),
+            },
+          });
+        }
       });
     }
 
@@ -212,19 +265,16 @@ export class OrdersService {
     assertIntentIsSubmittable(intent);
     assertPreviewNotExpired(intent);
     assertIntentHasNoFailedOrders(intent);
-    if (dto.executionMode === 'real') {
-      const capability = this.clobClient.getCapability();
-      if (capability.status !== 'available') {
-        throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', capability.reason);
-      }
-      throw new ApiException(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        'CAPABILITY_UNAVAILABLE',
-        'Real order submission is not implemented yet',
-      );
-    }
 
     try {
+      if (dto.executionMode === 'real') {
+        const capability = this.clobClient.getCapability();
+        if (capability.status !== 'available') {
+          throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', capability.reason ?? 'CLOB real trading is unavailable');
+        }
+        return await this.submitReal(user.id, user.requestId, intent, normalizeSignedOrders(dto.signedOrders), dto.idempotencyKey, requestHash);
+      }
+
       return await this.submitDryRun(user.id, user.requestId, intent, dto.idempotencyKey, requestHash);
     } catch (error) {
       if (!isUniqueConstraintError(error)) {
@@ -345,6 +395,156 @@ export class OrdersService {
     return result;
   }
 
+  private async submitReal(
+    userId: string,
+    requestId: string | undefined,
+    intent: LoadedOrderIntent,
+    signedOrders: SignedClobOrderInput[],
+    idempotencyKey: string,
+    requestHash: string,
+  ) {
+    const preparedOrders = resolveSignedPreparedOrders(intent, signedOrders);
+    const claimStartedAt = new Date();
+    const submission = await this.prisma.$transaction(async (tx) => {
+      const createdSubmission = await tx.orderSubmission.create({
+        data: {
+          userId,
+          orderIntentId: intent.id,
+          idempotencyKey,
+          requestHash,
+          status: 'processing',
+        },
+      });
+      const claim = await tx.orderIntent.updateMany({
+        where: {
+          id: intent.id,
+          userId,
+          status: {
+            in: [OrderIntentStatus.preview_ready, OrderIntentStatus.user_confirming],
+          },
+          OR: [
+            {
+              previewExpiresAt: null,
+            },
+            {
+              previewExpiresAt: {
+                gt: claimStartedAt,
+              },
+            },
+          ],
+        },
+        data: { status: OrderIntentStatus.submitted },
+      });
+      if (claim.count !== 1) {
+        if (intent.previewExpiresAt && intent.previewExpiresAt.getTime() <= claimStartedAt.getTime()) {
+          throw previewExpired();
+        }
+        throw intentNotSubmittable(intent.status);
+      }
+      await tx.auditEvent.create({
+        data: {
+          userId,
+          ...(requestId ? { requestId } : {}),
+          actorType: 'user',
+          entityType: 'order_intent',
+          entityId: intent.id,
+          action: 'order.submit_real_started',
+          after: toJson({
+            intentId: intent.id,
+            executionMode: 'real',
+            orderCount: preparedOrders.length,
+          }),
+        },
+      });
+      return createdSubmission;
+    });
+
+    try {
+      const orderResults = await this.clobClient.postSignedOrders(preparedOrders);
+      const resultStatus = resolveRealSubmitStatus(orderResults);
+      const result = {
+        intentId: intent.id,
+        executionMode: intent.executionMode,
+        status: resultStatus,
+        orders: orderResults.map((order) => ({
+          orderId: order.orderId,
+          externalOrderId: order.externalOrderId,
+          status: order.status,
+          errorMessage: order.errorMessage,
+        })),
+      };
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.orderIntent.update({
+          where: { id: intent.id },
+          data: { status: toOrderIntentStatus(resultStatus) },
+        });
+        for (const order of orderResults) {
+          await tx.causewayOrder.update({
+            where: { id: order.orderId },
+            data: {
+              externalOrderId: order.externalOrderId,
+              status: order.status,
+              errorMessage: order.errorMessage,
+              responsePayload: toJson(order.response),
+            },
+          });
+        }
+        await tx.orderSubmission.update({
+          where: { id: submission.id },
+          data: {
+            status: resultStatus,
+            responseJson: toJson(result),
+          },
+        });
+        await tx.auditEvent.create({
+          data: {
+            userId,
+            ...(requestId ? { requestId } : {}),
+            actorType: 'user',
+            entityType: 'order_intent',
+            entityId: intent.id,
+            action: 'order.submit_real_completed',
+            after: toJson(result),
+          },
+        });
+      });
+
+      return result;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await this.prisma.$transaction(async (tx) => {
+        await tx.orderIntent.update({
+          where: { id: intent.id },
+          data: { status: OrderIntentStatus.failed },
+        });
+        await tx.causewayOrder.updateMany({
+          where: { orderIntentId: intent.id, status: { in: ['preview_ready', 'submitted'] } },
+          data: { status: 'failed', errorMessage },
+        });
+        await tx.orderSubmission.update({
+          where: { id: submission.id },
+          data: {
+            status: 'failed',
+            errorMessage,
+            responseJson: toJson({
+              intentId: intent.id,
+              executionMode: intent.executionMode,
+              status: 'failed',
+              orders: intent.orders.map((order) => ({
+                orderId: order.id,
+                externalOrderId: order.externalOrderId,
+                status: 'failed',
+                errorMessage,
+              })),
+            }),
+          },
+        });
+      });
+      throw error;
+    }
+  }
+
   private async resolveExistingSubmission(
     userId: string,
     intentId: string,
@@ -418,6 +618,9 @@ export class OrdersService {
       include: {
         orders: {
           orderBy: { createdAt: 'asc' },
+          include: {
+            market: true,
+          },
         },
       },
     });
@@ -434,7 +637,11 @@ function auditRequestId(user: CurrentUser): { requestId: string } | Record<strin
 
 type LoadedOrderIntent = Prisma.OrderIntentGetPayload<{
   include: {
-    orders: true;
+    orders: {
+      include: {
+        market: true;
+      };
+    };
   };
 }>;
 
@@ -506,4 +713,154 @@ function resolveSubmitMode(
 ): 'dry_run_no_signature' | 'signed_clob_order' | 'unavailable' {
   if (executionMode === 'dry_run') return 'dry_run_no_signature';
   return tradingCapability === 'available' && allOrdersValid ? 'signed_clob_order' : 'unavailable';
+}
+
+function isLikelyRealClobTokenId(tokenId: string): boolean {
+  return /^\d{20,}$/.test(tokenId.trim());
+}
+
+function resolvePreviewRefreshedAt(orders: Array<{ orderBookRefreshedAt: string | null }>, fallback: Date): string {
+  const latestOrderBookRefresh = orders
+    .map((order) => (order.orderBookRefreshedAt == null ? null : new Date(order.orderBookRefreshedAt)))
+    .filter((date): date is Date => date != null && !Number.isNaN(date.getTime()))
+    .sort((left, right) => right.getTime() - left.getTime())[0];
+
+  return (latestOrderBookRefresh ?? fallback).toISOString();
+}
+
+function toClobSignaturePayloadInput(
+  order: LoadedOrderIntent['orders'][number],
+  walletAddress: string,
+  funderAddress: string | undefined,
+  chainId: number,
+) {
+  const tickSize = readSubmitPayloadNumber(order.submitPayload, 'tickSize') ?? toNullableNumber(order.market.orderPriceMinTickSize);
+  const limitPrice = toNullableNumber(order.limitPrice);
+  const estimatedFillPrice = toNullableNumber(order.estimatedFillPrice);
+  const size = toNullableNumber(order.size);
+  const amountUsd = toNullableNumber(order.amountUsd);
+
+  if (size == null || amountUsd == null) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Order amount and size are required for real orders', {
+      orderId: order.id,
+    });
+  }
+
+  return {
+    orderId: order.id,
+    walletAddress,
+    funderAddress,
+    chainId,
+    tokenId: order.clobTokenId,
+    side: order.side,
+    orderMode: order.orderMode,
+    orderType: order.orderType,
+    limitPrice,
+    estimatedFillPrice,
+    size,
+    amountUsd,
+    tickSize,
+    negRisk: order.market.negRisk,
+  };
+}
+
+function normalizeSignedOrders(value: unknown[]): SignedClobOrderInput[] {
+  const seen = new Set<string>();
+  return value.map((item) => {
+    if (!isRecord(item)) {
+      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'signedOrders must contain objects');
+    }
+
+    const orderId = typeof item.orderId === 'string' ? item.orderId.trim() : '';
+    const signature = typeof item.signature === 'string' ? item.signature.trim() : '';
+    if (!orderId) {
+      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'signed order orderId is required');
+    }
+    if (seen.has(orderId)) {
+      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Duplicate signed order ids are not allowed', {
+        orderId,
+      });
+    }
+    seen.add(orderId);
+    if (!isHexSignature(signature)) {
+      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'signed order signature must be a hex signature', {
+        orderId,
+      });
+    }
+
+    return { orderId, signature };
+  });
+}
+
+function resolveSignedPreparedOrders(intent: LoadedOrderIntent, signedOrders: SignedClobOrderInput[]) {
+  if (signedOrders.length !== intent.orders.length) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Every order in the intent must have exactly one signature', {
+      expected: intent.orders.length,
+      actual: signedOrders.length,
+    });
+  }
+
+  const signedOrderById = new Map(signedOrders.map((order) => [order.orderId, order.signature]));
+  return intent.orders.map((order) => {
+    const signature = signedOrderById.get(order.id);
+    if (!signature) {
+      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Signed order is missing for an order intent row', {
+        orderId: order.id,
+      });
+    }
+
+    return {
+      preparedOrder: readPreparedClobOrder(order.submitPayload, order.id),
+      signature,
+    };
+  });
+}
+
+function readPreparedClobOrder(value: Prisma.JsonValue | null, orderId: string): PreparedClobOrder {
+  const payload = readRecord(value);
+  const preparedOrder = payload.preparedClobOrder;
+  if (!isRecord(preparedOrder)) {
+    throw new ApiException(HttpStatus.CONFLICT, 'ORDER_INTENT_NOT_SUBMITTABLE', 'Order signatures must be prepared before real submit', {
+      orderId,
+    });
+  }
+
+  if (preparedOrder.orderId !== orderId || preparedOrder.protocol !== 'polymarket_clob_eip712_v2') {
+    throw new ApiException(HttpStatus.CONFLICT, 'ORDER_INTENT_NOT_SUBMITTABLE', 'Prepared CLOB order payload does not match the order', {
+      orderId,
+    });
+  }
+
+  return preparedOrder as PreparedClobOrder;
+}
+
+function resolveRealSubmitStatus(
+  orderResults: Array<{ status: 'submitted' | 'failed' }>,
+): 'submitted' | 'partially_submitted' | 'failed' {
+  const submittedCount = orderResults.filter((order) => order.status === 'submitted').length;
+  if (submittedCount === orderResults.length) return 'submitted';
+  if (submittedCount === 0) return 'failed';
+  return 'partially_submitted';
+}
+
+function toOrderIntentStatus(status: 'submitted' | 'partially_submitted' | 'failed'): OrderIntentStatus {
+  if (status === 'submitted') return OrderIntentStatus.submitted;
+  if (status === 'partially_submitted') return OrderIntentStatus.partially_submitted;
+  return OrderIntentStatus.failed;
+}
+
+function readSubmitPayloadNumber(value: Prisma.JsonValue | null, key: string): number | null {
+  return toNullableNumber(readRecord(value)[key]);
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isHexSignature(value: string): boolean {
+  return /^0x[a-fA-F0-9]{130,4096}$/.test(value) && value.length % 2 === 0;
 }

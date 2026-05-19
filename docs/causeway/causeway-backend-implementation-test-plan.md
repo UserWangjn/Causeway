@@ -178,7 +178,7 @@ npm run smoke:api:ai
 npm run smoke:api:real-orders
 ```
 
-这些命令默认不访问外部服务，必须通过 `SMOKE_*_ENABLED=true` 显式 opt-in。`smoke:api:real-orders` 在真实下单 Spike 批准并实现前只保留安全边界，不提交订单。
+这些命令默认不访问外部服务，必须通过 `SMOKE_*_ENABLED=true` 显式 opt-in。当前 unit tests 已覆盖默认 skipped 路径，防止默认测试误触外部 provider。`smoke:api:real-orders` 只做真实订单配置 preflight，即使 opt-in 且确认风险也不会提交订单。
 
 ## 5. 全局完成标准
 
@@ -442,6 +442,7 @@ Smoke 测试要求：
 
 - 真实下单 Spike 结论已记录。
 - `real` 模式只能在环境变量和依赖能力完整时开启。
+- `smoke:api:real-orders` 保持 preflight-only，不能提交订单；真实提交只能通过明确的 API 联调流程触发。
 
 ### B9：生产就绪
 
@@ -470,6 +471,7 @@ Smoke 测试要求：
 退出门槛：
 
 - 新机器可以按文档完成 install、migrate、test、build、run。
+- 默认 smoke 命令可安全执行并返回 skipped；真实外部 smoke 必须显式 opt-in。
 
 ## 7. 推荐开发顺序
 

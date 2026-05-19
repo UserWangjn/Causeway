@@ -1,4 +1,5 @@
 import { roundCurrency, roundShares, toNullableNumber } from '../../common/utils/number.util';
+import type { OrderBookSnapshot } from '../../integrations/polymarket/types';
 import type { OrderPreviewSelectionDto } from './dto/order-preview.dto';
 
 const AMOUNT_SIZE_TOLERANCE_USD = 0.01;
@@ -23,6 +24,8 @@ export type OrderPreviewContext = {
     bestAsk: unknown;
     lastTradePrice: unknown;
   };
+  orderBook?: OrderBookSnapshot | null;
+  requireFreshOrderBook?: boolean;
 };
 
 export type BuiltPreviewOrder = {
@@ -40,6 +43,7 @@ export type BuiltPreviewOrder = {
   size: number;
   tickSize: number | null;
   minOrderSize: number | null;
+  orderBookRefreshedAt: string | null;
   valid: boolean;
   warnings: string[];
   error: string | null;
@@ -50,9 +54,17 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
   const errors: string[] = [];
   const orderMode = input.orderMode as 'market' | 'limit';
   const limitPrice = orderMode === 'limit' ? input.limitPrice ?? null : null;
-  const estimatedFillPrice = orderMode === 'limit' ? limitPrice : firstNumber(context.outcome.bestAsk, context.outcome.price, context.outcome.lastTradePrice, context.market.bestAsk, context.market.lastTradePrice);
-  const tickSize = toNullableNumber(context.market.orderPriceMinTickSize);
-  const minOrderSize = toNullableNumber(context.market.orderMinSize);
+  const orderBookAsk = firstAskPrice(context.orderBook);
+  const localEstimatedPrice = firstNumber(
+    context.outcome.bestAsk,
+    context.outcome.price,
+    context.outcome.lastTradePrice,
+    context.market.bestAsk,
+    context.market.lastTradePrice,
+  );
+  const estimatedFillPrice = orderMode === 'limit' ? limitPrice : orderBookAsk ?? (context.requireFreshOrderBook ? null : localEstimatedPrice);
+  const tickSize = context.orderBook?.tickSize ?? toNullableNumber(context.market.orderPriceMinTickSize);
+  const minOrderSize = context.orderBook?.minOrderSize ?? toNullableNumber(context.market.orderMinSize);
 
   if (!context.market.active || context.market.closed) {
     errors.push('MARKET_NOT_TRADABLE');
@@ -60,6 +72,10 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
 
   if (!context.market.acceptingOrders || !context.market.enableOrderBook) {
     errors.push('MARKET_NOT_TRADABLE');
+  }
+
+  if (context.requireFreshOrderBook && !context.orderBook) {
+    errors.push('ORDERBOOK_UNAVAILABLE');
   }
 
   if (orderMode === 'market' && estimatedFillPrice == null) {
@@ -105,6 +121,10 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
     warnings.push('MARKET_ORDER_ESTIMATE_CAN_CHANGE');
   }
 
+  if (!context.requireFreshOrderBook && !context.orderBook) {
+    warnings.push('ORDERBOOK_REFRESH_UNAVAILABLE_USING_LOCAL_CACHE');
+  }
+
   return {
     selectionId: input.selectionId,
     marketId: context.market.id,
@@ -120,10 +140,15 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
     size: roundShares(size),
     tickSize,
     minOrderSize,
+    orderBookRefreshedAt: context.orderBook?.refreshedAt ?? null,
     valid: errors.length === 0,
     warnings,
     error: errors[0] ?? null,
   };
+}
+
+function firstAskPrice(orderBook: OrderBookSnapshot | null | undefined): number | null {
+  return orderBook?.asks[0]?.price ?? null;
 }
 
 function firstNumber(...values: unknown[]): number | null {

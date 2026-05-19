@@ -61,18 +61,29 @@ const envSchema = z
     }),
     POLYMARKET_GAMMA_BASE_URL: z.string().url().default('https://gamma-api.polymarket.com'),
     POLYMARKET_CLOB_BASE_URL: z.string().url().default('https://clob.polymarket.com'),
+    POLYMARKET_CLOB_API_KEY: z.string().optional(),
+    POLYMARKET_CLOB_API_SECRET: z.string().optional(),
+    POLYMARKET_CLOB_API_PASSPHRASE: z.string().optional(),
+    POLYMARKET_CLOB_API_ADDRESS: z.string().optional().refine((value) => value == null || isEthereumAddress(value), {
+      message: 'POLYMARKET_CLOB_API_ADDRESS must be an Ethereum address',
+    }),
+    POLYMARKET_CLOB_SIGNATURE_TYPE: z.coerce.number().int().min(0).max(3).default(2),
+    POLYMARKET_CLOB_FUNDER_ADDRESS: z.string().optional().refine((value) => value == null || isEthereumAddress(value), {
+      message: 'POLYMARKET_CLOB_FUNDER_ADDRESS must be an Ethereum address',
+    }),
     POLYMARKET_DATA_BASE_URL: z.string().url().default('https://data-api.polymarket.com'),
     POLYMARKET_DATA_API_ENABLED: z.enum(['true', 'false']).default('true'),
     POLYMARKET_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
     POLYMARKET_HTTP_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
     POLYMARKET_MARKET_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
-    POLYMARKET_MARKET_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
+    POLYMARKET_MARKET_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(900_000),
     POLYMARKET_MARKET_SYNC_LIMIT: z.coerce.number().int().min(1).max(1000).default(1000),
     POLYMARKET_MARKET_SYNC_LOCK_TTL_MS: z.coerce.number().int().min(60_000).default(900_000),
     POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP: z.enum(['true', 'false']).default('false'),
     AI_BASE_URL: aiBaseUrlSchema,
     AI_API_KEY: z.string().optional(),
     AI_MODEL: z.string().optional(),
+    AI_THINKING_MODE: z.union([z.literal(''), z.enum(['enabled', 'disabled'])]).optional(),
     AI_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(16_000).default(4_000),
     ENABLE_REAL_ORDERS: z.enum(['true', 'false']).default('false'),
@@ -118,6 +129,23 @@ const envSchema = z
         path: ['AI_BASE_URL'],
         message: 'AI_BASE_URL must use https in production',
       });
+    }
+
+    if (value.ENABLE_REAL_ORDERS === 'true') {
+      for (const key of [
+        'POLYMARKET_CLOB_API_KEY',
+        'POLYMARKET_CLOB_API_SECRET',
+        'POLYMARKET_CLOB_API_PASSPHRASE',
+        'POLYMARKET_CLOB_API_ADDRESS',
+      ] as const) {
+        if (!value[key]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when ENABLE_REAL_ORDERS=true`,
+          });
+        }
+      }
     }
   });
 
@@ -210,4 +238,8 @@ function isHttpsUrl(value: string): boolean {
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
+}
+
+function isEthereumAddress(value: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
 }

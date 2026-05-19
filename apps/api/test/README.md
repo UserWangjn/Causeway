@@ -78,4 +78,4 @@ $env:SMOKE_AI_ENABLED="true"
 npm run smoke:api:ai
 ```
 
-Do not enable `smoke:api:real-orders` until the real CLOB signing/submission Spike is approved.
+Unit tests cover the default skipped path for all smoke commands so routine test runs never touch external providers. Do not enable `smoke:api:real-orders` until the real CLOB signing/submission Spike is approved; even with opt-in, it currently fails closed before any order path is available.

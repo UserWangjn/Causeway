@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsEthereumAddress, IsIn, IsInt, IsNotEmpty, IsString, MaxLength, Min } from 'class-validator';
+import { IsEthereumAddress, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator';
 
 export class PrepareSignatureDto {
@@ -19,4 +19,8 @@ export class PrepareSignatureDto {
   @IsInt()
   @Min(1)
   chainId!: number;
+
+  @IsOptional()
+  @IsEthereumAddress()
+  funderAddress?: string;
 }

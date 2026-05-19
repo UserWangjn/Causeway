@@ -315,7 +315,7 @@ type MarketNetwork = {
 }
 ```
 
-说明：一期后端支持 `mock-causeway-v1` 本地 mock 推演模型，用于开发和测试完整脚本链路。该模式可能同步返回 `status="completed"` 和 `scriptId`。配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 后，非 mock 模型通过 OpenAI-compatible `POST /chat/completions` JSON 输出通道执行；`AI_BASE_URL` 必须是纯 base URL，生产环境必须使用 HTTPS，且请求中的 `model` 必须等于当前 `AI_MODEL`。真实 AI provider 未配置、请求模型不匹配或 provider 输出不能通过后端 schema 校验时，接口返回结构化错误，不允许伪造成真实 AI 成功或留下不可恢复的后台任务。
+说明：`POST /inference-runs` 始终只创建 `queued` 任务，前端通过 `GET /inference-runs/:runId` 轮询 `completed` 后再读取 `scriptId`。`mock-causeway-v1` 也走同一套异步任务语义。配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 后，非 mock 模型通过 OpenAI-compatible `POST /chat/completions` JSON 输出通道执行；`AI_BASE_URL` 必须是纯 base URL，生产环境必须使用 HTTPS，且请求中的 `model` 必须等于当前 `AI_MODEL`。真实 AI provider 未配置、请求模型不匹配或 provider 输出不能通过后端 schema 校验时，任务应进入 `failed` 并写入 `errorMessage`。
 
 ### `GET /inference-runs/:runId`
 
@@ -373,6 +373,7 @@ type ScriptNode = {
   }[];
   confidence: number;
   direction: "supports" | "opposes" | "unclear";
+  price: number | null;
 };
 
 type ScriptEdge = {
@@ -398,11 +399,13 @@ type ScriptMarket = {
     tokenId: string;
     aiAction: "buy" | "avoid";
     userAction: "buy" | "skip";
+    side: "BUY";
     orderMode: "market" | "limit";
     limitPrice: number | null;
     size: number | null;
     amountUsd: number | null;
-    reason: string | null;
+    confidence: number | null;
+    reason: string;
   }[];
 };
 ```
@@ -512,6 +515,7 @@ type OrderPreview = {
     size: number;
     tickSize: number | null;
     minOrderSize: number | null;
+    orderBookRefreshedAt: string | null;
     valid: boolean;
     warnings: string[];
     error: string | null;
@@ -530,9 +534,12 @@ type OrderPreview = {
   "intentId": "intent_x",
   "executionMode": "real",
   "walletAddress": "0x...",
-  "chainId": 137
+  "chainId": 137,
+  "funderAddress": "0x..."
 }
 ```
+
+`funderAddress` is required for Polymarket proxy, Gnosis Safe, or smart contract wallet signatures. Causeway defaults real CLOB order signing to Polymarket `signatureType=2` (`POLY_GNOSIS_SAFE`), so the frontend should pass the user's Gnosis Safe / Polymarket proxy funder address when `executionMode="real"`.
 
 响应：
 
@@ -541,12 +548,29 @@ type PrepareSignatureResult = {
   intentId: string;
   executionMode: "dry_run" | "real";
   signingStatus: "ready" | "not_required" | "unavailable";
-  protocol: "dry_run_no_signature" | "polymarket_clob_eip712";
+  protocol: "dry_run_no_signature" | "polymarket_clob_eip712_v2";
   expiresAt: string | null;
   payloads: {
     orderId: string;
-    tokenId: string;
-    payload: unknown;
+    protocol: "polymarket_clob_eip712_v2";
+    orderType: "GTC" | "GTD" | "FOK" | "FAK";
+    signatureType: 0 | 1 | 2 | 3;
+    makerAddress: string;
+    signerAddress: string;
+    funderAddress: string | null;
+    eip712: {
+      primaryType: "Order";
+      domain: {
+        name: "Polymarket CTF Exchange";
+        version: "2";
+        chainId: number;
+        verifyingContract: string;
+      };
+      types: {
+        Order: { name: string; type: string }[];
+      };
+      message: Record<string, string | number>;
+    };
   }[];
   error: string | null;
 };
@@ -559,9 +583,14 @@ type PrepareSignatureResult = {
 ```json
 {
   "intentId": "intent_x",
-  "executionMode": "dry_run",
+  "executionMode": "real",
   "idempotencyKey": "uuid-from-client",
-  "signedOrders": []
+  "signedOrders": [
+    {
+      "orderId": "order_x",
+      "signature": "0x..."
+    }
+  ]
 }
 ```
 

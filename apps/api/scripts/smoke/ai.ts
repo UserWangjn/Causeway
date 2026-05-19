@@ -4,6 +4,7 @@ import {
   isEnabled,
   isRecord,
   printSummary,
+  type SmokeSummary,
   readOptionalEnv,
   readPositiveInteger,
 } from './shared';
@@ -11,16 +12,15 @@ import {
 const SMOKE_NAME = 'ai-provider';
 const ENABLED_ENV = 'SMOKE_AI_ENABLED';
 
-async function main(): Promise<void> {
+export async function runAiSmoke(): Promise<SmokeSummary> {
   if (!isEnabled(ENABLED_ENV)) {
-    printSummary({
+    return {
       name: SMOKE_NAME,
       status: 'skipped',
       details: {
         reason: `Set ${ENABLED_ENV}=true to run a real AI provider availability smoke check`,
       },
-    });
-    return;
+    };
   }
 
   const timeoutMs = readPositiveInteger('SMOKE_HTTP_TIMEOUT_MS', 10_000);
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
     throw new Error(`AI provider health endpoint did not list configured model ${model}`);
   }
 
-  printSummary({
+  return {
     name: SMOKE_NAME,
     status: 'passed',
     details: {
@@ -60,7 +60,11 @@ async function main(): Promise<void> {
       model,
       modelListedByProvider: modelAvailable,
     },
-  });
+  };
+}
+
+async function main(): Promise<void> {
+  printSummary(await runAiSmoke());
 }
 
 function containsModel(payload: unknown, model: string): boolean {
@@ -77,7 +81,9 @@ function redactUrl(url: string): string {
   return parsed.toString();
 }
 
-main().catch((error: unknown) => {
-  console.error(JSON.stringify({ name: SMOKE_NAME, status: 'failed', error: formatUnknownError(error) }, null, 2));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error: unknown) => {
+    console.error(JSON.stringify({ name: SMOKE_NAME, status: 'failed', error: formatUnknownError(error) }, null, 2));
+    process.exitCode = 1;
+  });
+}

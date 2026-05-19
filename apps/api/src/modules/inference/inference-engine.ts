@@ -15,12 +15,27 @@ export const MOCK_INFERENCE_MODEL = 'mock-causeway-v1';
 export const INFERENCE_PROMPT_VERSION = 'causeway-b5-v1';
 export const INFERENCE_OUTPUT_SCHEMA_VERSION = 'causeway-ai-output-v1';
 
+const layerSchema = z.preprocess((value) => {
+  if (typeof value === 'string' && /^[0-3]$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+  return value;
+}, z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]));
+
+const confidenceSchema = z.preprocess((value) => {
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return value;
+}, z.number().min(0).max(1));
+
 const aiOutcomeRecommendationSchema = z
   .object({
     outcomeId: z.string().min(1),
     outcomeLabel: z.string(),
     aiAction: z.enum(['buy', 'avoid']),
-    confidence: z.number().min(0).max(1),
+    confidence: confidenceSchema,
     reason: z.string(),
   })
   .strict();
@@ -29,8 +44,8 @@ const aiMarketNodeSchema = z
   .object({
     clientNodeId: z.string().min(1),
     marketId: z.string().min(1),
-    layer: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
-    confidence: z.number().min(0).max(1),
+    layer: layerSchema,
+    confidence: confidenceSchema,
     impactDirection: z.enum(['supports', 'opposes', 'unclear']),
     reason: z.string(),
     outcomes: z.array(aiOutcomeRecommendationSchema).min(1),
@@ -44,7 +59,7 @@ const aiEdgeSchema = z
     sourceOutcomeId: z.string().min(1),
     targetOutcomeId: z.string().min(1),
     relation: z.enum(['causes', 'supports', 'hedges', 'contradicts', 'correlates']),
-    confidence: z.number().min(0).max(1),
+    confidence: confidenceSchema,
     reason: z.string(),
   })
   .strict();
@@ -169,11 +184,10 @@ export function buildMockInferenceOutput(input: InferencePromptInput): AiInferen
 }
 
 export function validateAiInferenceOutput(output: unknown, input: InferencePromptInput): AiInferenceOutput {
-  const parsedOutput = parseAiInferenceOutput(output);
-  const marketById = new Map(input.candidateMarkets.map((market) => [market.marketId, market]));
-  const nodeByClientId = new Map(parsedOutput.nodes.map((node) => [node.clientNodeId, node]));
+  let parsedOutput = parseAiInferenceOutput(output);
 
-  if (nodeByClientId.size !== parsedOutput.nodes.length) {
+  const initialNodeByClientId = new Map(parsedOutput.nodes.map((node) => [node.clientNodeId, node]));
+  if (initialNodeByClientId.size !== parsedOutput.nodes.length) {
     throw invalidOutput('AI output contains duplicate node ids');
   }
 
@@ -183,7 +197,9 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
   }
 
   assertRootNode(parsedOutput, input);
-  assertMaxMarketsPerLayer(parsedOutput, input.settings.maxMarketsPerLayer);
+
+  const marketById = new Map(input.candidateMarkets.map((market) => [market.marketId, market]));
+  const nodeByClientId = new Map(parsedOutput.nodes.map((node) => [node.clientNodeId, node]));
 
   for (const node of parsedOutput.nodes) {
     const market = marketById.get(node.marketId);
@@ -235,6 +251,8 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
     assertNodeHasOutcome(targetNode, edge.targetOutcomeId);
   }
 
+  parsedOutput = limitMarketsPerLayer(parsedOutput, input.settings.maxMarketsPerLayer);
+  assertMaxMarketsPerLayer(parsedOutput, input.settings.maxMarketsPerLayer);
   assertConnectedGraph(parsedOutput);
   assertAcyclicGraph(parsedOutput);
   return parsedOutput;
@@ -333,6 +351,48 @@ function assertMaxMarketsPerLayer(output: AiInferenceOutput, maxMarketsPerLayer:
     }
     countByLayer.set(node.layer, count);
   }
+}
+
+function limitMarketsPerLayer(output: AiInferenceOutput, maxMarketsPerLayer: number): AiInferenceOutput {
+  const keptNodes: AiMarketNode[] = [];
+  const candidatesByLayer = new Map<number, Array<{ node: AiMarketNode; index: number }>>();
+
+  output.nodes.forEach((node, index) => {
+    if (node.layer === 0) {
+      keptNodes.push(node);
+      return;
+    }
+    const candidates = candidatesByLayer.get(node.layer) ?? [];
+    candidates.push({ node, index });
+    candidatesByLayer.set(node.layer, candidates);
+  });
+
+  let truncated = false;
+  for (const candidates of [...candidatesByLayer.entries()].sort(([leftLayer], [rightLayer]) => leftLayer - rightLayer).map(([, nodes]) => nodes)) {
+    const selected = candidates
+      .sort((left, right) => right.node.confidence - left.node.confidence || left.index - right.index)
+      .slice(0, maxMarketsPerLayer)
+      .sort((left, right) => left.index - right.index);
+    truncated ||= selected.length < candidates.length;
+    keptNodes.push(...selected.map(({ node }) => node));
+  }
+
+  if (!truncated) return output;
+
+  const keptNodeIds = new Set(keptNodes.map((node) => node.clientNodeId));
+  const edges = output.edges.filter(
+    (edge) => keptNodeIds.has(edge.sourceClientNodeId) && keptNodeIds.has(edge.targetClientNodeId),
+  );
+  const warnings = output.warnings.includes('truncated_to_max_markets_per_layer')
+    ? output.warnings
+    : [...output.warnings, 'truncated_to_max_markets_per_layer'];
+
+  return {
+    ...output,
+    nodes: keptNodes,
+    edges,
+    warnings,
+  };
 }
 
 function assertConnectedGraph(output: AiInferenceOutput): void {

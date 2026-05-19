@@ -112,10 +112,41 @@ describe('AiClientService', () => {
     expect(readHeaders(init.headers).authorization).toBe('Bearer provider-secret');
     expect(body.model).toBe('gpt-test');
     expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.thinking).toBeUndefined();
+    const messages = body.messages as Array<{ role: string; content: string }>;
+    expect(messages[0].content).toContain('Use numeric JSON numbers for layer and confidence values');
+    expect(messages[0].content).toContain('never point an edge into the root node');
+    const userMessage = JSON.parse(messages[1].content) as { contract: string[]; outputShape: Record<string, unknown> };
+    expect(userMessage.contract).toContain(
+      'Edges are UI graph edges, not free-form causal arrows: sourceClientNodeId must be a lower layer node and targetClientNodeId must be a higher layer node.',
+    );
     expect(result).toEqual({
       summary: 'provider output',
       warnings: [],
     });
+  });
+
+  it('passes an explicit thinking mode when configured for compatible providers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ summary: 'provider output', warnings: [] }),
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AiClientService(configService({ thinkingMode: 'disabled' }));
+
+    await client.runStructuredInference<{ summary: string; warnings: string[] }>({}, { model: 'gpt-test' });
+
+    const [, init] = readFetchCall(fetchMock);
+    const body = readJsonBody(init.body);
+    expect(body.thinking).toEqual({ type: 'disabled' });
   });
 
   it('rejects requests for models other than the configured provider model', async () => {
@@ -231,6 +262,7 @@ function configService(overrides: Partial<AiConfigValues> = {}): ConfigService {
         'ai.baseUrl': values.baseUrl,
         'ai.apiKey': values.apiKey,
         'ai.model': values.model,
+        'ai.thinkingMode': values.thinkingMode,
         'ai.httpTimeoutMs': values.httpTimeoutMs,
         'ai.maxOutputTokens': values.maxOutputTokens,
         NODE_ENV: values.nodeEnv,
@@ -244,6 +276,7 @@ type AiConfigValues = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  thinkingMode?: string;
   httpTimeoutMs: number;
   maxOutputTokens: number;
   nodeEnv: string;

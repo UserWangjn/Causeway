@@ -47,6 +47,13 @@ type InferenceRunCreateResponse = {
   scriptId: string | null;
 };
 
+type InferenceRunReadResponse = {
+  id: string;
+  status: string;
+  scriptId: string | null;
+  errorMessage: string | null;
+};
+
 type CausalScriptResponse = {
   id: string;
   root: {
@@ -192,21 +199,20 @@ describe('core backend workflows e2e', () => {
       .expect(201);
     const createBody = createResponse.body as ApiResponse<InferenceRunCreateResponse>;
 
-    expect(createBody.data.status).toBe('completed');
+    expect(createBody.data.status).toBe('queued');
     expect(createBody.data.cacheHit).toBe(false);
-    expect(createBody.data.scriptId).toBeTruthy();
+    expect(createBody.data.scriptId).toBeNull();
 
-    const runResponse = await request(httpServer)
-      .get(`/api/v1/inference-runs/${createBody.data.runId}`)
-      .set('authorization', `Bearer ${accessToken}`)
-      .expect(200);
-    expect((runResponse.body as ApiResponse<{ status: string; scriptId: string | null }>).data).toMatchObject({
+    const runData = await waitForInferenceRun(httpServer, accessToken, createBody.data.runId);
+    expect(runData).toMatchObject({
       status: 'completed',
-      scriptId: createBody.data.scriptId,
     });
+    if (!runData.scriptId) {
+      throw new Error('Completed inference run did not create a script');
+    }
 
     const scriptResponse = await request(httpServer)
-      .get(`/api/v1/scripts/${createBody.data.scriptId}`)
+      .get(`/api/v1/scripts/${runData.scriptId}`)
       .set('authorization', `Bearer ${accessToken}`)
       .expect(200);
     const scriptBody = scriptResponse.body as ApiResponse<CausalScriptResponse>;
@@ -396,11 +402,11 @@ describe('core backend workflows e2e', () => {
       intentId: previewBody.data.intentId,
       executionMode: 'real',
       signingStatus: 'unavailable',
-      protocol: 'polymarket_clob_eip712',
-      expiresAt: null,
+      protocol: 'polymarket_clob_eip712_v2',
       payloads: [],
     });
-    expect(prepareSignatureBody.data.error).toContain('CLOB real trading is not wired yet');
+    expect(prepareSignatureBody.data.expiresAt).toEqual(expect.any(String));
+    expect(prepareSignatureBody.data.error).toContain('CLOB real trading is disabled');
   });
 
   it('rejects idempotency key reuse with a different submit payload', async () => {
@@ -502,3 +508,30 @@ describe('core backend workflows e2e', () => {
     ).resolves.toBe(0);
   });
 });
+
+async function waitForInferenceRun(
+  httpServer: SupertestApp,
+  accessToken: string,
+  runId: string,
+): Promise<InferenceRunReadResponse> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await request(httpServer)
+      .get(`/api/v1/inference-runs/${runId}`)
+      .set('authorization', `Bearer ${accessToken}`)
+      .expect(200);
+    const runData = (response.body as ApiResponse<InferenceRunReadResponse>).data;
+    if (runData.status === 'completed') return runData;
+    if (runData.status === 'failed') {
+      throw new Error(`Inference run failed: ${runData.errorMessage ?? 'unknown error'}`);
+    }
+    await sleep(200);
+  }
+
+  throw new Error(`Inference run ${runId} did not complete in time`);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}

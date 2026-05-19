@@ -103,4 +103,51 @@ describe('buildPreviewOrder', () => {
     expect(order.valid).toBe(false);
     expect(order.error).toBe('REQUEST_VALIDATION_FAILED');
   });
+
+  it('uses the refreshed order book ask for market order sizing', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'market',
+        amountUsd: 10,
+      },
+      {
+        ...tradableContext,
+        orderBook: {
+          tokenId: 'token_1',
+          bids: [{ price: 0.39, size: 100 }],
+          asks: [{ price: 0.4, size: 100 }],
+          tickSize: 0.001,
+          minOrderSize: 2,
+          refreshedAt: '2026-05-19T00:00:00.000Z',
+        },
+        requireFreshOrderBook: true,
+      },
+    );
+
+    expect(order.valid).toBe(true);
+    expect(order.estimatedFillPrice).toBe(0.4);
+    expect(order.size).toBe(25);
+    expect(order.tickSize).toBe(0.001);
+    expect(order.minOrderSize).toBe(2);
+    expect(order.orderBookRefreshedAt).toBe('2026-05-19T00:00:00.000Z');
+  });
+
+  it('rejects real-order previews when a fresh order book is required but unavailable', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'market',
+        amountUsd: 10,
+      },
+      {
+        ...tradableContext,
+        orderBook: null,
+        requireFreshOrderBook: true,
+      },
+    );
+
+    expect(order.valid).toBe(false);
+    expect(order.error).toBe('ORDERBOOK_UNAVAILABLE');
+  });
 });

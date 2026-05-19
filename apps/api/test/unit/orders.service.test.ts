@@ -4,7 +4,7 @@ import { ApiException } from '../../src/common/errors/api.exception';
 import type { CurrentUser } from '../../src/common/decorators/current-user.decorator';
 import { hashJson } from '../../src/common/utils/hash.util';
 import type { PrismaService } from '../../src/database/prisma.service';
-import type { ClobClient } from '../../src/integrations/polymarket/services/clob.client';
+import type { ClobClient, PreparedClobOrder } from '../../src/integrations/polymarket/services/clob.client';
 import type { SubmitOrderDto } from '../../src/modules/orders/dto/submit-order.dto';
 import { OrdersService } from '../../src/modules/orders/orders.service';
 
@@ -71,6 +71,61 @@ describe('OrdersService', () => {
     });
     expect(causewayOrderUpdateMany).not.toHaveBeenCalled();
     expect(orderIntentUpdate).not.toHaveBeenCalled();
+  });
+
+  it('returns the first real-submit idempotent result when a concurrent insert wins the reservation', async () => {
+    const dto: SubmitOrderDto = {
+      ...submitDto(),
+      executionMode: 'real',
+      signedOrders: [
+        {
+          orderId: 'order_1',
+          signature: `0x${'a'.repeat(130)}`,
+        },
+      ],
+    };
+    const requestHash = hashJson({
+      intentId: dto.intentId,
+      executionMode: dto.executionMode,
+      signedOrders: dto.signedOrders,
+    });
+    const responseJson = {
+      intentId: dto.intentId,
+      executionMode: 'real',
+      status: 'submitted',
+      orders: [],
+    };
+    const orderSubmissionFindFirst = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ requestHash, responseJson });
+    const postSignedOrders = vi.fn();
+    const tx = {
+      orderSubmission: {
+        create: vi.fn().mockRejectedValue(uniqueConstraintError()),
+      },
+      orderIntent: {
+        updateMany: vi.fn(),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const service = createService({
+      orderSubmission: {
+        findFirst: orderSubmissionFindFirst,
+      },
+      orderIntent: {
+        findFirst: vi.fn().mockResolvedValue(realIntent(dto.intentId, preparedClobOrder('order_1'))),
+      },
+      $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
+    }, { status: 'available', reason: null }, { postSignedOrders });
+
+    const result = await service.submit(currentUser(), dto);
+
+    expect(result).toEqual(responseJson);
+    expect(tx.orderIntent.updateMany).not.toHaveBeenCalled();
+    expect(postSignedOrders).not.toHaveBeenCalled();
   });
 
   it('rejects reuse of an idempotency key with a different request hash', async () => {
@@ -304,6 +359,152 @@ describe('OrdersService', () => {
     expect(orderIntentUpdate).not.toHaveBeenCalled();
   });
 
+  it('prepares real CLOB signature payloads and persists them for submit', async () => {
+    const preparedOrder = preparedClobOrder('order_1');
+    const prepareSignaturePayloads = vi.fn().mockReturnValue([preparedOrder]);
+    const tx = {
+      orderIntent: {
+        update: vi.fn(),
+      },
+      causewayOrder: {
+        update: vi.fn(),
+      },
+    };
+    const service = createService({
+      orderIntent: {
+        findFirst: vi.fn().mockResolvedValue(realIntent('intent_1')),
+      },
+      $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
+    }, { status: 'available', reason: null }, { prepareSignaturePayloads });
+
+    const result = await service.prepareSignature(currentUser(), {
+      intentId: 'intent_1',
+      executionMode: 'real',
+      walletAddress: '0x1111111111111111111111111111111111111111',
+      funderAddress: '0x2222222222222222222222222222222222222222',
+      chainId: 137,
+    });
+
+    expect(result).toMatchObject({
+      intentId: 'intent_1',
+      executionMode: 'real',
+      signingStatus: 'ready',
+      protocol: 'polymarket_clob_eip712_v2',
+      payloads: [preparedOrder],
+    });
+    expect(prepareSignaturePayloads).toHaveBeenCalledWith([
+      expect.objectContaining({
+        orderId: 'order_1',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        funderAddress: '0x2222222222222222222222222222222222222222',
+        chainId: 137,
+        tokenId: 'token_1',
+        tickSize: 0.01,
+        negRisk: false,
+      }),
+    ], expect.any(Date));
+    expect(tx.causewayOrder.update).toHaveBeenCalledWith({
+      where: { id: 'order_1' },
+      data: {
+        submitPayload: {
+          tickSize: 0.01,
+          preparedClobOrder: preparedOrder,
+        },
+      },
+    });
+  });
+
+  it('submits real signed CLOB orders and stores external order ids', async () => {
+    const dto = {
+      ...submitDto(),
+      executionMode: 'real',
+      signedOrders: [
+        {
+          orderId: 'order_1',
+          signature: `0x${'a'.repeat(130)}`,
+        },
+      ],
+    };
+    const postSignedOrders = vi.fn().mockResolvedValue([
+      {
+        orderId: 'order_1',
+        externalOrderId: 'clob_order_1',
+        status: 'submitted',
+        errorMessage: null,
+        response: { success: true, orderID: 'clob_order_1' },
+      },
+    ]);
+    const claimTx = {
+      orderSubmission: {
+        create: vi.fn().mockResolvedValue({ id: 'submission_1' }),
+      },
+      orderIntent: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const completeTx = {
+      orderIntent: {
+        update: vi.fn(),
+      },
+      causewayOrder: {
+        update: vi.fn(),
+      },
+      orderSubmission: {
+        update: vi.fn(),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const transaction = vi
+      .fn()
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(claimTx))
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(completeTx));
+    const service = createService({
+      orderSubmission: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      orderIntent: {
+        findFirst: vi.fn().mockResolvedValue(realIntent('intent_1', preparedClobOrder('order_1'))),
+      },
+      $transaction: transaction,
+    }, { status: 'available', reason: null }, { postSignedOrders });
+
+    const result = await service.submit(currentUser('req_real_1'), dto);
+
+    expect(result).toMatchObject({
+      intentId: 'intent_1',
+      executionMode: 'real',
+      status: 'submitted',
+      orders: [
+        {
+          orderId: 'order_1',
+          externalOrderId: 'clob_order_1',
+          status: 'submitted',
+          errorMessage: null,
+        },
+      ],
+    });
+    expect(postSignedOrders).toHaveBeenCalledWith([
+      {
+        preparedOrder: preparedClobOrder('order_1'),
+        signature: `0x${'a'.repeat(130)}`,
+      },
+    ]);
+    expect(completeTx.causewayOrder.update).toHaveBeenCalledWith({
+      where: { id: 'order_1' },
+      data: {
+        externalOrderId: 'clob_order_1',
+        status: 'submitted',
+        errorMessage: null,
+        responsePayload: { success: true, orderID: 'clob_order_1' },
+      },
+    });
+  });
+
   it('atomically rejects a second submit that loses the intent status claim', async () => {
     const dto = submitDto();
     const causewayOrderUpdateMany = vi.fn();
@@ -417,9 +618,13 @@ function createService(
     status: 'unavailable',
     reason: 'fixture unavailable',
   },
+  clobOverrides: Partial<ClobClient> = {},
 ) {
   const clobClient = {
     getCapability: vi.fn().mockReturnValue(capability),
+    prepareSignaturePayloads: vi.fn().mockReturnValue([]),
+    postSignedOrders: vi.fn(),
+    ...clobOverrides,
   } as unknown as ClobClient;
   return new OrdersService(clobClient, prisma as PrismaService);
 }
@@ -447,4 +652,100 @@ function uniqueConstraintError() {
     code: 'P2002',
     clientVersion: 'test',
   });
+}
+
+function realIntent(intentId: string, preparedOrder?: PreparedClobOrder) {
+  return {
+    id: intentId,
+    executionMode: 'real',
+    status: 'preview_ready',
+    previewExpiresAt: new Date(Date.now() + 60_000),
+    orders: [
+      {
+        id: 'order_1',
+        externalOrderId: null,
+        submitPayload: preparedOrder ? { tickSize: 0.01, preparedClobOrder: preparedOrder } : { tickSize: 0.01 },
+        clobTokenId: 'token_1',
+        side: 'BUY',
+        orderMode: 'limit',
+        orderType: 'GTC',
+        limitPrice: 0.5,
+        estimatedFillPrice: 0.5,
+        size: 10,
+        amountUsd: 5,
+        market: {
+          negRisk: false,
+          orderPriceMinTickSize: 0.01,
+        },
+      },
+    ],
+  };
+}
+
+function preparedClobOrder(orderId: string): PreparedClobOrder {
+  return {
+    orderId,
+    protocol: 'polymarket_clob_eip712_v2',
+    orderType: 'GTC',
+    postOnly: false,
+    deferExec: false,
+    tickSize: '0.01',
+    negRisk: false,
+    signatureType: 2,
+    makerAddress: '0x2222222222222222222222222222222222222222',
+    signerAddress: '0x1111111111111111111111111111111111111111',
+    funderAddress: '0x2222222222222222222222222222222222222222',
+    expiresAt: '2026-05-19T00:00:00.000Z',
+    eip712: {
+      primaryType: 'Order',
+      domain: {
+        name: 'Polymarket CTF Exchange',
+        version: '2',
+        chainId: 137,
+        verifyingContract: '0xE111180000d2663C0091e4f400237545B87B996B',
+      },
+      types: {
+        Order: [
+          { name: 'salt', type: 'uint256' },
+          { name: 'maker', type: 'address' },
+          { name: 'signer', type: 'address' },
+          { name: 'tokenId', type: 'uint256' },
+          { name: 'makerAmount', type: 'uint256' },
+          { name: 'takerAmount', type: 'uint256' },
+          { name: 'side', type: 'uint8' },
+          { name: 'signatureType', type: 'uint8' },
+          { name: 'timestamp', type: 'uint256' },
+          { name: 'metadata', type: 'bytes32' },
+          { name: 'builder', type: 'bytes32' },
+        ],
+      },
+      message: {
+        salt: '1',
+        maker: '0x2222222222222222222222222222222222222222',
+        signer: '0x1111111111111111111111111111111111111111',
+        tokenId: 'token_1',
+        makerAmount: '5000000',
+        takerAmount: '10000000',
+        side: 0,
+        signatureType: 2,
+        timestamp: '1',
+        metadata: `0x${'0'.repeat(64)}`,
+        builder: `0x${'0'.repeat(64)}`,
+      },
+    },
+    order: {
+      salt: '1',
+      maker: '0x2222222222222222222222222222222222222222',
+      signer: '0x1111111111111111111111111111111111111111',
+      tokenId: 'token_1',
+      makerAmount: '5000000',
+      takerAmount: '10000000',
+      side: 'BUY',
+      signatureType: 2,
+      timestamp: '1',
+      expiration: '0',
+      metadata: `0x${'0'.repeat(64)}`,
+      builder: `0x${'0'.repeat(64)}`,
+    },
+  };
 }

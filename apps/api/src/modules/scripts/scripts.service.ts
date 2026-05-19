@@ -10,6 +10,10 @@ const SCRIPT_OUTCOME_SELECT = Prisma.validator<Prisma.PolymarketOutcomeSelect>()
   id: true,
   label: true,
   clobTokenId: true,
+  price: true,
+  bestBid: true,
+  bestAsk: true,
+  lastTradePrice: true,
 });
 
 const SCRIPT_MARKET_SELECT = Prisma.validator<Prisma.ScriptMarketSelect>()({
@@ -33,16 +37,15 @@ const SCRIPT_MARKET_SELECT = Prisma.validator<Prisma.ScriptMarketSelect>()({
       outcomeId: true,
       aiAction: true,
       userAction: true,
+      side: true,
       orderMode: true,
       limitPrice: true,
       size: true,
       amountUsd: true,
+      confidence: true,
       reason: true,
       outcome: {
-        select: {
-          label: true,
-          clobTokenId: true,
-        },
+        select: SCRIPT_OUTCOME_SELECT,
       },
     },
   },
@@ -103,11 +106,13 @@ export class ScriptsService {
           tokenId: selection.outcome.clobTokenId,
           aiAction: selection.aiAction,
           userAction: selection.userAction,
+          side: selection.side,
           orderMode: selection.orderMode,
           limitPrice: toNullableNumber(selection.limitPrice),
           size: toNullableNumber(selection.size),
           amountUsd: toNullableNumber(selection.amountUsd),
-          reason: selection.reason,
+          confidence: toNullableNumber(selection.confidence),
+          reason: selection.reason ?? '',
         })),
       })),
     };
@@ -238,6 +243,7 @@ function formatScriptGraph(
         {
           label: outcome.label,
           tokenId: outcome.clobTokenId,
+          price: firstNumber(outcome.bestAsk, outcome.price, outcome.lastTradePrice, outcome.bestBid),
         },
       ] as const),
     ),
@@ -259,26 +265,31 @@ function formatScriptGraph(
 function formatGraphNode(
   value: unknown,
   marketTitleById: Map<string, string>,
-  outcomeById: Map<string, { label: string; tokenId: string }>,
+  outcomeById: Map<string, { label: string; tokenId: string; price: number | null }>,
 ): Record<string, unknown> {
   const node = isRecord(value) ? value : {};
   const marketId = readString(node.marketId) ?? '';
+  const recommendedOutcomeValues = readArray(node.recommendedOutcomes);
+  const recommendedOutcomes = recommendedOutcomeValues.map((outcome) => formatRecommendedOutcome(outcome, outcomeById));
+  const recommendedOutcomePrices = recommendedOutcomeValues.map((outcome) => {
+    const outcomeId = readString(isRecord(outcome) ? outcome.outcomeId : null) ?? '';
+    return outcomeById.get(outcomeId)?.price;
+  });
   return {
     nodeId: readString(node.nodeId) ?? '',
     marketId,
     title: marketTitleById.get(marketId) ?? '',
     layer: readNumber(node.layer) ?? 0,
-    recommendedOutcomes: readArray(node.recommendedOutcomes).map((outcome) =>
-      formatRecommendedOutcome(outcome, outcomeById),
-    ),
+    recommendedOutcomes,
     confidence: readNumber(node.confidence) ?? 0,
     direction: readString(node.direction) ?? 'unclear',
+    price: firstNumber(...recommendedOutcomePrices),
   };
 }
 
 function formatRecommendedOutcome(
   value: unknown,
-  outcomeById: Map<string, { label: string; tokenId: string }>,
+  outcomeById: Map<string, { label: string; tokenId: string; price: number | null }>,
 ): Record<string, unknown> {
   const outcome = isRecord(value) ? value : {};
   const outcomeId = readString(outcome.outcomeId) ?? '';
@@ -317,6 +328,14 @@ function readString(value: unknown): string | null {
 
 function readNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return null;
+}
+
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = toNullableNumber(value);
+    if (parsed != null) return parsed;
+  }
   return null;
 }
 

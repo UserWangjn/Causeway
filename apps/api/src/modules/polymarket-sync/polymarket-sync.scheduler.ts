@@ -57,7 +57,7 @@ export class PolymarketSyncScheduler implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const intervalMs = this.config.get<number>('polymarket.marketSync.intervalMs', 300_000);
+    const intervalMs = this.config.get<number>('polymarket.marketSync.intervalMs', 900_000);
     const interval = setInterval(() => {
       void this.runOnce('interval');
     }, intervalMs) as IntervalRef;

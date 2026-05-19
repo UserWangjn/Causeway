@@ -156,16 +156,13 @@ describe('documented public API contracts', () => {
         .expect(201),
     );
     expectKeys(createdRun, ['runId', 'status', 'cacheKey', 'cacheHit', 'scriptId']);
+    expect(createdRun.status).toBe('queued');
+    expect(createdRun.scriptId).toBeNull();
 
     const runId = readString(createdRun, 'runId');
-    const scriptId = readString(createdRun, 'scriptId');
-    const runData = apiData<Record<string, unknown>>(
-      await request(httpServer)
-        .get(`/api/v1/inference-runs/${runId}`)
-        .set('authorization', `Bearer ${accessToken}`)
-        .expect(200),
-    );
+    const runData = await waitForInferenceRun(httpServer, accessToken, runId);
     expectKeys(runData, ['id', 'status', 'stage', 'progress', 'cacheHit', 'scriptId', 'errorMessage', 'createdAt', 'completedAt']);
+    const scriptId = readString(runData, 'scriptId');
 
     const scriptData = apiData<Record<string, unknown>>(
       await request(httpServer).get(`/api/v1/scripts/${scriptId}`).set('authorization', `Bearer ${accessToken}`).expect(200),
@@ -173,7 +170,32 @@ describe('documented public API contracts', () => {
     expectKeys(scriptData, ['id', 'title', 'status', 'root', 'graph', 'summary', 'createdAt', 'updatedAt', 'markets']);
     expectKeys(readRecord(scriptData, 'root'), ['marketId', 'outcomeId', 'outcomeLabel']);
     expectKeys(readRecord(scriptData, 'graph'), ['nodes', 'edges']);
+    expectKeys(readRecordArray(readRecord(scriptData, 'graph'), 'nodes')[0], [
+      'nodeId',
+      'marketId',
+      'title',
+      'layer',
+      'recommendedOutcomes',
+      'confidence',
+      'direction',
+      'price',
+    ]);
     expectKeys(readRecordArray(scriptData, 'markets')[0], ['scriptMarketId', 'marketId', 'title', 'layer', 'confidence', 'outcomes']);
+    expectKeys(readRecordArray(readRecordArray(scriptData, 'markets')[0], 'outcomes')[0], [
+      'selectionId',
+      'outcomeId',
+      'label',
+      'tokenId',
+      'aiAction',
+      'userAction',
+      'side',
+      'orderMode',
+      'limitPrice',
+      'size',
+      'amountUsd',
+      'confidence',
+      'reason',
+    ]);
   });
 
   it('keeps dry-run order and portfolio read contracts stable', async () => {
@@ -228,6 +250,7 @@ describe('documented public API contracts', () => {
       'size',
       'tickSize',
       'minOrderSize',
+      'orderBookRefreshedAt',
       'valid',
       'warnings',
       'error',
@@ -473,6 +496,31 @@ function readString(value: Record<string, unknown>, key: string): string {
     throw new Error(`${key} must be a non-empty string`);
   }
   return child;
+}
+
+async function waitForInferenceRun(
+  httpServer: SupertestApp,
+  accessToken: string,
+  runId: string,
+): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const runData = apiData<Record<string, unknown>>(
+      await request(httpServer).get(`/api/v1/inference-runs/${runId}`).set('authorization', `Bearer ${accessToken}`).expect(200),
+    );
+    if (runData.status === 'completed') return runData;
+    if (runData.status === 'failed') {
+      throw new Error(`Inference run failed: ${String(runData.errorMessage)}`);
+    }
+    await sleep(200);
+  }
+
+  throw new Error(`Inference run ${runId} did not complete in time`);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function expectValidationError(testRequest: Test): Promise<void> {
