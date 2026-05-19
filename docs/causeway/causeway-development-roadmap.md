@@ -77,7 +77,7 @@ P5 资产组合、监控和验收
 
 - `GET /markets`
 - `GET /markets/:marketId`
-- `GET /market-network`
+- `GET /markets/network`（`/market-network` 仅兼容旧版前端）
 - 热门市场和网络边计算任务。
 - 市场详情相关市场查询。
 

@@ -107,6 +107,77 @@ describe('documented public API contracts', () => {
     expect(networkData.nodes.length).toBeGreaterThan(0);
     expectKeys(networkData.nodes[0], ['id', 'marketId', 'title', 'icon', 'price', 'volume', 'category']);
     expectKeys(networkData.edges[0], ['id', 'source', 'target', 'relationType', 'weight']);
+
+    const standardNetworkData = apiData<{ nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }>(
+      await request(httpServer).get('/api/v1/markets/network').query({ active: 'true', limit: 10 }).expect(200),
+    );
+    expectKeys(standardNetworkData, ['nodes', 'edges']);
+    expectKeys(standardNetworkData.nodes[0], ['id', 'marketId', 'title', 'icon', 'price', 'volume', 'category']);
+  });
+
+  it('keeps frontend market explorer helper contracts stable', async () => {
+    const categoriesData = apiData<{ categories: Record<string, unknown>[]; generatedAt: string; source: string }>(
+      await request(httpServer).get('/api/v1/markets/categories').expect(200),
+    );
+    expectKeys(categoriesData, ['categories', 'generatedAt', 'source']);
+    expectKeys(categoriesData.categories[0], ['key', 'label', 'count']);
+
+    const searchData = apiData<{ results: Record<string, unknown>[]; generatedAt: string; source: string }>(
+      await request(httpServer).get('/api/v1/markets/search').query({ q: 'fixture', limit: 5 }).expect(200),
+    );
+    expectKeys(searchData, ['results', 'generatedAt', 'source']);
+    expect(searchData.results.length).toBeGreaterThan(0);
+    expectKeys(searchData.results[0], [
+      'type',
+      'id',
+      'marketId',
+      'eventId',
+      'eventSlug',
+      'slug',
+      'title',
+      'subtitle',
+      'category',
+      'categoryKey',
+      'icon',
+      'image',
+      'price',
+      'volume',
+      'liquidity',
+      'endDate',
+      'score',
+      'matchedBy',
+    ]);
+
+    const eventDetailData = apiData<{ event: Record<string, unknown> | null; markets: Record<string, unknown>[]; generatedAt: string; source: string }>(
+      await request(httpServer).get('/api/v1/events/detail').query({ marketId: fixture.marketBinary.id }).expect(200),
+    );
+    expectKeys(eventDetailData, ['event', 'markets', 'generatedAt', 'source']);
+    expectKeys(readRecord(eventDetailData, 'event'), [
+      'id',
+      'slug',
+      'title',
+      'category',
+      'categoryKey',
+      'officialCategory',
+      'tags',
+      'icon',
+      'image',
+      'endDate',
+      'volume',
+      'volume24hr',
+      'liquidity',
+      'description',
+      'rules',
+      'marketsCount',
+      'syncedAt',
+    ]);
+    expect(eventDetailData.markets.length).toBeGreaterThan(0);
+
+    const historyData = apiData<{ history: Record<string, unknown[]>; generatedAt: string; source: string }>(
+      await request(httpServer).get('/api/v1/markets/history').query({ tokenIds: 'not-a-token' }).expect(200),
+    );
+    expectKeys(historyData, ['history', 'generatedAt', 'source']);
+    expect(historyData.history).toEqual({});
   });
 
   it('rejects invalid route params and public token queries at the controller boundary', async () => {

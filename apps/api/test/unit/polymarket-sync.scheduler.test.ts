@@ -12,6 +12,7 @@ import {
 describe('PolymarketSyncScheduler', () => {
   beforeEach(() => {
     vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
   });
 
@@ -19,29 +20,65 @@ describe('PolymarketSyncScheduler', () => {
     vi.restoreAllMocks();
   });
 
-  it('does not register an interval when market sync is disabled', () => {
-    const { registry, scheduler, syncPolymarket } = createScheduler({
+  it('does not register an interval when market sync is disabled', async () => {
+    const { registry, scheduler, syncPolymarket, syncRunUpdateMany } = createScheduler({
       'polymarket.marketSync.enabled': false,
     });
 
-    scheduler.onModuleInit();
+    await scheduler.onModuleInit();
 
     expect(registry.doesExist('interval', POLYMARKET_MARKET_SYNC_INTERVAL)).toBe(false);
+    expect(syncRunUpdateMany).not.toHaveBeenCalled();
     expect(syncPolymarket).not.toHaveBeenCalled();
   });
 
-  it('registers and removes the configured market sync interval', () => {
+  it('registers and removes the configured market sync interval', async () => {
     const { registry, scheduler } = createScheduler({
       'polymarket.marketSync.enabled': true,
       'polymarket.marketSync.intervalMs': 60_000,
       'polymarket.marketSync.runOnStartup': false,
     });
 
-    scheduler.onModuleInit();
+    await scheduler.onModuleInit();
     expect(registry.doesExist('interval', POLYMARKET_MARKET_SYNC_INTERVAL)).toBe(true);
 
     scheduler.onModuleDestroy();
     expect(registry.doesExist('interval', POLYMARKET_MARKET_SYNC_INTERVAL)).toBe(false);
+  });
+
+  it('marks interrupted market sync runs as failed during scheduler startup', async () => {
+    const { scheduler, syncRunUpdateMany } = createScheduler(
+      {
+        'polymarket.marketSync.enabled': true,
+        'polymarket.marketSync.intervalMs': 60_000,
+        'polymarket.marketSync.runOnStartup': false,
+        'polymarket.marketSync.lockTtlMs': 60_000,
+      },
+      {},
+      {
+        syncRun: {
+          updateMany: vi.fn().mockResolvedValue({ count: 2 }),
+        },
+      },
+    );
+
+    await scheduler.onModuleInit();
+
+    expect(syncRunUpdateMany).toHaveBeenCalledWith({
+      where: {
+        jobType: 'polymarket_sync',
+        scope: 'markets',
+        status: 'running',
+        startedAt: {
+          lt: expect.any(Date) as Date,
+        },
+      },
+      data: {
+        status: 'failed',
+        finishedAt: expect.any(Date) as Date,
+        error: 'Polymarket market sync was interrupted before completion',
+      },
+    });
   });
 
   it('runs an incremental market sync with the configured limit', async () => {
@@ -301,7 +338,7 @@ describe('PolymarketSyncScheduler', () => {
 function createScheduler(
   configValues: Record<string, unknown>,
   syncOverrides: { syncPolymarket?: ReturnType<typeof vi.fn> } = {},
-  prismaOverrides: { schedulerLock?: Partial<SchedulerLockMock> } = {},
+  prismaOverrides: { schedulerLock?: Partial<SchedulerLockMock>; syncRun?: Partial<SyncRunMock> } = {},
 ) {
   const config = {
     get: vi.fn((key: string, defaultValue?: unknown) =>
@@ -313,8 +350,13 @@ function createScheduler(
     updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     ...prismaOverrides.schedulerLock,
   };
+  const syncRun = {
+    updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    ...prismaOverrides.syncRun,
+  };
   const prisma = {
     schedulerLock,
+    syncRun,
   } as unknown as PrismaService;
   const registry = new SchedulerRegistry();
   const syncPolymarket = syncOverrides.syncPolymarket ?? vi.fn().mockResolvedValue({ runId: 'sync_run_1' });
@@ -329,6 +371,7 @@ function createScheduler(
     scheduler,
     schedulerLockUpsert: schedulerLock.upsert,
     schedulerLockUpdateMany: schedulerLock.updateMany,
+    syncRunUpdateMany: syncRun.updateMany,
     syncService,
     syncPolymarket,
   };
@@ -336,6 +379,10 @@ function createScheduler(
 
 type SchedulerLockMock = {
   upsert: ReturnType<typeof vi.fn>;
+  updateMany: ReturnType<typeof vi.fn>;
+};
+
+type SyncRunMock = {
   updateMany: ReturnType<typeof vi.fn>;
 };
 

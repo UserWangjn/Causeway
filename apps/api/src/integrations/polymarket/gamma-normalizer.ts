@@ -1,4 +1,5 @@
 import { toNullableNumber } from '../../common/utils/number.util';
+import { marketCategoryTags } from '../../common/markets/market-category.util';
 
 export type NormalizedGammaEvent = {
   externalEventId: string;
@@ -144,7 +145,14 @@ function normalizeEvent(payload: Record<string, unknown>): NormalizedGammaEvent 
     description: readString(eventPayload, ['description']),
     image: readString(eventPayload, ['image']),
     icon: readString(eventPayload, ['icon']),
-    tags: parseArray(eventPayload.tags),
+    tags: marketCategoryTags(eventPayload.tags ?? payload.tags, [
+      title,
+      eventPayload.slug,
+      eventPayload.description,
+      payload.question,
+      payload.slug,
+      payload.description,
+    ]),
     active: readBoolean(eventPayload.active, readBoolean(payload.active, true)),
     closed: readBoolean(eventPayload.closed, readBoolean(payload.closed, false)),
     archived: readBoolean(eventPayload.archived, false),

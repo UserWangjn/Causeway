@@ -304,7 +304,7 @@ npm audit --omit=dev
 - `GET /markets` 搜索、筛选、排序、cursor pagination。
 - `GET /markets/:marketId`。
 - `GET /markets/by-slug/:slug`。
-- `GET /market-network`。
+- `GET /markets/network`（`/market-network` 仅兼容旧版前端）。
 - 网络节点/边生成任务或确定性本地生成策略。
 
 先写测试：

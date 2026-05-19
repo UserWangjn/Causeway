@@ -44,6 +44,17 @@ const aiBaseUrlSchema = z.preprocess(
     ])
     .optional(),
 );
+const outboundProxyUrlSchema = z.preprocess(
+  (value) => (typeof value === 'string' ? value.trim() : value),
+  z
+    .union([
+      z.literal(''),
+      z.string().refine(isSupportedProxyUrl, {
+        message: 'OUTBOUND_PROXY_URL must be an http or https proxy URL',
+      }),
+    ])
+    .optional(),
+);
 
 const envSchema = z
   .object({
@@ -53,6 +64,7 @@ const envSchema = z
     API_PREFIX: z.string().default('/api/v1'),
     API_TRUST_PROXY: z.enum(['true', 'false']).default('false'),
     API_CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
+    OUTBOUND_PROXY_URL: outboundProxyUrlSchema,
     DATABASE_URL: z.string().min(1),
     JWT_SECRET: z.string().min(1),
     JWT_EXPIRES_IN: z.string().regex(AUTH_DURATION_PATTERN).default('7d'),
@@ -238,6 +250,16 @@ function isHttpsUrl(value: string): boolean {
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
+}
+
+function isSupportedProxyUrl(value: string): boolean {
+  try {
+    const withProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(value) ? value : `http://${value}`;
+    const url = new URL(withProtocol);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 function isEthereumAddress(value: string): boolean {

@@ -12,12 +12,17 @@ describe('normalizeGammaMarket', () => {
       clobTokenIds: '["token_yes","token_no"]',
       active: true,
       closed: false,
+      event: {
+        id: 'event_1',
+        title: '2026 FIFA World Cup Winner',
+      },
     });
 
     expect(market?.outcomes).toEqual([
       { outcomeIndex: 0, label: 'Yes', clobTokenId: 'token_yes', price: 0.4 },
       { outcomeIndex: 1, label: 'No', clobTokenId: 'token_no', price: 0.6 },
     ]);
+    expect(market?.event?.tags).toEqual(['sports']);
   });
 
   it('rejects markets without tradable outcome token ids', () => {

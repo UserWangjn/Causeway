@@ -249,7 +249,9 @@ type OrderBook = {
 
 ## 5. Market Network
 
-### `GET /market-network`
+### `GET /markets/network`
+
+说明：`/markets/network` 是正式资源路径；`/market-network` 仅作为旧版兼容别名保留，不建议新前端继续使用。
 
 查询参数：
 
@@ -280,6 +282,83 @@ type MarketNetwork = {
     weight: number;
   }[];
 };
+```
+
+### `GET /markets/categories`
+
+响应：
+
+```ts
+type MarketCategories = {
+  categories: {
+    key: string;
+    label: string;
+    count: number;
+  }[];
+  generatedAt: string;
+  source: string;
+};
+```
+
+`key` uses stable category keys (`politics`, `sports`, `crypto`, `macro`, `tech`, `entertainment`, `other`).
+When Polymarket Gamma does not provide explicit tags, the backend infers the category from event and market text so frontend filters remain usable with real synced data.
+
+### `GET /markets/search`
+
+查询参数：
+
+```text
+q
+limit
+```
+
+响应：
+
+```ts
+type MarketSearch = {
+  results: {
+    type: "market" | "event";
+    id: string;
+    marketId: string | null;
+    eventId: string | null;
+    eventSlug: string | null;
+    slug: string | null;
+    title: string;
+    subtitle: string | null;
+    category: string | null;
+    categoryKey: string | null;
+    icon: string | null;
+    image: string | null;
+    price: number | null;
+    volume: number | null;
+    liquidity: number | null;
+    endDate: string | null;
+    score: number;
+    matchedBy: "market" | "event";
+  }[];
+  generatedAt: string;
+  source: string;
+};
+```
+
+### `GET /events/detail`
+
+查询参数至少提供一个：
+
+```text
+marketId
+eventId
+eventSlug
+```
+
+### `GET /markets/history`
+
+查询参数：
+
+```text
+tokenIds
+interval = 1h | 6h | 1d | 1w | 1m | all
+fidelity
 ```
 
 ## 6. Inference

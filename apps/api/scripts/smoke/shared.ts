@@ -1,3 +1,5 @@
+import { configureOutboundProxy } from '../../src/common/http/outbound-proxy';
+
 export type SmokeSummary = {
   name: string;
   status: 'passed' | 'skipped';
@@ -26,6 +28,10 @@ export function readPositiveInteger(name: string, defaultValue: number): number 
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+export function configureSmokeOutboundProxy(): void {
+  configureOutboundProxy();
 }
 
 export async function fetchJson(url: URL, timeoutMs: number, init: RequestInit = {}): Promise<unknown> {

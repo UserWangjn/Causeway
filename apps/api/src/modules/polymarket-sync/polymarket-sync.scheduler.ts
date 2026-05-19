@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
+import { SyncRunStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../database/prisma.service';
 import { PolymarketSyncService } from './polymarket-sync.service';
@@ -52,10 +53,12 @@ export class PolymarketSyncScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly syncService: PolymarketSyncService,
   ) {}
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
     if (!this.config.get<boolean>('polymarket.marketSync.enabled', false)) {
       return;
     }
+
+    await this.recoverInterruptedRuns();
 
     const intervalMs = this.config.get<number>('polymarket.marketSync.intervalMs', 900_000);
     const interval = setInterval(() => {
@@ -257,5 +260,28 @@ export class PolymarketSyncScheduler implements OnModuleInit, OnModuleDestroy {
   private getLockTtlMs(): number {
     const configured = this.config.get<number>('polymarket.marketSync.lockTtlMs', DEFAULT_LOCK_TTL_MS);
     return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_LOCK_TTL_MS;
+  }
+
+  private async recoverInterruptedRuns(): Promise<void> {
+    const cutoff = new Date(Date.now() - this.getLockTtlMs());
+    const recovered = await this.prisma.syncRun.updateMany({
+      where: {
+        jobType: 'polymarket_sync',
+        scope: 'markets',
+        status: SyncRunStatus.running,
+        startedAt: {
+          lt: cutoff,
+        },
+      },
+      data: {
+        status: SyncRunStatus.failed,
+        finishedAt: new Date(),
+        error: 'Polymarket market sync was interrupted before completion',
+      },
+    });
+
+    if (recovered.count > 0) {
+      this.logger.warn(`Recovered ${recovered.count} interrupted Polymarket market sync run(s)`);
+    }
   }
 }

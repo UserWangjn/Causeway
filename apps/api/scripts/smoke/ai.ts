@@ -1,4 +1,5 @@
 import {
+  configureSmokeOutboundProxy,
   fetchJson,
   formatUnknownError,
   isEnabled,
@@ -22,6 +23,8 @@ export async function runAiSmoke(): Promise<SmokeSummary> {
       },
     };
   }
+
+  configureSmokeOutboundProxy();
 
   const timeoutMs = readPositiveInteger('SMOKE_HTTP_TIMEOUT_MS', 10_000);
   const baseUrl = readOptionalEnv('AI_BASE_URL');

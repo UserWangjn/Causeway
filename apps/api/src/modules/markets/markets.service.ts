@@ -1,6 +1,7 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
+import { marketCategoryLabel, readMarketCategoryKey } from '../../common/markets/market-category.util';
 import {
   decodeOpaqueCursor,
   encodeOpaqueCursor,
@@ -10,6 +11,7 @@ import {
 import { toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
 import { ClobClient } from '../../integrations/polymarket/services/clob.client';
+import { EventDetailQueryDto, MarketHistoryQueryDto, MarketSearchQueryDto } from './dto/market-explorer-query.dto';
 import { MarketQueryDto } from './dto/market-query.dto';
 
 const MARKET_OUTCOME_SELECT = Prisma.validator<Prisma.PolymarketOutcomeSelect>()({
@@ -85,14 +87,65 @@ const NETWORK_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()(
   volume: true,
   event: {
     select: {
+      slug: true,
+      title: true,
       tags: true,
     },
+  },
+});
+
+const EXPLORER_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
+  ...MARKET_LIST_SELECT,
+  description: true,
+  rules: true,
+  orderMinSize: true,
+  orderPriceMinTickSize: true,
+  event: {
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      tags: true,
+      icon: true,
+      image: true,
+      volume: true,
+      liquidity: true,
+      endDate: true,
+      syncedAt: true,
+      description: true,
+    },
+  },
+});
+
+const EVENT_DETAIL_SELECT = Prisma.validator<Prisma.PolymarketEventSelect>()({
+  id: true,
+  slug: true,
+  title: true,
+  description: true,
+  icon: true,
+  image: true,
+  tags: true,
+  endDate: true,
+  volume: true,
+  liquidity: true,
+  syncedAt: true,
+  markets: {
+    where: {
+      active: true,
+      closed: false,
+      archived: false,
+    },
+    orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+    take: 50,
+    select: EXPLORER_MARKET_SELECT,
   },
 });
 
 type MarketListRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof MARKET_LIST_SELECT }>;
 type MarketDetailRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof MARKET_DETAIL_SELECT }>;
 type NetworkMarketRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof NETWORK_MARKET_SELECT }>;
+type ExplorerMarketRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof EXPLORER_MARKET_SELECT }>;
+type EventDetailRecord = Prisma.PolymarketEventGetPayload<{ select: typeof EVENT_DETAIL_SELECT }>;
 
 @Injectable()
 export class MarketsService {
@@ -122,6 +175,169 @@ export class MarketsService {
     };
   }
 
+  async getMarketCategories() {
+    const markets = await this.prisma.polymarketMarket.findMany({
+      where: {
+        active: true,
+        closed: false,
+        archived: false,
+      },
+      select: {
+        question: true,
+        slug: true,
+        event: {
+          select: {
+            slug: true,
+            title: true,
+            tags: true,
+          },
+        },
+      },
+    });
+    const counts = new Map<string, number>();
+    for (const market of markets) {
+      const category = readMarketCategoryKey(market.event?.tags, [
+        market.question,
+        market.slug,
+        market.event?.title,
+        market.event?.slug,
+      ]);
+      counts.set(category, (counts.get(category) ?? 0) + 1);
+    }
+
+    const categoryItems = [...counts.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, 12)
+      .map(([category, count]) => ({
+        key: category,
+        label: marketCategoryLabel(category),
+        count,
+      }));
+
+    return {
+      categories: [
+        { key: 'all', label: 'All', count: markets.length },
+        { key: 'hot', label: 'Hot', count: markets.length },
+        ...categoryItems,
+      ],
+      generatedAt: new Date().toISOString(),
+      source: 'database',
+    };
+  }
+
+  async searchMarkets(query: MarketSearchQueryDto) {
+    const q = query.q.trim();
+    const limit = query.limit ?? 8;
+    const [markets, events] = await Promise.all([
+      this.prisma.polymarketMarket.findMany({
+        where: {
+          active: true,
+          closed: false,
+          archived: false,
+          OR: [
+            { question: { contains: q, mode: 'insensitive' } },
+            { slug: { contains: q, mode: 'insensitive' } },
+            { description: { contains: q, mode: 'insensitive' } },
+          ],
+        },
+        orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+        take: limit,
+        select: EXPLORER_MARKET_SELECT,
+      }),
+      this.prisma.polymarketEvent.findMany({
+        where: {
+          active: true,
+          closed: false,
+          archived: false,
+          OR: [
+            { title: { contains: q, mode: 'insensitive' } },
+            { slug: { contains: q, mode: 'insensitive' } },
+            { description: { contains: q, mode: 'insensitive' } },
+          ],
+        },
+        orderBy: [{ volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+        take: Math.min(4, limit),
+        select: {
+          id: true,
+          slug: true,
+          title: true,
+          tags: true,
+          icon: true,
+          image: true,
+          volume: true,
+          liquidity: true,
+          endDate: true,
+          _count: {
+            select: {
+              markets: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const marketResults = markets.map((market, index) => {
+      const category = readMarketCategoryKey(market.event?.tags, [
+        market.question,
+        market.slug,
+        market.event?.title,
+        market.event?.slug,
+    ]);
+      return {
+        type: 'market' as const,
+        id: `market:${market.id}`,
+        marketId: market.id,
+        eventId: market.event?.id ?? market.eventId,
+        eventSlug: market.event?.slug ?? null,
+        slug: market.slug,
+        title: market.question,
+        subtitle: market.event?.title ?? marketCategoryLabel(category),
+        category,
+        categoryKey: category,
+        icon: market.icon ?? market.image ?? market.event?.icon ?? market.event?.image,
+        image: market.image ?? market.icon ?? market.event?.image ?? market.event?.icon,
+        price: firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid, market.outcomes[0]?.price),
+        volume: toNullableNumber(market.volume),
+        liquidity: toNullableNumber(market.liquidity),
+        endDate: market.endDate?.toISOString() ?? null,
+        score: scoreByVolume(market.volume, index),
+        matchedBy: 'market',
+      };
+    });
+
+    const eventResults = events.map((event, index) => {
+      const category = readMarketCategoryKey(event.tags, [event.title, event.slug]);
+      return {
+        type: 'event' as const,
+        id: `event:${event.id}`,
+        marketId: null,
+        eventId: event.id,
+        eventSlug: event.slug,
+        slug: null,
+        title: event.title,
+        subtitle: `${event._count.markets} markets`,
+        category,
+        categoryKey: category,
+        icon: event.icon ?? event.image,
+        image: event.image ?? event.icon,
+        price: null,
+        volume: toNullableNumber(event.volume),
+        liquidity: toNullableNumber(event.liquidity),
+        endDate: event.endDate?.toISOString() ?? null,
+        score: scoreByVolume(event.volume, index),
+        matchedBy: 'event',
+      };
+    });
+
+    return {
+      results: [...marketResults, ...eventResults]
+        .sort((left, right) => right.score - left.score)
+        .slice(0, limit),
+      generatedAt: new Date().toISOString(),
+      source: 'database',
+    };
+  }
+
   async getMarket(marketId: string) {
     const market = await this.prisma.polymarketMarket.findUnique({
       where: { id: marketId },
@@ -142,6 +358,62 @@ export class MarketsService {
       throw new ApiException(HttpStatus.NOT_FOUND, 'MARKET_NOT_FOUND', 'Market was not found');
     }
     return this.formatMarketDetail(market);
+  }
+
+  async getEventDetail(query: EventDetailQueryDto) {
+    const marketId = trimToUndefined(query.marketId);
+    const eventId = trimToUndefined(query.eventId);
+    const eventSlug = trimToUndefined(query.eventSlug);
+    if (!marketId && !eventId && !eventSlug) {
+      throw new ApiException(
+        HttpStatus.BAD_REQUEST,
+        'REQUEST_VALIDATION_FAILED',
+        'marketId, eventId, or eventSlug query parameter is required',
+      );
+    }
+
+    if (marketId) {
+      const market = await this.prisma.polymarketMarket.findUnique({
+        where: { id: marketId },
+        select: EXPLORER_MARKET_SELECT,
+      });
+      if (!market) {
+        throw new ApiException(HttpStatus.NOT_FOUND, 'MARKET_NOT_FOUND', 'Market was not found');
+      }
+      if (!market.eventId) {
+        return {
+          event: null,
+          markets: [this.formatExplorerMarketNode(market, 0)],
+          source: 'database',
+          generatedAt: new Date().toISOString(),
+        };
+      }
+
+      const event = await this.prisma.polymarketEvent.findUnique({
+        where: { id: market.eventId },
+        select: EVENT_DETAIL_SELECT,
+      });
+      if (!event) {
+        return {
+          event: null,
+          markets: [this.formatExplorerMarketNode(market, 0)],
+          source: 'database',
+          generatedAt: new Date().toISOString(),
+        };
+      }
+
+      return this.formatEventDetail(event);
+    }
+
+    const event = await this.prisma.polymarketEvent.findUnique({
+      where: eventId ? { id: eventId } : { slug: eventSlug },
+      select: EVENT_DETAIL_SELECT,
+    });
+    if (!event) {
+      throw new ApiException(HttpStatus.NOT_FOUND, 'EVENT_NOT_FOUND', 'Event was not found');
+    }
+
+    return this.formatEventDetail(event);
   }
 
   async getOrderBook(marketId: string, tokenId: string) {
@@ -199,6 +471,27 @@ export class MarketsService {
     };
   }
 
+  async getMarketPriceHistory(query: MarketHistoryQueryDto) {
+    const tokenIds = query.tokenIds
+      .split(',')
+      .map((tokenId) => tokenId.trim())
+      .filter((tokenId) => /^\d{20,}$/.test(tokenId))
+      .slice(0, 12);
+    if (!tokenIds.length) {
+      return {
+        history: {},
+        source: 'clob',
+        generatedAt: new Date().toISOString(),
+      };
+    }
+
+    return this.clobClient.getPriceHistory({
+      tokenIds,
+      interval: normalizeHistoryInterval(query.interval),
+      fidelity: query.fidelity ?? 1440,
+    });
+  }
+
   async getMarketNetwork(query: MarketQueryDto) {
     const limit = query.limit ?? 100;
     const nodes = await this.prisma.marketNetworkNode.findMany({
@@ -242,7 +535,7 @@ export class MarketsService {
   private buildWhere(query: MarketQueryDto, options: { includeCategory?: boolean } = {}): Prisma.PolymarketMarketWhereInput {
     const includeCategory = options.includeCategory ?? true;
     const search = trimToUndefined(query.q);
-    const category = trimToUndefined(query.category);
+    const category = normalizeCategoryFilter(query.category);
     return {
       active: parseBoolean(query.active),
       closed: parseBoolean(query.closed),
@@ -278,7 +571,7 @@ export class MarketsService {
   }
 
   private buildNetworkNodeWhere(query: MarketQueryDto): Prisma.MarketNetworkNodeWhereInput {
-    const category = trimToUndefined(query.category);
+    const category = normalizeCategoryFilter(query.category);
     return {
       market: this.buildWhere(query, { includeCategory: false }),
       OR: category
@@ -366,6 +659,79 @@ export class MarketsService {
     };
   }
 
+  private formatEventDetail(event: EventDetailRecord) {
+    const category = readMarketCategoryKey(event.tags, [event.title, event.slug]);
+    return {
+      event: {
+        id: event.id,
+        slug: event.slug,
+        title: event.title,
+        category,
+        categoryKey: category,
+        officialCategory: category,
+        tags: marketCategoryTagsForResponse(event.tags, category),
+        icon: event.icon ?? event.image,
+        image: event.image ?? event.icon,
+        endDate: event.endDate?.toISOString() ?? null,
+        volume: toNullableNumber(event.volume),
+        volume24hr: null,
+        liquidity: toNullableNumber(event.liquidity),
+        description: event.description,
+        rules: null,
+        marketsCount: event.markets.length,
+        syncedAt: event.syncedAt.toISOString(),
+      },
+      markets: event.markets.map((market, index) => this.formatExplorerMarketNode(market, index)),
+      source: 'database',
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  private formatExplorerMarketNode(market: ExplorerMarketRecord, index: number) {
+    const category = readMarketCategoryKey(market.event?.tags, [
+      market.question,
+      market.slug,
+      market.event?.title,
+      market.event?.slug,
+    ]);
+    return {
+      id: market.id,
+      slug: market.slug,
+      title: market.question,
+      groupItemTitle: null,
+      eventId: market.eventId,
+      eventSlug: market.event?.slug ?? null,
+      eventTitle: market.event?.title ?? null,
+      category,
+      categoryKey: category,
+      officialCategory: category,
+      tags: marketCategoryTagsForResponse(market.event?.tags, category),
+      icon: market.icon ?? market.image ?? market.event?.icon ?? market.event?.image,
+      image: market.image ?? market.icon ?? market.event?.image ?? market.event?.icon,
+      price: firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid, market.outcomes[0]?.price),
+      volume: toNullableNumber(market.volume),
+      volume24hr: toNullableNumber(market.volume24hr),
+      liquidity: toNullableNumber(market.liquidity),
+      endDate: market.endDate?.toISOString() ?? null,
+      description: market.description,
+      rules: market.rules,
+      acceptingOrders: market.acceptingOrders,
+      outcomes: market.outcomes.map((outcome) => ({
+        label: outcome.label,
+        price: toNullableNumber(outcome.price),
+        tokenId: outcome.clobTokenId,
+      })),
+      bestBid: toNullableNumber(market.bestBid),
+      bestAsk: toNullableNumber(market.bestAsk),
+      lastTradePrice: toNullableNumber(market.lastTradePrice),
+      orderMinSize: toNullableNumber(market.orderMinSize),
+      tickSize: toNullableNumber(market.orderPriceMinTickSize),
+      syncedAt: market.syncedAt.toISOString(),
+      x: 50 + (index % 5) * 8,
+      y: 50 + Math.floor(index / 5) * 8,
+    };
+  }
+
   private async buildDeterministicMarketNetwork(query: MarketQueryDto, limit: number) {
     const markets = await this.prisma.polymarketMarket.findMany({
       where: this.buildWhere(query),
@@ -388,7 +754,12 @@ export class MarketsService {
       icon: market.icon ?? market.image,
       price: firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid),
       volume: toNullableNumber(market.volume),
-      category: category ?? firstStringTag(market.event?.tags),
+      category: category ?? readMarketCategoryKey(market.event?.tags, [
+        market.question,
+        market.slug,
+        market.event?.title,
+        market.event?.slug,
+      ]),
     };
   }
 
@@ -561,6 +932,12 @@ function trimToUndefined(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeCategoryFilter(value: string | undefined): string | undefined {
+  const category = trimToUndefined(value);
+  if (!category || category === 'all' || category === 'hot') return undefined;
+  return category;
+}
+
 function firstNumber(...values: unknown[]): number | null {
   for (const value of values) {
     const parsed = toNullableNumber(value);
@@ -569,10 +946,26 @@ function firstNumber(...values: unknown[]): number | null {
   return null;
 }
 
-function firstStringTag(value: unknown): string | null {
-  if (!Array.isArray(value)) return null;
-  const tag = value.find((item): item is string => typeof item === 'string' && item.trim().length > 0);
-  return tag?.trim() ?? null;
+function stringTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
+}
+
+function marketCategoryTagsForResponse(value: unknown, category: string): string[] {
+  const tags = stringTags(value);
+  return tags.includes(category) ? tags : [category, ...tags];
+}
+
+function scoreByVolume(value: unknown, index: number): number {
+  const volume = toNullableNumber(value) ?? 0;
+  return volume + Math.max(0, 1000 - index);
+}
+
+function normalizeHistoryInterval(value: string | undefined): '1h' | '6h' | '1d' | '1w' | '1m' | 'all' {
+  if (value === '1h' || value === '6h' || value === '1d' || value === '1w' || value === '1m' || value === 'all') {
+    return value;
+  }
+  return 'all';
 }
 
 function buildEventEdges(markets: NetworkMarketRecord[]) {

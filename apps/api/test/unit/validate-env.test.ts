@@ -26,8 +26,45 @@ describe('validateEnv', () => {
     expect(env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS).toBe(900_000);
     expect(env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP).toBe('false');
     expect(env.POLYMARKET_CLOB_SIGNATURE_TYPE).toBe(2);
+    expect(env.OUTBOUND_PROXY_URL).toBeUndefined();
     expect(env.AI_HTTP_TIMEOUT_MS).toBe(30_000);
     expect(env.AI_MAX_OUTPUT_TOKENS).toBe(4_000);
+  });
+
+  it('accepts http or https outbound proxy URLs and host:port shorthand', () => {
+    expect(
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        OUTBOUND_PROXY_URL: '127.0.0.1:10808',
+      }).OUTBOUND_PROXY_URL,
+    ).toBe('127.0.0.1:10808');
+
+    expect(
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        OUTBOUND_PROXY_URL: 'https://proxy.example.com:8443',
+      }).OUTBOUND_PROXY_URL,
+    ).toBe('https://proxy.example.com:8443');
+  });
+
+  it('rejects invalid outbound proxy URLs', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        OUTBOUND_PROXY_URL: 'socks5://127.0.0.1:10808',
+      }),
+    ).toThrow(/OUTBOUND_PROXY_URL/);
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        OUTBOUND_PROXY_URL: 'http://',
+      }),
+    ).toThrow(/OUTBOUND_PROXY_URL/);
   });
 
   it('requires Redis for production rate limiting', () => {

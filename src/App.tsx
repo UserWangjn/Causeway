@@ -69,7 +69,7 @@ type Market = {
   rules?: string | null
   acceptingOrders?: boolean
   syncedAt?: string | null
-  outcomes?: { label: string; price: number | null; tokenId: string | null }[]
+  outcomes?: { outcomeId?: string | null; label: string; price: number | null; tokenId: string | null }[]
   bestBid?: number | null
   bestAsk?: number | null
   lastTradePrice?: number | null
@@ -93,30 +93,30 @@ type ApiMarketNode = {
   groupItemTitle?: string | null
   eventId?: string | null
   eventSlug?: string | null
-  eventTitle: string | null
-  category: string | null
-  categoryKey: string | null
-  officialCategory: string | null
-  tags: string[]
+  eventTitle?: string | null
+  category?: string | null
+  categoryKey?: string | null
+  officialCategory?: string | null
+  tags?: string[]
   icon: string | null
-  image: string | null
+  image?: string | null
   price: number | null
   volume: number | null
-  volume24hr: number | null
-  liquidity: number | null
-  endDate: string | null
-  description: string | null
-  rules: string | null
-  acceptingOrders: boolean
-  outcomes: { label: string; price: number | null; tokenId: string | null }[]
+  volume24hr?: number | null
+  liquidity?: number | null
+  endDate?: string | null
+  description?: string | null
+  rules?: string | null
+  acceptingOrders?: boolean
+  outcomes?: { outcomeId?: string | null; label: string; price: number | null; tokenId: string | null }[]
   bestBid?: number | null
   bestAsk?: number | null
   lastTradePrice?: number | null
   orderMinSize?: number | null
   tickSize?: number | null
-  syncedAt: string | null
-  x: number
-  y: number
+  syncedAt?: string | null
+  x?: number
+  y?: number
 }
 
 type ApiMarketEdge = {
@@ -288,8 +288,69 @@ type InferenceResult = {
   error?: string | null
 }
 
-type InferenceRunResponse = {
-  data: InferenceResult
+type BackendInferenceCreateResponse = {
+  runId: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  cacheKey: string
+  cacheHit: boolean
+  scriptId: string | null
+}
+
+type BackendInferenceStatus = {
+  id: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  stage: string | null
+  progress: number
+  cacheHit: boolean
+  scriptId: string | null
+  errorMessage: string | null
+  createdAt?: string
+  completedAt?: string | null
+}
+
+type BackendScript = {
+  id: string
+  title: string
+  status: string
+  summary: string
+  graph: {
+    nodes: Array<{
+      nodeId: string
+      marketId: string
+      title: string
+      layer: number
+      confidence: number
+      direction: string
+      price: number | null
+      recommendedOutcomes?: { outcomeId: string; label: string; tokenId: string }[]
+    }>
+    edges: Array<{
+      sourceNodeId: string
+      targetNodeId: string
+      sourceOutcomeId: string
+      targetOutcomeId: string
+      relation: string
+      confidence: number
+      reason: string
+    }>
+  }
+  markets: Array<{
+    marketId: string
+    title: string
+    layer: number
+    confidence: number | null
+    outcomes: Array<{
+      outcomeId: string
+      label: string
+      tokenId: string
+      aiAction: 'buy' | 'avoid'
+      userAction: 'buy' | 'skip'
+      confidence: number | null
+      reason: string
+    }>
+  }>
+  createdAt: string
+  updatedAt: string
 }
 
 type InferenceScope = 'news' | 'markets' | 'social' | 'all'
@@ -392,6 +453,225 @@ type MarketSearchResponse = {
     results: MarketSearchResult[]
     generatedAt: string
     source: string
+  }
+}
+
+type ApiEnvelope<T> = {
+  data: T
+  requestId?: string
+}
+
+type BackendMarketNetwork = {
+  nodes: Array<{
+    id: string
+    marketId: string
+    title: string
+    icon: string | null
+    price: number | null
+    volume: number | null
+    category: string | null
+  }>
+  edges: Array<{
+    id: string
+    source: string
+    target: string
+    relationType: ApiMarketEdge['relationType']
+    weight: number
+  }>
+}
+
+const API_PREFIX = '/api/v1'
+const ACCESS_TOKEN_STORAGE_KEY = 'causeway.accessToken'
+
+async function readApiData<T>(response: Response): Promise<T> {
+  const payload = await response.json() as ApiEnvelope<T>
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object' && 'error' in payload
+      ? JSON.stringify((payload as { error?: unknown }).error)
+      : `HTTP ${response.status}`
+    throw new Error(message)
+  }
+  return payload.data
+}
+
+function backendNetworkToApiNode(node: BackendMarketNetwork['nodes'][number], index: number): ApiMarketNode {
+  return {
+    id: node.marketId || node.id,
+    title: node.title,
+    category: node.category,
+    categoryKey: node.category,
+    officialCategory: node.category,
+    tags: node.category ? [node.category] : [],
+    icon: node.icon,
+    image: node.icon,
+    price: node.price,
+    volume: node.volume,
+    volume24hr: null,
+    liquidity: null,
+    endDate: null,
+    description: null,
+    rules: null,
+    acceptingOrders: true,
+    outcomes: [],
+    syncedAt: null,
+    x: 50 + (index % 5) * 8,
+    y: 50 + Math.floor(index / 5) * 8,
+  }
+}
+
+function backendNetworkToResponse(data: BackendMarketNetwork): MarketNetworkResponse['data'] {
+  return {
+    nodes: data.nodes.map(backendNetworkToApiNode),
+    edges: data.edges.map((edge) => ({
+      ...edge,
+      reason: edge.relationType,
+    })),
+    source: 'database',
+    generatedAt: new Date().toISOString(),
+  }
+}
+
+function getAccessToken() {
+  return window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY)
+}
+
+function inferenceModel(settings: InferenceSettingsState) {
+  if (settings.modelPreference === 'deepseek-v4-pro') return 'deepseek-v4-pro'
+  return 'deepseek-v4-flash'
+}
+
+function authHeaders(token: string) {
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  }
+}
+
+async function sleepWithAbort(ms: number, signal: AbortSignal) {
+  await new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(resolve, ms)
+    signal.addEventListener(
+      'abort',
+      () => {
+        window.clearTimeout(timer)
+        reject(new DOMException('Aborted', 'AbortError'))
+      },
+      { once: true },
+    )
+  })
+}
+
+async function runBackendInference(market: Market, settings: InferenceSettingsState, signal: AbortSignal): Promise<InferenceResult> {
+  const token = getAccessToken()
+  if (!token) {
+    throw new Error('需要先完成钱包登录，前端拿到 Bearer Token 后才能启动正式 AI 推演。')
+  }
+  const rootOutcome = market.outcomes?.find((outcome) => outcome.outcomeId)
+  if (!rootOutcome?.outcomeId) {
+    throw new Error('当前市场缺少 outcomeId，请等待市场详情加载完成后再启动推演。')
+  }
+
+  const createRun = await fetch(`${API_PREFIX}/inference-runs`, {
+    method: 'POST',
+    signal,
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      rootMarketId: market.id,
+      rootOutcomeId: rootOutcome.outcomeId,
+      depth: settings.depth,
+      maxMarketsPerLayer: settings.depth >= 3 ? 8 : 6,
+      confidenceThreshold: settings.confidenceThreshold,
+      model: inferenceModel(settings),
+      cacheEnabled: true,
+    }),
+  }).then((response) => readApiData<BackendInferenceCreateResponse>(response))
+
+  let status: BackendInferenceStatus = {
+    id: createRun.runId,
+    status: createRun.status,
+    stage: 'candidate_retrieval',
+    progress: 0,
+    cacheHit: createRun.cacheHit,
+    scriptId: createRun.scriptId,
+    errorMessage: null,
+  }
+
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    status = await fetch(`${API_PREFIX}/inference-runs/${createRun.runId}`, {
+      signal,
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((response) => readApiData<BackendInferenceStatus>(response))
+
+    if (status.status === 'completed' && status.scriptId) break
+    if (status.status === 'failed' || status.status === 'cancelled') {
+      throw new Error(status.errorMessage || `Inference run ${status.status}`)
+    }
+    await sleepWithAbort(1000, signal)
+  }
+
+  if (!status.scriptId) {
+    throw new Error('AI 推演已创建，但脚本尚未生成，请稍后刷新。')
+  }
+
+  const script = await fetch(`${API_PREFIX}/scripts/${status.scriptId}`, {
+    signal,
+    headers: { Authorization: `Bearer ${token}` },
+  }).then((response) => readApiData<BackendScript>(response))
+
+  return scriptToInferenceResult(script, status, market, settings)
+}
+
+function scriptToInferenceResult(script: BackendScript, run: BackendInferenceStatus, market: Market, settings: InferenceSettingsState): InferenceResult {
+  const titleByNodeId = new Map(script.graph.nodes.map((node) => [node.nodeId, node.title]))
+  const relatedMarkets = script.markets
+    .filter((item) => item.marketId !== market.id)
+    .map<InferenceRelatedMarket>((item) => ({
+      id: item.marketId,
+      title: item.title,
+      category: 'Polymarket',
+      price: null,
+      volume: 'N/A',
+      confidence: item.confidence ?? 0,
+      relation: item.layer === 0 ? 'root' : `layer_${item.layer}`,
+      reason: item.outcomes[0]?.reason,
+    }))
+
+  return {
+    runId: run.id,
+    status: 'completed',
+    aiAvailable: true,
+    model: inferenceModel(settings),
+    rootMarket: {
+      id: market.id,
+      title: market.title,
+      price: market.price,
+      volume: market.volumeValue,
+      liquidity: market.liquidity,
+      endDate: market.endDate,
+    },
+    summary: script.summary,
+    thesis: script.summary,
+    confidence: relatedMarkets[0]?.confidence ?? 0.6,
+    causalLinks: script.graph.edges.map((edge) => ({
+      source: titleByNodeId.get(edge.sourceNodeId) || edge.sourceNodeId,
+      target: titleByNodeId.get(edge.targetNodeId) || edge.targetNodeId,
+      direction: edge.relation,
+      confidence: edge.confidence,
+      rationale: edge.reason,
+      sourceMarketId: null,
+      targetMarketId: null,
+    })),
+    scriptChains: [],
+    scenarios: [],
+    riskFactors: [],
+    evidence: [],
+    relatedMarkets,
+    logs: [
+      '已创建后端 inference-runs 任务。',
+      `任务状态：${run.status}，进度：${run.progress}%。`,
+      '已读取生成的 causal script。',
+    ],
+    generatedAt: run.completedAt || new Date().toISOString(),
   }
 }
 
@@ -1251,7 +1531,7 @@ function buildMarketFlowGraph(
 function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
   const category = node.category || '其他'
   const categoryKey = node.categoryKey || category
-  const price = node.price == null ? 0 : Math.round(node.price * 100)
+  const price = node.price == null ? 0 : Math.round(node.price <= 1 ? node.price * 100 : node.price)
   return {
     id: node.id,
     slug: node.slug,
@@ -1275,9 +1555,9 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
     endDate: node.endDate,
     description: node.description,
     rules: node.rules,
-    acceptingOrders: node.acceptingOrders,
+    acceptingOrders: node.acceptingOrders ?? true,
     syncedAt: node.syncedAt,
-    outcomes: node.outcomes,
+    outcomes: node.outcomes || [],
     bestBid: node.bestBid,
     bestAsk: node.bestAsk,
     lastTradePrice: node.lastTradePrice,
@@ -1289,8 +1569,8 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
     volumeValue: node.volume,
     liquidity: node.liquidity,
     traders: node.volume24hr ? formatCompactMoney(node.volume24hr) : '24h N/A',
-    x: node.x,
-    y: node.y,
+    x: node.x ?? 50,
+    y: node.y ?? 50,
     tone: categoryTones[categoryKey] || categoryTones[category] || (index % 5 === 0 ? 'purple' : index % 3 === 0 ? 'orange' : index % 2 === 0 ? 'green' : 'blue'),
   }
 }
@@ -1319,6 +1599,10 @@ function App() {
     setInferenceResult(null)
     setView('progress')
   }, [])
+  const openInferenceSettings = useCallback((market?: Market) => {
+    if (market) setSelectedMarket(market)
+    setView('infer')
+  }, [])
 
   return (
     <div className={introVisible ? 'app-shell app-intro-active' : 'app-shell'}>
@@ -1326,7 +1610,7 @@ function App() {
       <Header activeNav={activeNav} onNavigate={setView} />
       <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
         {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
-        {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={() => setView('infer')} />}
+        {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={openInferenceSettings} />}
         {view === 'infer' && <InferenceSettings initialSettings={inferenceSettings} market={selectedMarket} onBack={() => setView('detail')} onStart={startInference} />}
         {view === 'progress' && (
           <InferenceProgress
@@ -1455,13 +1739,12 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
 
   useEffect(() => {
     const controller = new AbortController()
-    fetch('/api/markets/categories', { signal: controller.signal })
+    fetch(`${API_PREFIX}/markets/categories`, { signal: controller.signal })
       .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        return response.json() as Promise<MarketCategoriesResponse>
+        return readApiData<MarketCategoriesResponse['data']>(response)
       })
-      .then((payload) => {
-        if (payload.data.categories.length) setCategories(payload.data.categories)
+      .then((data) => {
+        if (data.categories.length) setCategories(data.categories)
       })
       .catch(() => {
         if (!controller.signal.aborted) setCategories(fallbackCategories)
@@ -1490,13 +1773,12 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
     const timer = window.setTimeout(() => {
       setSearchLoading(true)
       const params = new URLSearchParams({ q: trimmedQuery, limit: '8' })
-      fetch(`/api/markets/search?${params.toString()}`, { signal: controller.signal })
+      fetch(`${API_PREFIX}/markets/search?${params.toString()}`, { signal: controller.signal })
         .then((response) => {
-          if (!response.ok) throw new Error(`HTTP ${response.status}`)
-          return response.json() as Promise<MarketSearchResponse>
+          return readApiData<MarketSearchResponse['data']>(response)
         })
-        .then((payload) => {
-          setSearchResults(payload.data.results)
+        .then((data) => {
+          setSearchResults(data.results)
           setSearchOpen(true)
         })
         .catch((fetchError: Error) => {
@@ -1520,25 +1802,25 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
     const params = new URLSearchParams({ limit: '25' })
     const trimmedQuery = searchQuery.trim()
     if (selectedSearch?.type === 'market' && selectedSearch.marketId) {
-      params.set('focusMarketId', selectedSearch.marketId)
+      params.set('q', selectedSearch.title)
     } else if (selectedSearch?.type === 'event' && (selectedSearch.eventId || selectedSearch.eventSlug)) {
-      params.set('eventId', selectedSearch.eventId || selectedSearch.eventSlug || '')
+      params.set('q', selectedSearch.title)
     } else if (selectedSearch?.type === 'topic' && (selectedSearch.topic || selectedSearch.categoryKey)) {
-      params.set('topic', selectedSearch.topic || selectedSearch.categoryKey || '')
+      params.set('category', selectedSearch.topic || selectedSearch.categoryKey || '')
     } else {
-      if (activeCategory !== 'all') params.set('categoryKey', activeCategory)
+      if (activeCategory !== 'all') params.set('category', activeCategory)
       if (trimmedQuery) params.set('q', trimmedQuery)
     }
-    fetch(`/api/markets/network?${params.toString()}`, { signal: controller.signal })
+    fetch(`${API_PREFIX}/markets/network?${params.toString()}`, { signal: controller.signal })
       .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        return response.json() as Promise<MarketNetworkResponse>
+        return readApiData<BackendMarketNetwork>(response)
       })
-      .then((payload) => {
-        const nodes = payload.data.nodes.map(apiNodeToMarket)
+      .then((data) => {
+        const payload = backendNetworkToResponse(data)
+        const nodes = payload.nodes.map(apiNodeToMarket)
         if (nodes.length) {
           setNetworkMarkets(nodes)
-          setNetworkEdges(payload.data.edges)
+          setNetworkEdges(payload.edges)
         }
         setError(null)
       })
@@ -1632,18 +1914,17 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
   )
 }
 
-function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () => void; onInfer: () => void }) {
+function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () => void; onInfer: (market?: Market) => void }) {
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
     const params = new URLSearchParams({ marketId: market.id })
-    fetch(`/api/events/detail?${params.toString()}`, { signal: controller.signal })
+    fetch(`${API_PREFIX}/events/detail?${params.toString()}`, { signal: controller.signal })
       .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        return response.json() as Promise<EventDetailResponse>
+        return readApiData<EventDetailResponse['data']>(response)
       })
-      .then((payload) => setEventDetail(payload.data))
+      .then((data) => setEventDetail(data))
       .catch((error: Error) => {
         if (error.name !== 'AbortError') setEventDetail(null)
       })
@@ -1738,7 +2019,7 @@ function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () 
           </Card>
         </aside>
       </div>
-      <button className="primary-action" type="button" onClick={onInfer}>
+      <button className="primary-action" type="button" onClick={() => onInfer(primaryMarket)}>
         <BrainCircuit size={20} /> 设定作为推演节点
       </button>
     </section>
@@ -1987,21 +2268,9 @@ function InferenceProgress({
       return
     }
     const controller = new AbortController()
-    fetch('/api/inference/run', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        marketId: market.id,
-        settings,
-      }),
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        return response.json() as Promise<InferenceRunResponse>
-      })
+    runBackendInference(market, settings, controller.signal)
       .then((payload) => {
-        onResult(payload.data)
+        onResult(payload)
       })
       .catch((fetchError: Error) => {
         if (fetchError.name !== 'AbortError') setError(fetchError.message)
@@ -2010,7 +2279,7 @@ function InferenceProgress({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [market.id, onResult, result?.rootMarket?.id, settings])
+  }, [market, market.id, onResult, result?.rootMarket?.id, settings])
 
   return (
     <section className="page">
@@ -2904,14 +3173,13 @@ function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Ma
     if (!historyKey) return
     const controller = new AbortController()
     const params = new URLSearchParams({ tokenIds: historyKey, interval: 'all', fidelity: '1440' })
-    fetch(`/api/markets/history?${params.toString()}`, { signal: controller.signal })
+    fetch(`${API_PREFIX}/markets/history?${params.toString()}`, { signal: controller.signal })
       .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        return response.json() as Promise<PriceHistoryResponse>
+        return readApiData<PriceHistoryResponse['data']>(response)
       })
-      .then((payload) => {
+      .then((data) => {
         const normalizedHistory = Object.fromEntries(
-          Object.entries(payload.data.history || {}).map(([tokenId, points]) => [
+          Object.entries(data.history || {}).map(([tokenId, points]) => [
             tokenId,
             compactHistory(points.filter((point) => typeof point.t === 'number' && typeof point.p === 'number')),
           ]),

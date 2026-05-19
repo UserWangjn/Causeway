@@ -1,6 +1,7 @@
 import {
   fetchJson,
   fetchText,
+  configureSmokeOutboundProxy,
   formatUnknownError,
   isEnabled,
   isRecord,
@@ -25,6 +26,8 @@ export async function runPolymarketSmoke(): Promise<SmokeSummary> {
       },
     };
   }
+
+  configureSmokeOutboundProxy();
 
   const timeoutMs = readPositiveInteger('SMOKE_HTTP_TIMEOUT_MS', readPositiveInteger('POLYMARKET_HTTP_TIMEOUT_MS', 10_000));
   const gammaBaseUrl = readEnv('POLYMARKET_GAMMA_BASE_URL', 'https://gamma-api.polymarket.com');

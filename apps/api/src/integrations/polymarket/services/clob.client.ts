@@ -133,6 +133,18 @@ export type ClobPostOrderResult = {
   response: unknown;
 };
 
+export type ClobPriceHistoryInput = {
+  tokenIds: string[];
+  interval: '1h' | '6h' | '1d' | '1w' | '1m' | 'all';
+  fidelity: number;
+};
+
+export type ClobPriceHistory = {
+  history: Record<string, { t: number; p: number }[]>;
+  source: string;
+  generatedAt: string;
+};
+
 @Injectable()
 export class ClobClient {
   private readonly baseUrl: string;
@@ -210,6 +222,79 @@ export class ClobClient {
 
     throw new ApiException(HttpStatus.BAD_GATEWAY, 'ORDERBOOK_UNAVAILABLE', 'CLOB order book request failed', {
       tokenId: normalizedTokenId,
+      cause: lastError instanceof Error ? lastError.message : String(lastError),
+    });
+  }
+
+  async getPriceHistory(input: ClobPriceHistoryInput): Promise<ClobPriceHistory> {
+    const tokenIds = input.tokenIds.map((tokenId) => tokenId.trim()).filter(Boolean);
+    if (!tokenIds.length) {
+      return {
+        history: {},
+        source: new URL('/batch-prices-history', this.baseUrl).toString(),
+        generatedAt: new Date().toISOString(),
+      };
+    }
+
+    const endpoint = new URL('/batch-prices-history', this.baseUrl);
+    const body = JSON.stringify({
+      markets: tokenIds,
+      interval: input.interval,
+      fidelity: input.fidelity,
+    });
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(new Error('CLOB price history request timed out')), this.timeoutMs);
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            'user-agent': 'causeway-api/0.1',
+          },
+          body,
+          signal: controller.signal,
+        });
+
+        if (response.ok) {
+          const json: unknown = await response.json();
+          return {
+            history: normalizePriceHistory(json, tokenIds),
+            source: endpoint.toString(),
+            generatedAt: new Date().toISOString(),
+          };
+        }
+
+        const retryable = response.status === 429 || response.status >= 500;
+        if (!retryable || attempt === this.retries) {
+          throw new ApiException(HttpStatus.BAD_GATEWAY, 'PRICE_HISTORY_UNAVAILABLE', 'CLOB price history request failed', {
+            status: response.status,
+          });
+        }
+      } catch (error) {
+        if (error instanceof ApiException) throw error;
+        lastError = error;
+        if (attempt === this.retries) {
+          throw new ApiException(
+            HttpStatus.BAD_GATEWAY,
+            'PRICE_HISTORY_UNAVAILABLE',
+            'CLOB price history request failed after retries',
+            {
+              cause: error instanceof Error ? error.message : String(error),
+            },
+          );
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      await sleep(250 * 2 ** attempt);
+    }
+
+    throw new ApiException(HttpStatus.BAD_GATEWAY, 'PRICE_HISTORY_UNAVAILABLE', 'CLOB price history request failed', {
       cause: lastError instanceof Error ? lastError.message : String(lastError),
     });
   }
@@ -629,6 +714,33 @@ function normalizeTimestamp(value: unknown): string {
   }
 
   return new Date().toISOString();
+}
+
+function normalizePriceHistory(payload: unknown, tokenIds: string[]): Record<string, { t: number; p: number }[]> {
+  if (!isRecord(payload) || !isRecord(payload.history)) return {};
+
+  const allowedTokenIds = new Set(tokenIds);
+  const history: Record<string, { t: number; p: number }[]> = {};
+  for (const [tokenId, points] of Object.entries(payload.history)) {
+    if (!allowedTokenIds.has(tokenId) || !Array.isArray(points)) continue;
+    const normalizedPoints = points
+      .filter(isRecord)
+      .map((point) => ({
+        t: toFiniteNumber(point.t),
+        p: toFiniteNumber(point.p),
+      }))
+      .filter((point): point is { t: number; p: number } => point.t != null && point.p != null)
+      .sort((left, right) => left.t - right.t);
+    history[tokenId] = normalizedPoints;
+  }
+
+  return history;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

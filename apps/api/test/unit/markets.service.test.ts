@@ -147,6 +147,59 @@ describe('MarketsService', () => {
     });
   });
 
+  it('builds market categories from persisted tags and inferred market text', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        question: 'Will the Fed cut interest rates?',
+        slug: 'fed-rate-cut',
+        event: { title: 'Fed decision', slug: 'fed-decision', tags: [] },
+      },
+      {
+        question: '2026 FIFA World Cup Winner',
+        slug: 'world-cup-winner',
+        event: { title: 'World Cup', slug: 'world-cup', tags: [] },
+      },
+      {
+        question: 'Will Trump win the 2028 Presidential Election?',
+        slug: 'trump-2028',
+        event: { title: 'Election 2028', slug: 'election-2028', tags: ['politics'] },
+      },
+    ]);
+    const service = createService({
+      polymarketMarket: {
+        findMany,
+      },
+    });
+
+    const result = await service.getMarketCategories();
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        active: true,
+        closed: false,
+        archived: false,
+      },
+      select: {
+        question: true,
+        slug: true,
+        event: {
+          select: {
+            slug: true,
+            title: true,
+            tags: true,
+          },
+        },
+      },
+    });
+    expect(result.categories).toEqual([
+      { key: 'all', label: 'All', count: 3 },
+      { key: 'hot', label: 'Hot', count: 3 },
+      { key: 'macro', label: 'Macro', count: 1 },
+      { key: 'politics', label: 'Politics', count: 1 },
+      { key: 'sports', label: 'Sports', count: 1 },
+    ]);
+  });
+
   it('returns market details with all outcomes and related markets from the same event', async () => {
     const findUnique = vi.fn().mockResolvedValue({
       ...marketRecord('market_1', 'market-one', 'Will market one resolve?'),
