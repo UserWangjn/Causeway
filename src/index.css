@@ -52,6 +52,146 @@ button {
     linear-gradient(90deg, rgba(216, 230, 245, 0.4), transparent 28%, transparent 74%, rgba(216, 230, 245, 0.22));
 }
 
+.app-shell .topbar,
+.app-shell .app-main {
+  transition:
+    opacity 0.74s ease,
+    transform 0.82s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.app-intro-active .topbar,
+.app-intro-active .app-main {
+  opacity: 0;
+  transform: translateY(18px);
+}
+
+.causeway-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 22px;
+  overflow: hidden;
+  color: #fff;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(34, 199, 232, 0.16), transparent 30%),
+    linear-gradient(90deg, rgba(8, 27, 51, 0.98), rgba(8, 27, 51, 0.94));
+  animation: causeway-intro-out 0.54s cubic-bezier(0.22, 1, 0.36, 1) 2.05s forwards;
+}
+
+.causeway-intro::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background:
+    repeating-linear-gradient(90deg, rgba(216, 230, 245, 0.06) 0 1px, transparent 1px 104px),
+    repeating-linear-gradient(0deg, rgba(216, 230, 245, 0.04) 0 1px, transparent 1px 104px);
+  opacity: 0.5;
+}
+
+.causeway-intro-stage {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  width: min(520px, 84vw);
+  height: 112px;
+  place-items: center;
+}
+
+.causeway-intro-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 180px;
+  height: 104px;
+  transform: translate(-50%, -50%);
+  animation: causeway-intro-mark-exit 1.84s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.causeway-intro-dot {
+  position: absolute;
+  top: 42px;
+  left: 12px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  animation: causeway-intro-dot 1.84s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.causeway-intro-line {
+  position: absolute;
+  top: 48px;
+  left: 24px;
+  width: 118px;
+  height: 12px;
+  border-radius: 999px;
+  background: #fff;
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+.causeway-intro-line-mid {
+  background: var(--blue);
+  animation: causeway-intro-mid 1.84s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.causeway-intro-line-top {
+  animation: causeway-intro-top 1.84s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.causeway-intro-line-bottom {
+  animation: causeway-intro-bottom 1.84s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.causeway-intro-logo {
+  position: relative;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  color: #fff;
+  font-size: clamp(34px, 5vw, 54px);
+  font-weight: 820;
+  opacity: 0;
+  transform: translateY(10px) scale(0.97);
+  filter: blur(7px);
+  animation: causeway-intro-logo-in 1.84s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.causeway-intro-logo .logo-mark {
+  width: 54px;
+  height: 54px;
+  filter: drop-shadow(0 18px 28px rgba(0, 0, 0, 0.3));
+}
+
+.causeway-intro p {
+  position: relative;
+  z-index: 3;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 12px;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.causeway-intro-scan {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  z-index: 4;
+  width: 2px;
+  height: 100%;
+  background: linear-gradient(180deg, transparent, rgba(34, 199, 232, 0.82), transparent);
+  opacity: 0;
+  transform: translateX(-50%) scaleY(0);
+  animation: causeway-intro-scan 2.28s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -134,6 +274,89 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+}
+
+.resource-menu {
+  position: relative;
+}
+
+.resource-trigger {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--ink);
+  background: #fff;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.resource-trigger:hover,
+.resource-menu:focus-within .resource-trigger,
+.resource-menu:hover .resource-trigger {
+  border-color: rgba(22, 119, 255, 0.35);
+  background: #f3f8ff;
+  color: var(--blue);
+}
+
+.resource-popover {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 45;
+  display: grid;
+  width: 244px;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 22px 60px rgba(8, 27, 51, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+  backdrop-filter: blur(16px);
+}
+
+.resource-menu:hover .resource-popover,
+.resource-menu:focus-within .resource-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.resource-item {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.resource-item:hover {
+  background: var(--soft);
+}
+
+.resource-item b {
+  font-size: 13px;
+}
+
+.resource-item small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.resource-item.pending {
+  color: #94a3b8;
+  cursor: default;
 }
 
 .icon-button {
@@ -2117,6 +2340,59 @@ button {
   }
 }
 
+@keyframes causeway-intro-dot {
+  0% { opacity: 0; transform: scale(0); }
+  18% { opacity: 1; transform: scale(1); }
+  76% { opacity: 1; transform: scale(1); }
+  100% { opacity: 1; transform: translateX(-24px) scale(0.78); }
+}
+
+@keyframes causeway-intro-mid {
+  0%, 20% { opacity: 0; transform: scaleX(0); }
+  42% { opacity: 1; transform: scaleX(1); }
+  100% { opacity: 1; transform: scaleX(0.88); }
+}
+
+@keyframes causeway-intro-top {
+  0%, 44% { opacity: 0; transform: scaleX(0) rotate(0deg); }
+  68%, 100% { opacity: 1; transform: scaleX(0.88) rotate(-28deg); }
+}
+
+@keyframes causeway-intro-bottom {
+  0%, 44% { opacity: 0; transform: scaleX(0) rotate(0deg); }
+  68%, 100% { opacity: 1; transform: scaleX(0.88) rotate(28deg); }
+}
+
+@keyframes causeway-intro-mark-exit {
+  0%, 70% { opacity: 1; filter: blur(0); }
+  100% { opacity: 0; filter: blur(8px); }
+}
+
+@keyframes causeway-intro-logo-in {
+  0%, 62% { opacity: 0; transform: translateY(10px) scale(0.97); filter: blur(7px); }
+  82%, 100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+
+@keyframes causeway-intro-scan {
+  0%, 62% { opacity: 0; transform: translateX(-50%) scaleY(0); }
+  76% { opacity: 1; transform: translateX(-50%) scaleY(1); }
+  100% { opacity: 0; transform: translateX(-50%) scaleY(1); }
+}
+
+@keyframes causeway-intro-out {
+  to { opacity: 0; visibility: hidden; transform: translateY(-100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .causeway-intro,
+  .causeway-intro *,
+  .app-shell .topbar,
+  .app-shell .app-main {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
 .hover-card-head {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -3578,6 +3854,11 @@ button {
   .mini-path,
   .row-actions {
     grid-column: 2;
+  }
+
+  .resource-popover {
+    right: auto;
+    left: 0;
   }
 }
 

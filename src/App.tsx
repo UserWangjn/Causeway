@@ -317,6 +317,40 @@ const defaultInferenceSettings: InferenceSettingsState = {
   includeWebSearch: true,
 }
 
+type ExternalResource = {
+  id: string
+  label: string
+  description: string
+  href: string | null
+}
+
+const externalResources: ExternalResource[] = [
+  {
+    id: 'whitepaper-zh',
+    label: '白皮书 中文',
+    description: 'Causeway Whitepaper v1.0',
+    href: '/Causeway_Whitepaper_v1.0_ZH.pdf',
+  },
+  {
+    id: 'whitepaper-en',
+    label: 'Whitepaper EN',
+    description: 'English PDF',
+    href: '/Causeway_Whitepaper_v1.0_EN.pdf',
+  },
+  {
+    id: 'x',
+    label: 'X / Twitter',
+    description: '待配置官方账号',
+    href: null,
+  },
+  {
+    id: 'discord',
+    label: 'Discord',
+    description: '待配置社区入口',
+    href: null,
+  },
+]
+
 type ApiMarketCategory = {
   key: string
   label: string
@@ -1266,7 +1300,13 @@ function App() {
   const [selectedMarket, setSelectedMarket] = useState<Market>(rootMarket)
   const [inferenceResult, setInferenceResult] = useState<InferenceResult | null>(null)
   const [inferenceSettings, setInferenceSettings] = useState<InferenceSettingsState>(defaultInferenceSettings)
+  const [introVisible, setIntroVisible] = useState(true)
   const activeNav = view === 'scripts' ? 'scripts' : view === 'progress' ? 'monitor' : 'network'
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setIntroVisible(false), 2600)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   const openMarketDetail = useCallback((market: Market) => {
     setSelectedMarket(market)
@@ -1281,7 +1321,8 @@ function App() {
   }, [])
 
   return (
-    <div className="app-shell">
+    <div className={introVisible ? 'app-shell app-intro-active' : 'app-shell'}>
+      {introVisible ? <IntroLoader /> : null}
       <Header activeNav={activeNav} onNavigate={setView} />
       <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
         {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
@@ -1300,6 +1341,27 @@ function App() {
         {view === 'script' && <CausalScript market={selectedMarket} onBack={() => setView('progress')} onScripts={() => setView('scripts')} result={inferenceResult} />}
         {view === 'scripts' && <MyScripts onNew={() => setView('infer')} onOpen={() => setView('script')} />}
       </main>
+    </div>
+  )
+}
+
+function IntroLoader() {
+  return (
+    <div className="causeway-intro" aria-hidden="true">
+      <div className="causeway-intro-stage">
+        <div className="causeway-intro-mark">
+          <span className="causeway-intro-dot" />
+          <span className="causeway-intro-line causeway-intro-line-mid" />
+          <span className="causeway-intro-line causeway-intro-line-top" />
+          <span className="causeway-intro-line causeway-intro-line-bottom" />
+        </div>
+        <div className="causeway-intro-logo">
+          <CausewayLogo />
+          <span>Causeway</span>
+        </div>
+      </div>
+      <p>{'origin -> path -> market graph'}</p>
+      <span className="causeway-intro-scan" />
     </div>
   )
 }
@@ -1331,6 +1393,7 @@ function Header({ activeNav, onNavigate }: { activeNav: string; onNavigate: (vie
         ))}
       </nav>
       <div className="header-actions">
+        <ResourceMenu />
         <button className="icon-button" aria-label="搜索" type="button">
           <Search size={20} />
         </button>
@@ -1344,6 +1407,35 @@ function Header({ activeNav, onNavigate }: { activeNav: string; onNavigate: (vie
         <div className="avatar">CW</div>
       </div>
     </header>
+  )
+}
+
+function ResourceMenu() {
+  return (
+    <div className="resource-menu">
+      <button className="resource-trigger" type="button">
+        <ExternalLink size={16} />
+        白皮书
+      </button>
+      <div className="resource-popover">
+        {externalResources.map((resource) => {
+          if (!resource.href) {
+            return (
+              <span className="resource-item pending" key={resource.id}>
+                <b>{resource.label}</b>
+                <small>{resource.description}</small>
+              </span>
+            )
+          }
+          return (
+            <a className="resource-item" href={resource.href} key={resource.id} rel="noreferrer" target="_blank">
+              <b>{resource.label}</b>
+              <small>{resource.description}</small>
+            </a>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
