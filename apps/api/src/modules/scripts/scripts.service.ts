@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { OrderMode, Prisma, UserSelectionAction } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -8,7 +8,7 @@ import { UpdateOutcomeSelectionDto } from './dto/update-outcome-selection.dto';
 
 @Injectable()
 export class ScriptsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   async getScript(user: CurrentUser, scriptId: string) {
     const script = await this.prisma.causalScript.findFirst({

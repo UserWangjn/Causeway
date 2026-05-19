@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Reflector } from '@nestjs/core';
 import { IS_INTERNAL_ROUTE } from '../decorators/internal-route.decorator';
@@ -23,8 +23,11 @@ type RequestWithAuth = {
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
+    @Inject(Reflector)
     private readonly reflector: Reflector,
+    @Inject(JwtService)
     private readonly jwtService: JwtService,
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
   ) {}
 

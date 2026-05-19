@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
 import { PrismaService } from '../../database/prisma.service';
@@ -15,7 +15,9 @@ export class PolymarketSyncService {
   private readonly pageSize = 100;
 
   constructor(
+    @Inject(GammaClient)
     private readonly gammaClient: GammaClient,
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
   ) {}
 

@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { OrderIntentStatus, Prisma } from '@prisma/client';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ApiException } from '../../common/errors/api.exception';
@@ -21,7 +21,9 @@ import { PortfolioTradesQueryDto } from './dto/portfolio-trades-query.dto';
 @Injectable()
 export class PortfolioService {
   constructor(
+    @Inject(DataApiClient)
     private readonly dataApiClient: DataApiClient,
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
   ) {}
 

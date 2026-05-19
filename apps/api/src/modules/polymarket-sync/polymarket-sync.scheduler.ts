@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
@@ -42,9 +42,13 @@ export class PolymarketSyncScheduler implements OnModuleInit, OnModuleDestroy {
   private running = false;
 
   constructor(
+    @Inject(ConfigService)
     private readonly config: ConfigService,
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(SchedulerRegistry)
     private readonly schedulerRegistry: SchedulerRegistry,
+    @Inject(PolymarketSyncService)
     private readonly syncService: PolymarketSyncService,
   ) {}
 

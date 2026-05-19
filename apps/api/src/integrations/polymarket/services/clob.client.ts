@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiException } from '../../../common/errors/api.exception';
 import type { OrderBookSnapshot } from '../types';
@@ -9,7 +9,7 @@ export type TradingCapabilityStatus = 'available' | 'degraded' | 'unavailable';
 export class ClobClient {
   private readonly baseUrl: string;
 
-  constructor(config: ConfigService) {
+  constructor(@Inject(ConfigService) config: ConfigService) {
     this.baseUrl = config.get<string>('polymarket.clobBaseUrl', 'https://clob.polymarket.com');
   }
 

@@ -1,14 +1,15 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
 import { CurrentUser, type CurrentUser as CurrentUserType } from '../../common/decorators/current-user.decorator';
+import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
 import { CreateInferenceRunDto } from './dto/create-inference-run.dto';
 import { InferenceService } from './inference.service';
 
 @Controller('inference-runs')
 export class InferenceController {
-  constructor(private readonly inferenceService: InferenceService) {}
+  constructor(@Inject(InferenceService) private readonly inferenceService: InferenceService) {}
 
   @Post()
-  createRun(@CurrentUser() user: CurrentUserType, @Body() dto: CreateInferenceRunDto) {
+  createRun(@CurrentUser() user: CurrentUserType, @Body(createDtoValidationPipe(CreateInferenceRunDto)) dto: CreateInferenceRunDto) {
     return this.inferenceService.createRun(user, dto);
   }
 

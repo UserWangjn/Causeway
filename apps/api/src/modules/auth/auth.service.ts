@@ -1,4 +1,4 @@
-import { Injectable, Logger, UnauthorizedException, UnprocessableEntityException } from '@nestjs/common';
+import { Inject, Injectable, Logger, UnauthorizedException, UnprocessableEntityException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
@@ -15,9 +15,13 @@ export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
   constructor(
+    @Inject(ConfigService)
     private readonly config: ConfigService,
+    @Inject(JwtService)
     private readonly jwtService: JwtService,
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(AuditService)
     private readonly audit: AuditService,
   ) {}
 

@@ -36,7 +36,9 @@ type ResolvedRateLimitPolicy = {
 @Injectable()
 export class RateLimitGuard implements CanActivate {
   constructor(
+    @Inject(Reflector)
     private readonly reflector: Reflector,
+    @Inject(ConfigService)
     private readonly config: ConfigService,
     @Inject(RATE_LIMIT_STORE) private readonly store: RateLimitStore,
   ) {}

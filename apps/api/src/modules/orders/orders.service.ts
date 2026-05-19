@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ExecutionMode, OrderIntentStatus, Prisma } from '@prisma/client';
 import { getAddress } from 'viem';
 import { ApiException } from '../../common/errors/api.exception';
@@ -15,7 +15,9 @@ import { buildPreviewOrder } from './order-preview.builder';
 @Injectable()
 export class OrdersService {
   constructor(
+    @Inject(ClobClient)
     private readonly clobClient: ClobClient,
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
   ) {}
 

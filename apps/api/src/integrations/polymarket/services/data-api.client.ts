@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { getAddress } from 'viem';
 import { ApiException } from '../../../common/errors/api.exception';
@@ -11,7 +11,7 @@ export class DataApiClient {
   private readonly timeoutMs: number;
   private readonly retries: number;
 
-  constructor(config: ConfigService) {
+  constructor(@Inject(ConfigService) config: ConfigService) {
     this.baseUrl = config.get<string>('polymarket.dataBaseUrl', 'https://data-api.polymarket.com');
     this.timeoutMs = config.get<number>('polymarket.httpTimeoutMs', 10_000);
     this.retries = config.get<number>('polymarket.httpRetries', 2);

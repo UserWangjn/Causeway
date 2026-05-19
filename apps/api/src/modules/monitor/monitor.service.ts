@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Prisma, ScriptStatus } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 
@@ -58,7 +58,7 @@ type OrderStatusRefreshRecord = Prisma.CausewayOrderGetPayload<{
 
 @Injectable()
 export class MonitorService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   async refreshOrderStatuses() {
     const run = await this.prisma.syncRun.create({

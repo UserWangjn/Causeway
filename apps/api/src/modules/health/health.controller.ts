@@ -1,4 +1,4 @@
-import { Controller, Get, HttpStatus } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Inject } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PublicRoute } from '../../common/decorators/public-route.decorator';
 import { SkipRateLimit } from '../../common/decorators/rate-limit.decorator';
@@ -9,7 +9,7 @@ import { PrismaService } from '../../database/prisma.service';
 @SkipRateLimit()
 @Controller('health')
 export class HealthController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   @Get()
   health() {

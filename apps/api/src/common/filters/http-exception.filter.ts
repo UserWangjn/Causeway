@@ -1,11 +1,11 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Inject, Optional } from '@nestjs/common';
 import { REQUEST_ID_HEADER } from '../constants/api.constants';
-import type { StructuredLogger } from '../logging/structured-logger';
+import { StructuredLogger } from '../logging/structured-logger';
 import type { ApiError } from '../types/api-response.type';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
-  constructor(private readonly logger?: StructuredLogger) {}
+  constructor(@Optional() @Inject(StructuredLogger) private readonly logger?: StructuredLogger) {}
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();

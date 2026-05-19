@@ -1,4 +1,4 @@
-import { Controller, Post, UseGuards } from '@nestjs/common';
+import { Controller, Inject, Post, UseGuards } from '@nestjs/common';
 import { InternalRoute } from '../../common/decorators/internal-route.decorator';
 import { InternalAuthGuard } from '../../common/guards/internal-auth.guard';
 import { MonitorService } from './monitor.service';
@@ -7,7 +7,7 @@ import { MonitorService } from './monitor.service';
 @UseGuards(InternalAuthGuard)
 @Controller('internal/monitor')
 export class MonitorController {
-  constructor(private readonly monitorService: MonitorService) {}
+  constructor(@Inject(MonitorService) private readonly monitorService: MonitorService) {}
 
   @Post('order-statuses/refresh')
   refreshOrderStatuses() {

@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Post, UseGuards } from '@nestjs/common';
 import { InternalRoute } from '../../common/decorators/internal-route.decorator';
 import { InternalAuthGuard } from '../../common/guards/internal-auth.guard';
+import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
 import { SyncPolymarketDto } from './dto/sync-polymarket.dto';
 import { PolymarketSyncService } from './polymarket-sync.service';
 
@@ -8,10 +9,10 @@ import { PolymarketSyncService } from './polymarket-sync.service';
 @UseGuards(InternalAuthGuard)
 @Controller('internal/sync')
 export class PolymarketSyncController {
-  constructor(private readonly syncService: PolymarketSyncService) {}
+  constructor(@Inject(PolymarketSyncService) private readonly syncService: PolymarketSyncService) {}
 
   @Post('polymarket')
-  syncPolymarket(@Body() dto: SyncPolymarketDto) {
+  syncPolymarket(@Body(createDtoValidationPipe(SyncPolymarketDto)) dto: SyncPolymarketDto) {
     return this.syncService.syncPolymarket(dto);
   }
 

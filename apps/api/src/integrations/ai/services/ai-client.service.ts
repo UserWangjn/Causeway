@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiException } from '../../../common/errors/api.exception';
 
@@ -9,7 +9,7 @@ export type AiClientCapability = {
 
 @Injectable()
 export class AiClientService {
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   getCapability(): AiClientCapability {
     const baseUrl = this.config.get<string>('ai.baseUrl');

@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ApiException } from '../../common/errors/api.exception';
@@ -20,7 +20,9 @@ import type { AiInferenceOutput, AiMarketNode, InferenceMarketInput, InferencePr
 @Injectable()
 export class InferenceService {
   constructor(
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(AiClientService)
     private readonly aiClient: AiClientService,
   ) {}
 

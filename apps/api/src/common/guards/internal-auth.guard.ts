@@ -1,11 +1,11 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 type HeaderBag = Record<string, string | string[] | undefined>;
 
 @Injectable()
 export class InternalAuthGuard implements CanActivate {
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   canActivate(context: ExecutionContext): boolean {
     const expectedToken = this.config.get<string>('internal.apiToken');
