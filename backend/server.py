@@ -2077,6 +2077,9 @@ def market_payload_from_verified(
         "volume": format_money(market.get("volume")),
         "icon": market.get("icon"),
         "image": market.get("image"),
+        "eventSlug": market.get("eventSlug"),
+        "liquidity": format_money(market.get("liquidity")),
+        "outcomes": market.get("outcomes") if isinstance(market.get("outcomes"), list) else [],
         "confidence": score,
         "verificationScore": score,
         "relation": str(verified.get("relation") or "AI 核实相关市场"),
@@ -2291,6 +2294,29 @@ def ai_prompt(
                 "evidenceIds": ["证据 id"],
             }
         ],
+        "scriptChains": [
+            {
+                "id": "chain_1",
+                "title": "剧本链名称，中文短句",
+                "summary": "根节点发生后，这条链路为什么会依次影响这些市场",
+                "confidence": 0.0,
+                "expectedReturnHint": "可选：风险/回报提示，不要承诺收益",
+                "legs": [
+                    {
+                        "marketId": "必须引用 verifiedRelatedMarkets 中的真实市场 id",
+                        "marketTitle": "真实市场标题",
+                        "side": "Buy Yes|Buy No|观察|具体 outcome",
+                        "probability": 0.0,
+                        "direction": "positive|negative|conditional|unknown",
+                        "impact": "+x%/-x%/待观察",
+                        "confidence": 0.0,
+                        "rationale": "该盘口为什么属于这条剧本链，必须基于证据",
+                        "orderHint": "一键下单时的盘口方向提示，例如 Buy Yes",
+                        "evidenceIds": ["证据 id"],
+                    }
+                ],
+            }
+        ],
         "scenarios": [
             {
                 "name": "情景名称",
@@ -2308,6 +2334,7 @@ def ai_prompt(
                 "你是 Causeway 的 Polymarket 因果推演分析员。"
                 "你需要综合预测市场价格、同事件盘口、已核实相关市场、新闻和社交信息，分析 A 发生后 B 可能如何变化。"
                 "因果图谱的节点必须是真实 Polymarket 市场。causalLinks.targetMarketId 只能引用 verifiedRelatedMarkets 中的 id。"
+                "scriptChains 必须表达可执行的剧本链：根节点发生后，依次影响哪些真实市场盘口；每个 leg 只能引用 verifiedRelatedMarkets 中的市场，必须给出 Buy Yes、Buy No 或观察方向。"
                 "外部新闻、社交信息只能作为证据或情景信号，不能被当成图谱目标节点。"
                 "如果证据不足，降低 confidence 或不要输出该链路。"
                 "只输出严格 json 对象，不要输出 Markdown，不要给交易建议，不要编造来源。"
@@ -2340,7 +2367,7 @@ def call_ai(messages: list[dict[str, str]], config: dict[str, Any], logs: list[s
                 "model": model,
                 "messages": messages,
                 "temperature": 0.2,
-                "max_tokens": 2200,
+                "max_tokens": 3200,
                 "response_format": {"type": "json_object"},
             }
             thinking = config.get("thinking")
@@ -2414,6 +2441,225 @@ def clamp_confidence(value: Any, default: float = 0.55) -> float:
     if number is None:
         return default
     return round(max(0.0, min(1.0, number)), 2)
+
+
+def script_side_for_market(market: dict[str, Any], direction: str | None) -> str:
+    relation = normalize_term(market.get("relation"))
+    normalized_direction = normalize_term(direction)
+    if normalized_direction == "negative" or "互斥" in relation or "同事件" in relation:
+        return "Buy No"
+    if normalized_direction == "unknown":
+        return "观察"
+    return "Buy Yes"
+
+
+def script_leg_from_market(
+    market: dict[str, Any],
+    direction: str | None = None,
+    confidence: Any = None,
+    rationale: str | None = None,
+    evidence_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    leg_direction = direction or market.get("direction") or "unknown"
+    leg_confidence = clamp_confidence(confidence, market.get("verificationScore") or market.get("confidence") or 0.5)
+    return {
+        "marketId": str(market.get("id") or ""),
+        "marketTitle": str(market.get("title") or "相关市场"),
+        "side": script_side_for_market(market, str(leg_direction)),
+        "probability": as_float(market.get("price")),
+        "direction": str(leg_direction),
+        "impact": str(market.get("impact") or "待观察"),
+        "confidence": leg_confidence,
+        "rationale": str(rationale or market.get("reason") or market.get("evidenceSummary") or "该市场已通过相关性核实，适合作为剧本链观察盘口。"),
+        "orderHint": script_side_for_market(market, str(leg_direction)),
+        "evidenceIds": evidence_ids if evidence_ids is not None else market.get("evidenceIds", []),
+    }
+
+
+def normalize_script_chains(
+    raw: dict[str, Any],
+    focus: dict[str, Any],
+    verified_related: list[dict[str, Any]],
+    normalized_links: list[dict[str, Any]],
+    settings: dict[str, Any],
+) -> list[dict[str, Any]]:
+    depth = settings_depth(settings)
+    max_chains = {1: 3, 2: 4, 3: 5}[depth]
+    max_legs = {1: 2, 2: 3, 3: 4}[depth]
+    verified_by_id = {str(market.get("id")): market for market in verified_related if market.get("id")}
+    link_by_target = {str(link.get("targetMarketId") or ""): link for link in normalized_links if link.get("targetMarketId")}
+    chains = raw.get("scriptChains") if isinstance(raw, dict) else None
+    normalized_chains: list[dict[str, Any]] = []
+
+    if isinstance(chains, list):
+        for index, chain in enumerate(chains[:max_chains]):
+            if not isinstance(chain, dict):
+                continue
+            raw_legs = chain.get("legs")
+            if not isinstance(raw_legs, list):
+                continue
+            normalized_legs: list[dict[str, Any]] = []
+            for leg in raw_legs[:max_legs]:
+                if not isinstance(leg, dict):
+                    continue
+                market_id = str(leg.get("marketId") or leg.get("targetMarketId") or "").strip()
+                market = verified_by_id.get(market_id)
+                if not market:
+                    continue
+                direction = str(leg.get("direction") or market.get("direction") or link_by_target.get(market_id, {}).get("direction") or "unknown")
+                confidence = clamp_confidence(
+                    leg.get("confidence"),
+                    market.get("verificationScore") or link_by_target.get(market_id, {}).get("confidence") or 0.5,
+                )
+                normalized_legs.append(
+                    {
+                        "marketId": market_id,
+                        "marketTitle": str(leg.get("marketTitle") or market.get("title") or "相关市场"),
+                        "side": str(leg.get("side") or leg.get("orderHint") or script_side_for_market(market, direction)),
+                        "probability": as_float(leg.get("probability")) if leg.get("probability") is not None else as_float(market.get("price")),
+                        "direction": direction,
+                        "impact": str(leg.get("impact") or market.get("impact") or link_by_target.get(market_id, {}).get("impact") or "待观察"),
+                        "confidence": confidence,
+                        "rationale": str(
+                            leg.get("rationale")
+                            or link_by_target.get(market_id, {}).get("rationale")
+                            or market.get("reason")
+                            or market.get("evidenceSummary")
+                            or "该盘口与根节点存在已核实的传导关系。"
+                        ),
+                        "orderHint": str(leg.get("orderHint") or leg.get("side") or script_side_for_market(market, direction)),
+                        "evidenceIds": [str(item) for item in leg.get("evidenceIds", [])] if isinstance(leg.get("evidenceIds"), list) else market.get("evidenceIds", []),
+                    }
+                )
+            if normalized_legs:
+                confidence_values = [leg["confidence"] for leg in normalized_legs]
+                normalized_chains.append(
+                    {
+                        "id": str(chain.get("id") or f"chain_{index + 1}"),
+                        "title": str(chain.get("title") or f"剧本链 {index + 1}"),
+                        "summary": str(chain.get("summary") or "根节点发生后，该链路中的盘口可能依次重定价。"),
+                        "confidence": clamp_confidence(chain.get("confidence"), sum(confidence_values) / len(confidence_values)),
+                        "expectedReturnHint": str(chain.get("expectedReturnHint") or "需按盘口深度和滑点控制仓位。"),
+                        "legs": normalized_legs,
+                    }
+                )
+
+    if normalized_chains and len(normalized_chains) < max_chains:
+        used_market_ids = {
+            str(leg.get("marketId"))
+            for chain in normalized_chains
+            for leg in chain.get("legs", [])
+            if leg.get("marketId")
+        }
+        extra_markets = sorted(
+            [market for market in verified_related if str(market.get("id")) not in used_market_ids],
+            key=lambda market: as_float(market.get("verificationScore") or market.get("confidence")) or 0,
+            reverse=True,
+        )
+        for market in extra_markets:
+            if len(normalized_chains) >= max_chains:
+                break
+            link = link_by_target.get(str(market.get("id")), {})
+            leg = script_leg_from_market(
+                market,
+                link.get("direction") or market.get("direction"),
+                link.get("confidence") or market.get("verificationScore"),
+                link.get("rationale") or market.get("reason"),
+                link.get("evidenceIds") or market.get("evidenceIds"),
+            )
+            normalized_chains.append(
+                {
+                    "id": f"chain_{len(normalized_chains) + 1}",
+                    "title": f"{directionLabelForBackend(leg.get('direction'))}：{market.get('title')}",
+                    "summary": f"根节点「{focus.get('title')}」发生后，该盘口可作为并行观察和组合下单的一条候选剧本链。",
+                    "confidence": leg["confidence"],
+                    "expectedReturnHint": "由已核实相关市场自动补齐，执行前需复核实时深度。",
+                    "legs": [leg],
+                }
+            )
+    if normalized_chains:
+        return normalized_chains
+
+    sorted_markets = sorted(
+        verified_related,
+        key=lambda market: as_float(market.get("verificationScore") or market.get("confidence")) or 0,
+        reverse=True,
+    )
+    if not sorted_markets:
+        return []
+    chains_from_links: list[dict[str, Any]] = []
+    link_targets = [link for link in normalized_links if link.get("targetMarketId") in verified_by_id]
+    used_ids: set[str] = set()
+    for index, link in enumerate(link_targets[:max_chains]):
+        target = verified_by_id[str(link.get("targetMarketId"))]
+        leg_markets = [target]
+        used_ids.add(str(target.get("id")))
+        same_group = [
+            market
+            for market in sorted_markets
+            if market.get("id") not in used_ids
+            and (
+                market.get("eventTitle") == target.get("eventTitle")
+                or market.get("category") == target.get("category")
+                or market.get("direction") == target.get("direction")
+            )
+        ]
+        leg_markets.extend(same_group[: max(0, max_legs - 1)])
+        for market in leg_markets[1:]:
+            used_ids.add(str(market.get("id")))
+        legs = [
+            script_leg_from_market(
+                market,
+                link.get("direction") if market.get("id") == target.get("id") else market.get("direction"),
+                link.get("confidence") if market.get("id") == target.get("id") else market.get("verificationScore"),
+                link.get("rationale") if market.get("id") == target.get("id") else market.get("reason"),
+                link.get("evidenceIds") if market.get("id") == target.get("id") else market.get("evidenceIds"),
+            )
+            for market in leg_markets
+        ]
+        avg_confidence = sum(leg["confidence"] for leg in legs) / len(legs)
+        chains_from_links.append(
+            {
+                "id": f"chain_{index + 1}",
+                "title": f"{directionLabelForBackend(link.get('direction'))}：{target.get('title')}",
+                "summary": f"若根市场「{focus.get('title')}」兑现，优先观察「{target.get('title')}」及同组盘口是否跟随重定价。",
+                "confidence": clamp_confidence(avg_confidence, 0.5),
+                "expectedReturnHint": "该链路仅作为盘口组合观察和后续下单编排输入，需结合实时深度确认。",
+                "legs": legs,
+            }
+        )
+    if chains_from_links:
+        return chains_from_links
+
+    fallback_chains = []
+    for index, start in enumerate(range(0, min(len(sorted_markets), max_chains * max_legs), max_legs)):
+        leg_markets = sorted_markets[start : start + max_legs]
+        if not leg_markets:
+            continue
+        legs = [script_leg_from_market(market) for market in leg_markets]
+        avg_confidence = sum(leg["confidence"] for leg in legs) / len(legs)
+        fallback_chains.append(
+            {
+                "id": f"chain_{index + 1}",
+                "title": f"链路 {index + 1}：{leg_markets[0].get('title')}",
+                "summary": f"根节点发生后，围绕「{leg_markets[0].get('title')}」形成一组可跟踪的相关盘口。",
+                "confidence": clamp_confidence(avg_confidence, 0.5),
+                "expectedReturnHint": "该链路由已核实相关市场自动编排，需等待实时盘口确认。",
+                "legs": legs,
+            }
+        )
+    return fallback_chains[:max_chains]
+
+
+def directionLabelForBackend(direction: Any) -> str:
+    value = str(direction or "unknown")
+    if value == "positive":
+        return "正向影响"
+    if value == "negative":
+        return "负向影响"
+    if value == "conditional":
+        return "条件传导"
+    return "待观察"
 
 
 def fallback_inference(
@@ -2569,6 +2815,7 @@ def normalize_ai_result(
                     "evidenceIds": market.get("evidenceIds") or [],
                 }
             )
+    script_chains = normalize_script_chains(raw, focus, verified_related, normalized_links, settings)
     scenarios = raw.get("scenarios")
     if not isinstance(scenarios, list):
         scenarios = []
@@ -2598,6 +2845,7 @@ def normalize_ai_result(
         "thesis": str(raw.get("thesis") or ""),
         "confidence": clamp_confidence(raw.get("confidence"), 0.52),
         "causalLinks": normalized_links,
+        "scriptChains": script_chains,
         "scenarios": normalized_scenarios,
         "riskFactors": normalized_risks,
         "evidence": raw.get("evidence") if isinstance(raw.get("evidence"), list) else evidence,

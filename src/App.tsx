@@ -223,6 +223,28 @@ type InferenceCausalLink = {
   evidenceIds?: string[]
 }
 
+type InferenceScriptLeg = {
+  marketId: string
+  marketTitle: string
+  side: string
+  probability?: number | null
+  direction: 'positive' | 'negative' | 'conditional' | 'unknown' | string
+  impact?: string
+  confidence: number
+  rationale: string
+  orderHint?: string
+  evidenceIds?: string[]
+}
+
+type InferenceScriptChain = {
+  id: string
+  title: string
+  summary: string
+  confidence: number
+  expectedReturnHint?: string
+  legs: InferenceScriptLeg[]
+}
+
 type InferenceScenario = {
   name: string
   probabilityShift: string
@@ -248,6 +270,7 @@ type InferenceResult = {
   thesis: string
   confidence: number
   causalLinks: InferenceCausalLink[]
+  scriptChains?: InferenceScriptChain[]
   scenarios: InferenceScenario[]
   riskFactors: string[]
   evidence: InferenceEvidence[]
@@ -1986,7 +2009,7 @@ function CausalScript({
       <div className="script-header">
         <PageTitle
           title="因果脚本"
-          subtitle={result?.thesis || `基于 AI 分析的因果关系图谱，展示「${market.title}」对相关市场的潜在影响路径。`}
+          subtitle={result?.thesis || `基于 AI 分析的因果剧本链，展示「${market.title}」发生后可能影响的真实市场盘口。`}
         />
         <div className="script-actions">
           <button className="outline-button" type="button">
@@ -2369,91 +2392,185 @@ function NetworkFlowCanvas({
   )
 }
 
-function causalLinkTone(link: InferenceCausalLink): 'green' | 'orange' | 'red' | 'purple' {
-  if (link.direction === 'negative') return 'red'
-  if (link.direction === 'conditional') return 'orange'
-  if (link.confidence < 0.35) return 'purple'
+function scriptTone(direction: string | null | undefined, confidence: number | null | undefined): 'green' | 'orange' | 'red' | 'purple' {
+  if (direction === 'negative') return 'red'
+  if (direction === 'conditional') return 'orange'
+  if ((confidence || 0) < 0.35) return 'purple'
   return 'green'
 }
 
-function CausalMap({ market, result }: { market: Market; result: InferenceResult | null }) {
-  const related = result?.relatedMarkets?.length ? result.relatedMarkets.slice(0, 8) : []
-  const fallbackRelated: InferenceRelatedMarket[] = related.length ? [] : [{
-    id: 'pending-related',
-    title: market.eventTitle || '等待 AI 核实相关市场',
-    eventTitle: market.eventTitle,
-    category: market.category,
-    price: null,
-    volume: market.volume,
+function scriptSideTone(side: string | null | undefined) {
+  const normalized = (side || '').toLowerCase()
+  if (normalized.includes('no')) return 'red'
+  if (normalized.includes('观察') || normalized.includes('watch')) return 'muted'
+  return 'green'
+}
+
+function scriptFallbackChains(market: Market, result: InferenceResult | null): InferenceScriptChain[] {
+  const relatedById = new Map((result?.relatedMarkets || []).map((item) => [item.id, item]))
+  const linkChains: InferenceScriptChain[] = (result?.causalLinks || [])
+    .flatMap((link, index) => {
+      const target = link.targetMarketId ? relatedById.get(link.targetMarketId) : undefined
+      if (!target) return []
+      return [{
+        id: `fallback_chain_${index + 1}`,
+        title: `${directionLabel(link.direction)}：${trimNodeTitle(target.title, 26)}`,
+        summary: link.rationale || target.reason || '根节点发生后，该盘口可能出现联动重定价。',
+        confidence: link.confidence,
+        expectedReturnHint: '按当前盘口方向加入交易草稿前，仍需确认实时深度和滑点。',
+        legs: [{
+          marketId: target.id,
+          marketTitle: target.title,
+          side: link.direction === 'negative' ? 'Buy No' : 'Buy Yes',
+          probability: target.price,
+          direction: link.direction,
+          impact: link.impact,
+          confidence: link.confidence,
+          rationale: link.rationale || target.reason || target.evidenceSummary || 'AI 已核实该市场与根节点有关联。',
+          orderHint: link.direction === 'negative' ? 'Buy No' : 'Buy Yes',
+          evidenceIds: link.evidenceIds || target.evidenceIds || [],
+        }],
+      }]
+    })
+  if (linkChains.length) return linkChains.slice(0, 4)
+  const related = (result?.relatedMarkets || []).slice(0, 4)
+  if (related.length) {
+    return related.map((item, index) => ({
+      id: `related_chain_${index + 1}`,
+      title: `链路 ${index + 1}：${trimNodeTitle(item.title, 28)}`,
+      summary: item.reason || item.evidenceSummary || '该市场已通过相关性核实，可作为根节点发生后的观察链路。',
+      confidence: item.verificationScore || item.confidence,
+      expectedReturnHint: '该链路由相关市场自动编排，交易前需复核实时盘口。',
+      legs: [{
+        marketId: item.id,
+        marketTitle: item.title,
+        side: item.direction === 'negative' ? 'Buy No' : 'Buy Yes',
+        probability: item.price,
+        direction: item.direction || 'unknown',
+        impact: item.impact,
+        confidence: item.verificationScore || item.confidence,
+        rationale: item.reason || item.evidenceSummary || 'AI 已核实该市场与根节点有关联。',
+        orderHint: item.direction === 'negative' ? 'Buy No' : 'Buy Yes',
+        evidenceIds: item.evidenceIds || [],
+      }],
+    }))
+  }
+  return [{
+    id: 'pending_chain',
+    title: '等待 AI 生成剧本链',
+    summary: `推演完成后，这里会展示「${market.title}」发生后影响哪些真实 Polymarket 盘口。`,
     confidence: 0.5,
-    verificationScore: 0.5,
-    relation: '待核实市场',
-    direction: 'unknown',
-    impact: '待观察',
-    reason: '推演完成后会在这里展示真实 Polymarket 市场节点。',
-    evidenceSummary: '等待候选市场证据核实。',
-    evidenceCount: 0,
+    expectedReturnHint: '暂无可执行盘口。',
+    legs: [],
   }]
-  const nodes = related.length ? related : fallbackRelated
-  const linkByTarget = new Map((result?.causalLinks || []).map((link) => [link.targetMarketId || link.target, link]))
-  const nodePositions = [
-    [180, 165],
-    [350, 115],
-    [650, 115],
-    [830, 170],
-    [190, 405],
-    [365, 455],
-    [660, 455],
-    [835, 390],
-  ]
+}
+
+function CausalMap({ market, result }: { market: Market; result: InferenceResult | null }) {
+  const relatedById = useMemo(() => new Map((result?.relatedMarkets || []).map((item) => [item.id, item])), [result])
+  const chains = useMemo(() => {
+    const apiChains = (result?.scriptChains || []).filter((chain) => chain.legs?.length)
+    return (apiChains.length ? apiChains : scriptFallbackChains(market, result)).slice(0, 4)
+  }, [market, result])
+  const [selectedChainId, setSelectedChainId] = useState<string | null>(null)
+
+  const selectedChain = chains.find((chain) => chain.id === selectedChainId) || chains[0]
+  const activeChainId = selectedChain?.id || null
+  const chainCount = Math.max(1, chains.length)
+  const branchXs = chains.map((_, index) => (chainCount === 1 ? 500 : 120 + (760 / (chainCount - 1)) * index))
+
   return (
-    <div className="causal-map">
-      <div className="causal-root">
-        <MarketIcon market={market} size="medium" />
-        <b>{market.title}</b>
-        <strong>{market.price}% <span>{formatConfidence(result?.confidence)}</span></strong>
-        <small>{result?.status === 'fallback' ? '本地结构化推演' : `根市场 · ${formatDate(market.syncedAt)}`}</small>
+    <div className="causal-map script-chain-map">
+      <div className="script-map-head">
+        <span>根因事件</span>
+        <div>
+          <span><i className="line green" />正向影响</span>
+          <span><i className="line red" />负向影响</span>
+          <span><i className="line orange" />条件传导</span>
+        </div>
       </div>
-      <svg className="causal-lines" viewBox="0 0 1000 560" aria-hidden="true">
+      <div className="script-root-card">
+        <MarketIcon market={market} size="medium" />
+        <div>
+          <small>根节点市场</small>
+          <b>{market.title}</b>
+          <strong>{market.price}% <span>{formatConfidence(result?.confidence)}</span></strong>
+          <em>同步于 {formatDate(market.syncedAt)}</em>
+        </div>
+      </div>
+      <svg className="script-chain-lines" viewBox="0 0 1000 310" preserveAspectRatio="none" aria-hidden="true">
         <defs>
-          <marker id="script-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="7" refY="4">
+          <marker id="script-chain-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="7" refY="4">
             <path d="M0,0 L8,4 L0,8 Z" />
           </marker>
         </defs>
-        {nodes.map((node, index) => {
-          const [nodeX, nodeY] = nodePositions[index]
-          const link = linkByTarget.get(node.id) || linkByTarget.get(node.title) || {
-            direction: node.direction || 'unknown',
-            confidence: node.verificationScore || node.confidence,
-          } as InferenceCausalLink
-          const controlX = nodeX < 500 ? 405 - index * 13 : 595 + index * 13
-          const controlY = nodeY < 280 ? 215 : 345
+        {chains.map((chain, index) => {
+          const firstLeg = chain.legs[0]
+          const tone = scriptTone(firstLeg?.direction, chain.confidence)
+          const targetX = branchXs[index]
           return (
             <path
-              className={causalLinkTone(link)}
-              d={`M500 280 C${controlX} ${controlY}, ${nodeX} ${nodeY}, ${nodeX} ${nodeY}`}
-              key={`${node.id}-${index}`}
-              markerEnd="url(#script-arrow)"
+              className={`${tone}${chain.id === activeChainId ? ' selected' : ''}`}
+              d={`M500 92 C500 160, ${targetX} 128, ${targetX} 246`}
+              key={chain.id}
+              markerEnd="url(#script-chain-arrow)"
             />
           )
         })}
       </svg>
-      {nodes.map((node, index) => {
-        const [x, y] = nodePositions[index]
-        const link = linkByTarget.get(node.id) || linkByTarget.get(node.title)
-        const tone = causalLinkTone(link || ({ direction: node.direction || 'unknown', confidence: node.verificationScore || node.confidence } as InferenceCausalLink))
-        return (
-          <div className={`causal-node ${tone}`} key={node.id} style={{ left: `${x / 10}%`, top: `${y / 5.6}%` }}>
-            <MarketIcon market={{ icon: market.icon, iconUrl: node.icon || node.image || null, tone: categoryTones[node.category] || market.tone }} size="small" />
-            <div>
-              <b>{node.title}</b>
-              <small>{node.relation} · {directionLabel(node.direction)}</small>
-            </div>
-            <strong>{formatConfidence(node.verificationScore || node.confidence)}</strong>
-            <span>{link?.rationale || node.reason || node.evidenceSummary || 'AI 已核实该市场与根市场存在可观察关联。'}</span>
-          </div>
-        )
-      })}
+      <div className="script-chain-lanes" style={{ '--chain-count': chainCount } as CSSProperties}>
+        {chains.map((chain, index) => {
+          const firstLeg = chain.legs[0]
+          const tone = scriptTone(firstLeg?.direction, chain.confidence)
+          const selected = chain.id === activeChainId
+          return (
+            <button
+              className={`script-chain-lane ${tone}${selected ? ' selected' : ''}`}
+              key={chain.id}
+              onClick={() => setSelectedChainId(chain.id)}
+              type="button"
+            >
+              <div className="script-chain-title">
+                <span>{index + 1}</span>
+                <b>{chain.title}</b>
+                <strong>{formatConfidence(chain.confidence)}</strong>
+              </div>
+              <p>{chain.summary}</p>
+              <div className="script-leg-stack">
+                {chain.legs.map((leg, legIndex) => {
+                  const related = relatedById.get(leg.marketId)
+                  const legTone = scriptTone(leg.direction, leg.confidence)
+                  return (
+                    <div className={`script-leg-card ${legTone}`} key={`${chain.id}-${leg.marketId}-${legIndex}`}>
+                      <MarketIcon
+                        market={{
+                          icon: market.icon,
+                          iconUrl: related?.icon || related?.image || null,
+                          tone: categoryTones[related?.category || market.category] || market.tone,
+                        }}
+                        size="small"
+                      />
+                      <div>
+                        <b>{trimNodeTitle(leg.marketTitle, 56)}</b>
+                        <small>{directionLabel(leg.direction)} · {leg.impact || '待观察'}</small>
+                        <p>{leg.rationale}</p>
+                      </div>
+                      <strong>{formatMarketPercent(leg.probability)}</strong>
+                      <span className={`script-side-badge ${scriptSideTone(leg.side)}`}>{leg.orderHint || leg.side}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+      <div className="script-chain-action">
+        <div>
+          <b>已选择剧本链：{selectedChain?.title || '暂无'}</b>
+          <span>{selectedChain?.expectedReturnHint || '选择一条剧本链后，可将其中所有盘口方向加入交易草稿。'}</span>
+        </div>
+        <button type="button" disabled={!selectedChain?.legs.length}>买入该剧本链盘口</button>
+      </div>
       <div className="confidence-legend">
         <b>置信度说明</b>
         <span><i className="dot green" />高置信度 ≥ 0.65</span>
@@ -3002,6 +3119,10 @@ function LogList({ logs, loading }: { logs?: string[]; loading?: boolean }) {
 
 function SummaryList({ market, result }: { market: Market; result: InferenceResult | null }) {
   if (result) {
+    const chainItems = (result.scriptChains || []).slice(0, 5).map((chain) => [
+      chain.title,
+      `${formatConfidence(chain.confidence)} · ${chain.legs.length} 个盘口。${chain.summary}${chain.expectedReturnHint ? ` ${chain.expectedReturnHint}` : ''}`,
+    ])
     const linkItems = result.causalLinks.slice(0, 5).map((link) => [
       `${market.title} → ${link.target}`,
       `${directionLabel(link.direction)} · ${formatConfidence(link.confidence)} · ${link.impact || '待观察'}。${link.rationale}${link.evidenceSummary ? ` 证据：${link.evidenceSummary}` : ''}`,
@@ -3012,7 +3133,8 @@ function SummaryList({ market, result }: { market: Market; result: InferenceResu
       : []
     const items = [
       ['根市场推演结论', result.thesis],
-      ...linkItems,
+      ...chainItems,
+      ...(chainItems.length ? [] : linkItems),
       ...scenarioItems,
       ...excludedNote,
     ]
