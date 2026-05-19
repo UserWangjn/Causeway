@@ -7,6 +7,7 @@ import { RATE_LIMIT_POLICY, SKIP_RATE_LIMIT } from '../../src/common/decorators/
 import { ApiException } from '../../src/common/errors/api.exception';
 import { InMemoryRateLimitStore } from '../../src/common/rate-limit/in-memory-rate-limit.store';
 import { RateLimitGuard } from '../../src/common/rate-limit/rate-limit.guard';
+import { createRateLimitStore } from '../../src/common/rate-limit/rate-limit.module';
 
 type TestRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -127,6 +128,36 @@ describe('RateLimitGuard', () => {
     ).rejects.toBeInstanceOf(ApiException);
   });
 
+  it('does not use unverified bearer tokens as a rate limit identity', async () => {
+    const guard = createGuard({ max: 1, windowMs: 60_000 });
+
+    await expect(
+      guard.canActivate(
+        createContext({
+          ip: '203.0.113.70',
+          headers: {
+            authorization: 'Bearer invalid-token-a',
+          },
+          method: 'GET',
+          path: '/portfolio/summary',
+        }).context,
+      ),
+    ).resolves.toBe(true);
+
+    await expect(
+      guard.canActivate(
+        createContext({
+          ip: '203.0.113.70',
+          headers: {
+            authorization: 'Bearer invalid-token-b',
+          },
+          method: 'GET',
+          path: '/portfolio/summary',
+        }).context,
+      ),
+    ).rejects.toBeInstanceOf(ApiException);
+  });
+
   it('uses the internal route limit when internal metadata is present', async () => {
     const guard = createGuard({
       max: 100,
@@ -211,6 +242,18 @@ describe('RateLimitGuard', () => {
 
     await expect(guard.canActivate(createContext(request).context)).resolves.toBe(true);
     await expect(guard.canActivate(createContext(request).context)).resolves.toBe(true);
+  });
+
+  it('does not instantiate a Redis-backed store when rate limiting is disabled', () => {
+    const config = {
+      get: vi.fn((key: string, defaultValue?: unknown) => {
+        if (key === 'rateLimit.enabled') return false;
+        if (key === 'rateLimit.redisUrl') return 'redis://127.0.0.1:6379';
+        return defaultValue;
+      }),
+    } as unknown as ConfigService;
+
+    expect(createRateLimitStore(config)).toBeInstanceOf(InMemoryRateLimitStore);
   });
 });
 

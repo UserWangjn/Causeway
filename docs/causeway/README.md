@@ -13,3 +13,4 @@
 7. `causeway-frontend-development.md`：前端路由、页面、状态和交互。
 8. `causeway-development-roadmap.md`：一期 P0-P5 开发里程碑和验收标准。
 9. `causeway-real-order-spike.md`：真实下单技术 Spike 方案和验收标准。
+10. `causeway-backend-operations.md`：后端环境矩阵、发布门禁、部署、健康检查和备份恢复。

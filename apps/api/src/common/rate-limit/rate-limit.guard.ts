@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { CanActivate, ExecutionContext, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
@@ -133,11 +132,6 @@ export class RateLimitGuard implements CanActivate {
       return `user:${request.user.id}`;
     }
 
-    const bearerToken = this.getBearerToken(request.headers);
-    if (bearerToken) {
-      return `token:${this.sha256(bearerToken)}`;
-    }
-
     return `ip:${request.ip ?? 'unknown-ip'}`;
   }
 
@@ -147,19 +141,4 @@ export class RateLimitGuard implements CanActivate {
     response.setHeader('X-RateLimit-Reset', hit.resetAt.toISOString());
   }
 
-  private getBearerToken(headers: HeaderBag): string | null {
-    const authorization = this.getSingleHeader(headers, 'authorization');
-    if (!authorization?.startsWith('Bearer ')) return null;
-    return authorization.slice('Bearer '.length).trim();
-  }
-
-  private getSingleHeader(headers: HeaderBag, name: string): string | null {
-    const value = headers[name];
-    if (Array.isArray(value)) return value[0] ?? null;
-    return value ?? null;
-  }
-
-  private sha256(value: string): string {
-    return createHash('sha256').update(value).digest('hex');
-  }
 }

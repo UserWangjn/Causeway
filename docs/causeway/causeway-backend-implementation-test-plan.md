@@ -24,6 +24,7 @@
 - DB-backed markets、scripts、orders、portfolio、sync 服务边界。
 - `dry_run` 订单预览、提交和幂等基础。
 - AI、CLOB orderbook、real trading 的明确 unavailable capability。
+- health/readiness、rate limit、生产环境 secret 校验和 B9 运维手册。
 - API build、lint、test、audit 验证。
 
 任何后续任务开始前，基线必须保持绿色：
@@ -168,6 +169,8 @@ npm run smoke:api:polymarket
 npm run smoke:api:ai
 npm run smoke:api:real-orders
 ```
+
+这些命令默认不访问外部服务，必须通过 `SMOKE_*_ENABLED=true` 显式 opt-in。`smoke:api:real-orders` 在真实下单 Spike 批准并实现前只保留安全边界，不提交订单。
 
 ## 5. 全局完成标准
 
@@ -483,14 +486,14 @@ Smoke 测试要求：
 review 前必须执行：
 
 ```powershell
-npm run db:generate
-npm run build:api
-npm run lint:api
-npm run test:api
-npm audit --omit=dev
+npm run quality:api
 ```
 
-integration/e2e 命令补齐后，受影响阶段必须执行对应命令。
+涉及数据库、HTTP 契约、auth、订单、portfolio、监控或生产配置时执行完整门禁：
+
+```powershell
+npm run quality:api:full
+```
 
 ## 9. 测试数据策略
 

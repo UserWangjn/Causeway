@@ -20,7 +20,7 @@ env:
 
 jobs:
   quality:
-    name: Unit, lint, and build
+    name: Backend quality
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -37,25 +37,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate Prisma client
-        run: npm run db:generate
-
       - name: Validate Prisma schema
         env:
           DATABASE_URL: postgresql://user:pass@localhost:5432/causeway
         run: npx --workspace @causeway/api prisma validate
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Unit tests
-        run: npm run test:api
-
-      - name: Build
-        run: npm run build
-
-      - name: Dependency audit
-        run: npm audit --omit=dev
+      - name: API quality gate
+        run: npm run quality:api
 
   database-tests:
     name: Integration and e2e

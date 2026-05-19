@@ -1,7 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { validateEnv } from '../../src/config/validate-env';
 
 describe('validateEnv', () => {
+  const productionSecrets = {
+    JWT_SECRET: 'prod-jwt-secret-32-characters-minimum',
+    INTERNAL_API_TOKEN: 'prod-internal-token-32-characters-minimum',
+  };
+
   it('accepts a minimal development configuration and applies defaults', () => {
     const env = validateEnv({
       DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
@@ -25,8 +31,7 @@ describe('validateEnv', () => {
       validateEnv({
         NODE_ENV: 'production',
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
-        JWT_SECRET: 'x'.repeat(32),
-        INTERNAL_API_TOKEN: 'internal-token',
+        ...productionSecrets,
       }),
     ).toThrow(/REDIS_URL/);
   });
@@ -35,13 +40,127 @@ describe('validateEnv', () => {
     const env = validateEnv({
       NODE_ENV: 'production',
       DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
-      JWT_SECRET: 'x'.repeat(32),
-      INTERNAL_API_TOKEN: 'internal-token',
+      ...productionSecrets,
       RATE_LIMIT_ENABLED: 'false',
     });
 
     expect(env.RATE_LIMIT_ENABLED).toBe('false');
     expect(env.REDIS_URL).toBeUndefined();
+  });
+
+  it('rejects placeholder and low-entropy production secrets', () => {
+    const base = {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+      RATE_LIMIT_ENABLED: 'false',
+    };
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        JWT_SECRET: 'change-me',
+        INTERNAL_API_TOKEN: productionSecrets.INTERNAL_API_TOKEN,
+      }),
+    ).toThrow(/JWT_SECRET/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        JWT_SECRET: '<generate-64-plus-random-characters>',
+        INTERNAL_API_TOKEN: productionSecrets.INTERNAL_API_TOKEN,
+      }),
+    ).toThrow(/JWT_SECRET/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        JWT_SECRET: 'x'.repeat(32),
+        INTERNAL_API_TOKEN: productionSecrets.INTERNAL_API_TOKEN,
+      }),
+    ).toThrow(/JWT_SECRET/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        JWT_SECRET: productionSecrets.JWT_SECRET,
+        INTERNAL_API_TOKEN: 'internal-token',
+      }),
+    ).toThrow(/INTERNAL_API_TOKEN/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        JWT_SECRET: 'dev-local-jwt-secret-change-before-production',
+        INTERNAL_API_TOKEN: productionSecrets.INTERNAL_API_TOKEN,
+      }),
+    ).toThrow(/JWT_SECRET/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        JWT_SECRET: productionSecrets.JWT_SECRET,
+        INTERNAL_API_TOKEN: 'dev-local-internal-token-change-before-production',
+      }),
+    ).toThrow(/INTERNAL_API_TOKEN/);
+  });
+
+  it('rejects .env.example development secrets in production', () => {
+    const exampleEnv = parseEnvExample(readFileSync('.env.example', 'utf8'));
+
+    expect(() =>
+      validateEnv({
+        ...exampleEnv,
+        NODE_ENV: 'production',
+        RATE_LIMIT_ENABLED: 'false',
+      }),
+    ).toThrow(/JWT_SECRET|INTERNAL_API_TOKEN/);
+  });
+
+  it('rejects .env.production.example secret placeholders in production', () => {
+    const productionTemplateEnv = parseEnvExample(readFileSync('.env.production.example', 'utf8'));
+    delete productionTemplateEnv.REDIS_URL;
+
+    expect(() =>
+      validateEnv({
+        ...productionTemplateEnv,
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        RATE_LIMIT_ENABLED: 'false',
+      }),
+    ).toThrow(/JWT_SECRET|INTERNAL_API_TOKEN/);
+  });
+
+  it('rejects malformed supported chain ids', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        SUPPORTED_CHAIN_IDS: '137,abc',
+      }),
+    ).toThrow(/SUPPORTED_CHAIN_IDS/);
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        SUPPORTED_CHAIN_IDS: '0',
+      }),
+    ).toThrow(/SUPPORTED_CHAIN_IDS/);
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        SUPPORTED_CHAIN_IDS: '137,',
+      }),
+    ).toThrow(/SUPPORTED_CHAIN_IDS/);
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        SUPPORTED_CHAIN_IDS: '137,,80002',
+      }),
+    ).toThrow(/SUPPORTED_CHAIN_IDS/);
   });
 
   it('rejects unsafe market sync scheduler settings', () => {
@@ -71,3 +190,16 @@ describe('validateEnv', () => {
     ).toThrow(/POLYMARKET_MARKET_SYNC_LOCK_TTL_MS/);
   });
 });
+
+function parseEnvExample(content: string): Record<string, string> {
+  return Object.fromEntries(
+    content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'))
+      .map((line) => {
+        const separator = line.indexOf('=');
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+}

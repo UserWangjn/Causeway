@@ -1,6 +1,37 @@
 import { z } from 'zod';
 import { AUTH_DURATION_PATTERN } from '../common/utils/duration.util';
 
+const MIN_PRODUCTION_SECRET_LENGTH = 32;
+const PLACEHOLDER_SECRET_VALUES = new Set([
+  'change-me',
+  'changeme',
+  'replace-me',
+  'replace-me-in-production',
+  'dev-secret',
+  'development-secret',
+  'test-secret',
+  'jwt-secret',
+  'internal-token',
+  'secret',
+  'password',
+  '<generate-64-plus-random-characters>',
+  'dev-local-jwt-secret-change-before-production',
+  'dev-local-internal-token-change-before-production',
+]);
+const PLACEHOLDER_SECRET_FRAGMENTS = [
+  'before-production',
+  'change-before-production',
+  'change-me',
+  'changeme',
+  'dev-local',
+  'development-only',
+  'generate-64-plus-random-characters',
+  'local-development',
+  'placeholder',
+  'replace-me',
+  'replace-with',
+];
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -12,7 +43,9 @@ const envSchema = z
     DATABASE_URL: z.string().min(1),
     JWT_SECRET: z.string().min(1),
     JWT_EXPIRES_IN: z.string().regex(AUTH_DURATION_PATTERN).default('7d'),
-    SUPPORTED_CHAIN_IDS: z.string().default('137'),
+    SUPPORTED_CHAIN_IDS: z.string().default('137').refine(isValidSupportedChainIds, {
+      message: 'SUPPORTED_CHAIN_IDS must be a comma-separated list of positive integer chain ids',
+    }),
     POLYMARKET_GAMMA_BASE_URL: z.string().url().default('https://gamma-api.polymarket.com'),
     POLYMARKET_CLOB_BASE_URL: z.string().url().default('https://clob.polymarket.com'),
     POLYMARKET_DATA_BASE_URL: z.string().url().default('https://data-api.polymarket.com'),
@@ -39,23 +72,23 @@ const envSchema = z
     RATE_LIMIT_INTERNAL_MAX: z.coerce.number().int().positive().default(300),
   })
   .superRefine((value, ctx) => {
-    if (value.NODE_ENV === 'production' && value.JWT_SECRET.length < 32) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['JWT_SECRET'],
-        message: 'JWT_SECRET must be at least 32 characters in production',
-      });
+    if (value.NODE_ENV !== 'production') {
+      return;
     }
 
-    if (value.NODE_ENV === 'production' && !value.INTERNAL_API_TOKEN) {
+    addProductionSecretIssues('JWT_SECRET', value.JWT_SECRET, ctx);
+
+    if (!value.INTERNAL_API_TOKEN) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['INTERNAL_API_TOKEN'],
         message: 'INTERNAL_API_TOKEN is required in production',
       });
+    } else {
+      addProductionSecretIssues('INTERNAL_API_TOKEN', value.INTERNAL_API_TOKEN, ctx);
     }
 
-    if (value.NODE_ENV === 'production' && value.RATE_LIMIT_ENABLED !== 'false' && !value.REDIS_URL) {
+    if (value.RATE_LIMIT_ENABLED !== 'false' && !value.REDIS_URL) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['REDIS_URL'],
@@ -66,4 +99,72 @@ const envSchema = z
 
 export function validateEnv(config: Record<string, unknown>) {
   return envSchema.parse(config);
+}
+
+function addProductionSecretIssues(
+  path: 'JWT_SECRET' | 'INTERNAL_API_TOKEN',
+  value: string,
+  ctx: z.RefinementCtx,
+): void {
+  if (value.length < MIN_PRODUCTION_SECRET_LENGTH) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [path],
+      message: `${path} must be at least ${MIN_PRODUCTION_SECRET_LENGTH} characters in production`,
+    });
+    return;
+  }
+
+  if (isPlaceholderSecret(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [path],
+      message: `${path} must not use a placeholder value in production`,
+    });
+    return;
+  }
+
+  if (isLowEntropySecret(value)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [path],
+      message: `${path} must not use a low-entropy repeated value in production`,
+    });
+  }
+}
+
+function isPlaceholderSecret(value: string): boolean {
+  const normalized = normalizeSecret(value);
+  return (
+    isTemplatePlaceholder(value) ||
+    PLACEHOLDER_SECRET_VALUES.has(normalized) ||
+    PLACEHOLDER_SECRET_FRAGMENTS.some((fragment) => normalized.includes(fragment))
+  );
+}
+
+function isTemplatePlaceholder(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    (trimmed.startsWith('<') && trimmed.endsWith('>')) ||
+    (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+    (trimmed.startsWith('{') && trimmed.endsWith('}'))
+  );
+}
+
+function isLowEntropySecret(value: string): boolean {
+  const trimmed = value.trim();
+  return new Set(trimmed).size < 8 || /^(.)(\1)+$/.test(trimmed);
+}
+
+function normalizeSecret(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_]+/g, '-');
+}
+
+function isValidSupportedChainIds(value: string): boolean {
+  const parts = value.split(',').map((part) => part.trim());
+  return parts.length > 0 && parts.every((part) => {
+    if (!/^\d+$/.test(part)) return false;
+    const chainId = Number(part);
+    return Number.isSafeInteger(chainId) && chainId > 0;
+  });
 }

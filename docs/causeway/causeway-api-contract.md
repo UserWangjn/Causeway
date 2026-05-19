@@ -77,7 +77,7 @@ type HealthResponse = {
 
 ### `GET /health/ready`
 
-公开 readiness endpoint，用于部署平台判断服务是否可以接流量。该接口会执行数据库探活；数据库不可用时返回 `503 READINESS_FAILED`，错误响应不能泄漏连接串、密码或内部异常。
+公开 readiness endpoint，用于部署平台判断服务是否可以接流量。该接口会执行数据库探活；限流启用时还会检查限流存储。数据库或限流存储不可用时返回 `503 READINESS_FAILED`，错误响应不能泄漏连接串、密码或内部异常。
 
 响应：
 
@@ -87,6 +87,7 @@ type ReadinessResponse = {
   service: "causeway-api";
   checks: {
     database: "ok";
+    rateLimit?: "ok";
   };
   timestamp: string;
 };

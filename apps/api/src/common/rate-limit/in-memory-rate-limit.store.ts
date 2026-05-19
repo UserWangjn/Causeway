@@ -33,6 +33,10 @@ export class InMemoryRateLimitStore implements RateLimitStore {
     });
   }
 
+  healthCheck(): Promise<void> {
+    return Promise.resolve();
+  }
+
   private pruneExpired(now: number): void {
     if (this.entries.size < 10_000) return;
     for (const [key, entry] of this.entries) {

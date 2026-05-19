@@ -38,7 +38,7 @@ The integration fixture creates:
 ## E2E Tests
 
 E2E tests should boot the Nest application through `test/support/e2e-app.ts` and mock external clients by default.
-Current e2e coverage includes wallet auth plus the local core workflow: market reads, mock inference, script reads/selection patch, order preview, dry-run submit, and idempotent submit replay.
+Current e2e coverage includes wallet auth plus the local core workflow: market reads, mock inference, script reads/selection patch, order preview, dry-run submit, idempotent submit replay/conflict handling, preview expiration, production readiness, and rate limiting.
 
 ```powershell
 npm run test:api:e2e
@@ -55,3 +55,17 @@ The CI database URL uses `causeway_test`, matching the safety check in `test/sup
 
 CI sets `LOG_LEVEL=log` and enables HTTP request logging by default. Local test env files can set
 `LOG_LEVEL=warn` and `LOG_HTTP_REQUESTS=false` to reduce noise while keeping the same structured logger path.
+
+## External Smoke Checks
+
+External smoke checks are not CI tests. They require explicit environment opt-in and can call real provider endpoints:
+
+```powershell
+$env:SMOKE_POLYMARKET_ENABLED="true"
+npm run smoke:api:polymarket
+
+$env:SMOKE_AI_ENABLED="true"
+npm run smoke:api:ai
+```
+
+Do not enable `smoke:api:real-orders` until the real CLOB signing/submission Spike is approved.

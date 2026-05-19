@@ -13,6 +13,15 @@ type ApiResponse<T> = {
   requestId: string;
 };
 
+type ApiErrorResponse = {
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+  requestId: string;
+};
+
 type Page<T> = {
   items: T[];
   nextCursor: string | null;
@@ -94,6 +103,16 @@ type OrderSubmitResponse = {
     orderId: string;
     status: string;
   }>;
+};
+
+type PrepareSignatureResponse = {
+  intentId: string;
+  executionMode: string;
+  signingStatus: string;
+  protocol: string;
+  expiresAt: string | null;
+  payloads: unknown[];
+  error: string | null;
 };
 
 type PortfolioTradesResponse = {
@@ -256,6 +275,28 @@ describe('core backend workflows e2e', () => {
       limitPrice: 0.56,
     });
 
+    const prepareSignatureResponse = await request(httpServer)
+      .post('/api/v1/orders/prepare-signature')
+      .set('authorization', `Bearer ${accessToken}`)
+      .send({
+        intentId: previewBody.data.intentId,
+        executionMode: 'dry_run',
+        walletAddress: fixture.user1.walletAddress,
+        chainId: 137,
+      })
+      .expect(201);
+    const prepareSignatureBody = prepareSignatureResponse.body as ApiResponse<PrepareSignatureResponse>;
+
+    expect(prepareSignatureBody.data).toEqual({
+      intentId: previewBody.data.intentId,
+      executionMode: 'dry_run',
+      signingStatus: 'not_required',
+      protocol: 'dry_run_no_signature',
+      expiresAt: null,
+      payloads: [],
+      error: null,
+    });
+
     const submitPayload = {
       intentId: previewBody.data.intentId,
       executionMode: 'dry_run',
@@ -311,5 +352,153 @@ describe('core backend workflows e2e', () => {
         amountUsd: 15,
       }),
     ]);
+  });
+
+  it('returns a structured unavailable signing state for real orders while CLOB is not wired', async () => {
+    const previewResponse = await request(httpServer)
+      .post('/api/v1/orders/preview')
+      .set('authorization', `Bearer ${accessToken}`)
+      .send({
+        scriptId: fixture.script.id,
+        executionMode: 'real',
+        selections: [
+          {
+            selectionId: fixture.selectionYes.id,
+            orderMode: 'limit',
+            amountUsd: 15,
+            limitPrice: 0.56,
+            orderType: 'GTC',
+          },
+        ],
+      })
+      .expect(201);
+    const previewBody = previewResponse.body as ApiResponse<OrderPreviewResponse>;
+
+    expect(previewBody.data).toMatchObject({
+      executionMode: 'real',
+      submitMode: 'unavailable',
+      requiresSignature: false,
+    });
+
+    const prepareSignatureResponse = await request(httpServer)
+      .post('/api/v1/orders/prepare-signature')
+      .set('authorization', `Bearer ${accessToken}`)
+      .send({
+        intentId: previewBody.data.intentId,
+        executionMode: 'real',
+        walletAddress: fixture.user1.walletAddress,
+        chainId: 137,
+      })
+      .expect(201);
+    const prepareSignatureBody = prepareSignatureResponse.body as ApiResponse<PrepareSignatureResponse>;
+
+    expect(prepareSignatureBody.data).toMatchObject({
+      intentId: previewBody.data.intentId,
+      executionMode: 'real',
+      signingStatus: 'unavailable',
+      protocol: 'polymarket_clob_eip712',
+      expiresAt: null,
+      payloads: [],
+    });
+    expect(prepareSignatureBody.data.error).toContain('CLOB real trading is not wired yet');
+  });
+
+  it('rejects idempotency key reuse with a different submit payload', async () => {
+    const previewResponse = await request(httpServer)
+      .post('/api/v1/orders/preview')
+      .set('authorization', `Bearer ${accessToken}`)
+      .send({
+        scriptId: fixture.script.id,
+        executionMode: 'dry_run',
+        selections: [
+          {
+            selectionId: fixture.selectionYes.id,
+            orderMode: 'limit',
+            amountUsd: 15,
+            limitPrice: 0.56,
+            orderType: 'GTC',
+          },
+        ],
+      })
+      .expect(201);
+    const previewBody = previewResponse.body as ApiResponse<OrderPreviewResponse>;
+    const idempotencyKey = '00000000-0000-4000-8000-000000000202';
+
+    await request(httpServer)
+      .post('/api/v1/orders/submit')
+      .set('authorization', `Bearer ${accessToken}`)
+      .send({
+        intentId: previewBody.data.intentId,
+        executionMode: 'dry_run',
+        idempotencyKey,
+        signedOrders: [],
+      })
+      .expect(201);
+
+    const conflictResponse = await request(httpServer)
+      .post('/api/v1/orders/submit')
+      .set('authorization', `Bearer ${accessToken}`)
+      .send({
+        intentId: previewBody.data.intentId,
+        executionMode: 'dry_run',
+        idempotencyKey,
+        signedOrders: [{ orderId: 'different-payload' }],
+      })
+      .expect(409);
+    const conflictBody = conflictResponse.body as ApiErrorResponse;
+
+    expect(conflictBody.error).toMatchObject({
+      code: 'IDEMPOTENCY_CONFLICT',
+      message: 'Idempotency key was already used with a different request body',
+    });
+    expect(conflictBody.requestId).toBeTruthy();
+  });
+
+  it('rejects submit after the order preview expires without creating a submission', async () => {
+    const previewResponse = await request(httpServer)
+      .post('/api/v1/orders/preview')
+      .set('authorization', `Bearer ${accessToken}`)
+      .send({
+        scriptId: fixture.script.id,
+        executionMode: 'dry_run',
+        selections: [
+          {
+            selectionId: fixture.selectionYes.id,
+            orderMode: 'limit',
+            amountUsd: 15,
+            limitPrice: 0.56,
+            orderType: 'GTC',
+          },
+        ],
+      })
+      .expect(201);
+    const previewBody = previewResponse.body as ApiResponse<OrderPreviewResponse>;
+
+    await prisma.orderIntent.update({
+      where: { id: previewBody.data.intentId },
+      data: { previewExpiresAt: new Date(Date.now() - 1_000) },
+    });
+
+    const expiredResponse = await request(httpServer)
+      .post('/api/v1/orders/submit')
+      .set('authorization', `Bearer ${accessToken}`)
+      .send({
+        intentId: previewBody.data.intentId,
+        executionMode: 'dry_run',
+        idempotencyKey: '00000000-0000-4000-8000-000000000303',
+        signedOrders: [],
+      })
+      .expect(409);
+    const expiredBody = expiredResponse.body as ApiErrorResponse;
+
+    expect(expiredBody.error).toMatchObject({
+      code: 'ORDER_PREVIEW_EXPIRED',
+      message: 'Order preview has expired',
+    });
+    await expect(
+      prisma.orderSubmission.count({
+        where: { orderIntentId: previewBody.data.intentId },
+      }),
+    ).resolves.toBe(0);
   });
 });

@@ -22,6 +22,11 @@
     "test:api": "npm --workspace @causeway/api run test",
     "test:api:integration": "npm --workspace @causeway/api run test:integration",
     "test:api:e2e": "npm --workspace @causeway/api run test:e2e",
+    "smoke:api:polymarket": "npm --workspace @causeway/api run smoke:polymarket",
+    "smoke:api:ai": "npm --workspace @causeway/api run smoke:ai",
+    "smoke:api:real-orders": "npm --workspace @causeway/api run smoke:real-orders",
+    "quality:api": "npm run db:generate && npm run build:api && npm run lint:api && npm run test:api && npm audit --omit=dev",
+    "quality:api:full": "npm run quality:api && npm run test:api:integration && npm run test:api:e2e",
     "db:generate": "npm --workspace @causeway/api run db:generate",
     "db:migrate": "npm --workspace @causeway/api run db:migrate",
     "db:deploy": "npm --workspace @causeway/api run db:deploy"

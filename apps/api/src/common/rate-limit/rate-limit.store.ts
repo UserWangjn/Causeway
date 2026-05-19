@@ -7,4 +7,5 @@ export type RateLimitHit = {
 
 export interface RateLimitStore {
   hit(key: string, windowMs: number): Promise<RateLimitHit>;
+  healthCheck(): Promise<void>;
 }
