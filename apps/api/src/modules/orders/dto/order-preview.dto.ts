@@ -1,19 +1,26 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
+  ArrayMaxSize,
   IsArray,
   IsIn,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { TrimString } from '../../../common/decorators/trim-string.decorator';
 
 export class OrderPreviewSelectionDto {
+  @TrimString()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
   selectionId!: string;
 
   @IsIn(['market', 'limit'])
@@ -44,7 +51,10 @@ export class OrderPreviewSelectionDto {
 }
 
 export class OrderPreviewDto {
+  @TrimString()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
   scriptId!: string;
 
   @IsIn(['dry_run', 'real'])
@@ -52,6 +62,7 @@ export class OrderPreviewDto {
 
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(50)
   @ValidateNested({ each: true })
   @Type(() => OrderPreviewSelectionDto)
   selections!: OrderPreviewSelectionDto[];

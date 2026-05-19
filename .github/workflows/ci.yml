@@ -110,5 +110,8 @@ jobs:
       - name: Integration tests
         run: npm run test:api:integration
 
+      - name: Contract tests
+        run: npm run test:api:contract
+
       - name: E2E tests
         run: npm run test:api:e2e

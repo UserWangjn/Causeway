@@ -49,10 +49,26 @@ const MARKET_LIST_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
   },
 });
 
-const MARKET_DETAIL_INCLUDE = Prisma.validator<Prisma.PolymarketMarketInclude>()({
-  event: true,
-  outcomes: {
-    orderBy: { outcomeIndex: 'asc' },
+const MARKET_DETAIL_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
+  ...MARKET_LIST_SELECT,
+  externalMarketId: true,
+  conditionId: true,
+  questionId: true,
+  description: true,
+  rules: true,
+  archived: true,
+  negRisk: true,
+  orderMinSize: true,
+  orderPriceMinTickSize: true,
+  spread: true,
+  event: {
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      icon: true,
+      image: true,
+    },
   },
 });
 
@@ -75,7 +91,7 @@ const NETWORK_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()(
 });
 
 type MarketListRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof MARKET_LIST_SELECT }>;
-type MarketDetailRecord = Prisma.PolymarketMarketGetPayload<{ include: typeof MARKET_DETAIL_INCLUDE }>;
+type MarketDetailRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof MARKET_DETAIL_SELECT }>;
 type NetworkMarketRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof NETWORK_MARKET_SELECT }>;
 
 @Injectable()
@@ -109,7 +125,7 @@ export class MarketsService {
   async getMarket(marketId: string) {
     const market = await this.prisma.polymarketMarket.findUnique({
       where: { id: marketId },
-      include: MARKET_DETAIL_INCLUDE,
+      select: MARKET_DETAIL_SELECT,
     });
     if (!market) {
       throw new ApiException(HttpStatus.NOT_FOUND, 'MARKET_NOT_FOUND', 'Market was not found');
@@ -120,7 +136,7 @@ export class MarketsService {
   async getMarketBySlug(slug: string) {
     const market = await this.prisma.polymarketMarket.findUnique({
       where: { slug },
-      include: MARKET_DETAIL_INCLUDE,
+      select: MARKET_DETAIL_SELECT,
     });
     if (!market) {
       throw new ApiException(HttpStatus.NOT_FOUND, 'MARKET_NOT_FOUND', 'Market was not found');

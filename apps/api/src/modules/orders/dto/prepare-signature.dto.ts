@@ -1,8 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsEthereumAddress, IsIn, IsInt, IsString, Min } from 'class-validator';
+import { IsEthereumAddress, IsIn, IsInt, IsNotEmpty, IsString, MaxLength, Min } from 'class-validator';
+import { TrimString } from '../../../common/decorators/trim-string.decorator';
 
 export class PrepareSignatureDto {
+  @TrimString()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
   intentId!: string;
 
   @IsIn(['dry_run', 'real'])

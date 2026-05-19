@@ -147,6 +147,14 @@ npm run test:api:e2e
 - 响应结构变化必须同一 PR 更新接口文档和契约测试。
 - fixture 要小而真实，覆盖二元市场和多 outcome 市场。
 
+当前命令：
+
+```powershell
+npm run test:api:contract
+```
+
+当前契约测试已覆盖 market list/detail/network、inference run、script、dry-run order、portfolio summary/orders/positions/trades、positions sync capability unavailable 边界、internal sync runs read model 和 internal monitor refresh 边界。
+
 ### 4.5 External Smoke Tests
 
 覆盖范围：
@@ -285,6 +293,7 @@ npm audit --omit=dev
 
 - 本地可同步至少 1000 个 active markets。
 - market/outcome API 只读取本地数据库。
+- 当前 integration tests 已覆盖 mocked Gamma payload 到真实测试库的 market/outcome 幂等 upsert、outcome index 对齐，以及失败 `SyncRun` 落库。
 
 ### B4：Market API 与市场网络
 
@@ -396,6 +405,8 @@ npm audit --omit=dev
 退出门槛：
 
 - 用户可以查看本地 dry-run 订单和已同步外部持仓，无跨用户泄漏。
+- 默认 test/e2e/contract 环境禁用真实 Polymarket Data API；positions sync 只有 capability available 时才创建同步任务并访问外部 Data API。
+- internal monitor refresh 的 HTTP 契约已覆盖 order status refresh 和 script market snapshot refresh，不伪造成外部能力 available。
 
 ### B8：真实下单 Spike 与 capability 升级
 
@@ -495,6 +506,8 @@ npm run quality:api
 ```powershell
 npm run quality:api:full
 ```
+
+`quality:api:full` 包含 unit、integration、contract 和 e2e 测试。
 
 ## 9. 测试数据策略
 

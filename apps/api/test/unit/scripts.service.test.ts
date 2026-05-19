@@ -83,21 +83,54 @@ describe('ScriptsService', () => {
 
     expect(causalScriptFindFirst).toHaveBeenCalledWith({
       where: { id: 'script_1', userId: 'user_1' },
-      include: {
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        rootMarketId: true,
+        rootOutcomeId: true,
+        graphJson: true,
+        summary: true,
+        createdAt: true,
+        updatedAt: true,
         markets: {
           orderBy: [{ layer: 'asc' }, { createdAt: 'asc' }],
-          include: {
+          select: {
+            id: true,
+            marketId: true,
+            layer: true,
+            confidence: true,
             market: {
-              include: {
+              select: {
+                question: true,
                 outcomes: {
                   orderBy: { outcomeIndex: 'asc' },
+                  select: {
+                    id: true,
+                    label: true,
+                    clobTokenId: true,
+                  },
                 },
               },
             },
             selections: {
               orderBy: { outcomeId: 'asc' },
-              include: {
-                outcome: true,
+              select: {
+                id: true,
+                outcomeId: true,
+                aiAction: true,
+                userAction: true,
+                orderMode: true,
+                limitPrice: true,
+                size: true,
+                amountUsd: true,
+                reason: true,
+                outcome: {
+                  select: {
+                    label: true,
+                    clobTokenId: true,
+                  },
+                },
               },
             },
           },

@@ -35,6 +35,16 @@ The integration fixture creates:
 - one inference run, causal script, script market, and selections;
 - one preview-ready dry-run order intent and idempotent submission.
 
+Polymarket sync integration coverage uses mocked Gamma payloads against the real test database to verify idempotent market/outcome upserts, outcome index alignment, completed `SyncRun` records, and failed `SyncRun` records when retrieval fails.
+
+## Contract Tests
+
+Contract tests boot the Nest application against the same deterministic test database and pin the documented response shapes that the frontend depends on: market reads, inference/script reads, dry-run orders, portfolio reads, disabled positions sync capability, internal sync run read models, and internal monitor refresh boundaries.
+
+```powershell
+npm run test:api:contract
+```
+
 ## E2E Tests
 
 E2E tests should boot the Nest application through `test/support/e2e-app.ts` and mock external clients by default.
@@ -49,7 +59,7 @@ npm run test:api:e2e
 `.github/workflows/ci.yml` runs two lanes:
 
 - `quality`: install, Prisma client generation, Prisma schema validation, lint, unit tests, build, and dependency audit.
-- `database-tests`: PostgreSQL service, Prisma migrations, integration tests, and e2e tests.
+- `database-tests`: PostgreSQL service, Prisma migrations, integration tests, contract tests, and e2e tests.
 
 The CI database URL uses `causeway_test`, matching the safety check in `test/support/prisma-test-client.ts`.
 

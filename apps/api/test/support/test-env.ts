@@ -11,6 +11,7 @@ export function configureTestEnvironment(): void {
   process.env.API_CORS_ORIGINS ??= 'http://localhost:5173,http://127.0.0.1:5173';
   process.env.POLYMARKET_HTTP_TIMEOUT_MS ??= '1000';
   process.env.POLYMARKET_HTTP_RETRIES ??= '0';
+  process.env.POLYMARKET_DATA_API_ENABLED = 'false';
   process.env.POLYMARKET_MARKET_SYNC_ENABLED = 'false';
   process.env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP = 'false';
   process.env.LOG_LEVEL ??= 'warn';

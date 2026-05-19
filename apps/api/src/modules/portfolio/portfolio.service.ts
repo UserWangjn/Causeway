@@ -20,6 +20,106 @@ import { PortfolioTradesQueryDto } from './dto/portfolio-trades-query.dto';
 
 const CASH_BALANCE_UNAVAILABLE_REASON = 'cash balance source is not wired yet';
 
+const PORTFOLIO_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
+  id: true,
+  slug: true,
+  question: true,
+});
+
+const PORTFOLIO_POSITION_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
+  ...PORTFOLIO_MARKET_SELECT,
+  icon: true,
+  image: true,
+});
+
+const PORTFOLIO_OUTCOME_SELECT = Prisma.validator<Prisma.PolymarketOutcomeSelect>()({
+  id: true,
+  label: true,
+  clobTokenId: true,
+});
+
+const PORTFOLIO_POSITION_SELECT = Prisma.validator<Prisma.ExternalPositionSelect>()({
+  marketId: true,
+  outcomeId: true,
+  clobTokenId: true,
+  size: true,
+  avgPrice: true,
+  currentPrice: true,
+  currentValue: true,
+  pnl: true,
+  market: {
+    select: PORTFOLIO_POSITION_MARKET_SELECT,
+  },
+  outcome: {
+    select: PORTFOLIO_OUTCOME_SELECT,
+  },
+});
+
+const PORTFOLIO_ORDER_INTENT_SELECT = Prisma.validator<Prisma.OrderIntentSelect>()({
+  id: true,
+  status: true,
+  executionMode: true,
+  totalAmountUsd: true,
+  createdAt: true,
+  updatedAt: true,
+  orders: {
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      marketId: true,
+      outcomeId: true,
+      clobTokenId: true,
+      side: true,
+      orderMode: true,
+      orderType: true,
+      limitPrice: true,
+      estimatedFillPrice: true,
+      size: true,
+      amountUsd: true,
+      externalOrderId: true,
+      status: true,
+      errorMessage: true,
+      market: {
+        select: PORTFOLIO_MARKET_SELECT,
+      },
+      outcome: {
+        select: PORTFOLIO_OUTCOME_SELECT,
+      },
+    },
+  },
+});
+
+const PORTFOLIO_TRADE_SELECT = Prisma.validator<Prisma.CausewayOrderSelect>()({
+  id: true,
+  orderIntentId: true,
+  marketId: true,
+  outcomeId: true,
+  clobTokenId: true,
+  side: true,
+  orderMode: true,
+  orderType: true,
+  limitPrice: true,
+  estimatedFillPrice: true,
+  size: true,
+  amountUsd: true,
+  externalOrderId: true,
+  status: true,
+  updatedAt: true,
+  orderIntent: {
+    select: {
+      id: true,
+      executionMode: true,
+      status: true,
+    },
+  },
+  market: {
+    select: PORTFOLIO_MARKET_SELECT,
+  },
+  outcome: {
+    select: PORTFOLIO_OUTCOME_SELECT,
+  },
+});
+
 @Injectable()
 export class PortfolioService {
   constructor(
@@ -71,24 +171,7 @@ export class PortfolioService {
     const positions = await this.prisma.externalPosition.findMany({
       where: { userId: user.id },
       orderBy: { syncedAt: 'desc' },
-      include: {
-        market: {
-          select: {
-            id: true,
-            slug: true,
-            question: true,
-            icon: true,
-            image: true,
-          },
-        },
-        outcome: {
-          select: {
-            id: true,
-            label: true,
-            clobTokenId: true,
-          },
-        },
-      },
+      select: PORTFOLIO_POSITION_SELECT,
     });
     const items = positions.flatMap((position) => {
       if (!position.marketId || !position.outcomeId || !position.market || !position.outcome) {
@@ -146,6 +229,15 @@ export class PortfolioService {
   }
 
   async syncPositions(user: CurrentUser) {
+    const capability = this.dataApiClient.getCapability();
+    if (capability.status !== 'available') {
+      throw new ApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'CAPABILITY_UNAVAILABLE',
+        capability.reason ?? 'Polymarket Data API is unavailable',
+      );
+    }
+
     const pageSize = 500;
     const syncRun = await this.prisma.syncRun.create({
       data: {
@@ -288,19 +380,7 @@ export class PortfolioService {
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       take: limit + 1,
-      include: {
-        orders: {
-          orderBy: { createdAt: 'asc' },
-          include: {
-            market: {
-              select: { id: true, slug: true, question: true },
-            },
-            outcome: {
-              select: { id: true, label: true, clobTokenId: true },
-            },
-          },
-        },
-      },
+      select: PORTFOLIO_ORDER_INTENT_SELECT,
     });
     const items = intents.slice(0, limit);
 
@@ -348,21 +428,7 @@ export class PortfolioService {
       where,
       orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
       take: limit + 1,
-      include: {
-        orderIntent: {
-          select: {
-            id: true,
-            executionMode: true,
-            status: true,
-          },
-        },
-        market: {
-          select: { id: true, slug: true, question: true },
-        },
-        outcome: {
-          select: { id: true, label: true, clobTokenId: true },
-        },
-      },
+      select: PORTFOLIO_TRADE_SELECT,
     });
     const items = orders.slice(0, limit);
 

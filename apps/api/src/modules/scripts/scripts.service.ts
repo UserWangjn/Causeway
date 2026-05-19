@@ -6,6 +6,64 @@ import { toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
 import { UpdateOutcomeSelectionDto } from './dto/update-outcome-selection.dto';
 
+const SCRIPT_OUTCOME_SELECT = Prisma.validator<Prisma.PolymarketOutcomeSelect>()({
+  id: true,
+  label: true,
+  clobTokenId: true,
+});
+
+const SCRIPT_MARKET_SELECT = Prisma.validator<Prisma.ScriptMarketSelect>()({
+  id: true,
+  marketId: true,
+  layer: true,
+  confidence: true,
+  market: {
+    select: {
+      question: true,
+      outcomes: {
+        orderBy: { outcomeIndex: 'asc' },
+        select: SCRIPT_OUTCOME_SELECT,
+      },
+    },
+  },
+  selections: {
+    orderBy: { outcomeId: 'asc' },
+    select: {
+      id: true,
+      outcomeId: true,
+      aiAction: true,
+      userAction: true,
+      orderMode: true,
+      limitPrice: true,
+      size: true,
+      amountUsd: true,
+      reason: true,
+      outcome: {
+        select: {
+          label: true,
+          clobTokenId: true,
+        },
+      },
+    },
+  },
+});
+
+const SCRIPT_SELECT = Prisma.validator<Prisma.CausalScriptSelect>()({
+  id: true,
+  title: true,
+  status: true,
+  rootMarketId: true,
+  rootOutcomeId: true,
+  graphJson: true,
+  summary: true,
+  createdAt: true,
+  updatedAt: true,
+  markets: {
+    orderBy: [{ layer: 'asc' }, { createdAt: 'asc' }],
+    select: SCRIPT_MARKET_SELECT,
+  },
+});
+
 @Injectable()
 export class ScriptsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -13,26 +71,7 @@ export class ScriptsService {
   async getScript(user: CurrentUser, scriptId: string) {
     const script = await this.prisma.causalScript.findFirst({
       where: { id: scriptId, userId: user.id },
-      include: {
-        markets: {
-          orderBy: [{ layer: 'asc' }, { createdAt: 'asc' }],
-          include: {
-            market: {
-              include: {
-                outcomes: {
-                  orderBy: { outcomeIndex: 'asc' },
-                },
-              },
-            },
-            selections: {
-              orderBy: { outcomeId: 'asc' },
-              include: {
-                outcome: true,
-              },
-            },
-          },
-        },
-      },
+      select: SCRIPT_SELECT,
     });
     if (!script) {
       throw new ApiException(HttpStatus.NOT_FOUND, 'REQUEST_FAILED', 'Causal script was not found');
@@ -84,6 +123,15 @@ export class ScriptsService {
             userId: user.id,
           },
         },
+      },
+      select: {
+        id: true,
+        userAction: true,
+        orderMode: true,
+        limitPrice: true,
+        size: true,
+        amountUsd: true,
+        reason: true,
       },
     });
     if (!selection) {
@@ -162,18 +210,7 @@ type SelectionState = {
 };
 
 type LoadedScriptMarket = Prisma.ScriptMarketGetPayload<{
-  include: {
-    market: {
-      include: {
-        outcomes: true;
-      };
-    };
-    selections: {
-      include: {
-        outcome: true;
-      };
-    };
-  };
+  select: typeof SCRIPT_MARKET_SELECT;
 }>;
 
 type ScriptGraphResponse = {

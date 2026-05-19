@@ -1,4 +1,4 @@
-import { IsEthereumAddress, IsInt, IsString, Min } from 'class-validator';
+import { IsEthereumAddress, IsInt, IsString, MaxLength, Min } from 'class-validator';
 
 export class AuthVerifyDto {
   @IsEthereumAddress()
@@ -9,8 +9,10 @@ export class AuthVerifyDto {
   chainId!: number;
 
   @IsString()
+  @MaxLength(2048)
   message!: string;
 
   @IsString()
+  @MaxLength(256)
   signature!: string;
 }

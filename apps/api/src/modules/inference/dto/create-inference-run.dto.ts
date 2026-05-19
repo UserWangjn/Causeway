@@ -1,11 +1,18 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { TrimString } from '../../../common/decorators/trim-string.decorator';
 
 export class CreateInferenceRunDto {
+  @TrimString()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
   rootMarketId!: string;
 
+  @TrimString()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
   rootOutcomeId!: string;
 
   @Type(() => Number)
@@ -26,7 +33,10 @@ export class CreateInferenceRunDto {
   @Max(1)
   confidenceThreshold!: number;
 
+  @TrimString()
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
   model!: string;
 
   @IsOptional()

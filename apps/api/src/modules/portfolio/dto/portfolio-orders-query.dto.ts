@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class PortfolioOrdersQueryDto {
   @IsOptional()
@@ -8,6 +8,7 @@ export class PortfolioOrdersQueryDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(2048)
   cursor?: string;
 
   @IsOptional()

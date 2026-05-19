@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
 import { CurrentUser, type CurrentUser as CurrentUserType } from '../../common/decorators/current-user.decorator';
 import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
+import { OrderIntentParamDto } from './dto/order-intent-param.dto';
 import { OrderPreviewDto } from './dto/order-preview.dto';
 import { PrepareSignatureDto } from './dto/prepare-signature.dto';
 import { SubmitOrderDto } from './dto/submit-order.dto';
@@ -26,7 +27,7 @@ export class OrdersController {
   }
 
   @Get('intents/:intentId')
-  getIntent(@CurrentUser() user: CurrentUserType, @Param('intentId') intentId: string) {
-    return this.ordersService.getIntent(user, intentId);
+  getIntent(@CurrentUser() user: CurrentUserType, @Param(createDtoValidationPipe(OrderIntentParamDto)) params: OrderIntentParamDto) {
+    return this.ordersService.getIntent(user, params.intentId);
   }
 }

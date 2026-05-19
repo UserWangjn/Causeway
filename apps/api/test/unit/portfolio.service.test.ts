@@ -233,10 +233,30 @@ describe('PortfolioService', () => {
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       take: 26,
-      include: {
+      select: {
+        id: true,
+        status: true,
+        executionMode: true,
+        totalAmountUsd: true,
+        createdAt: true,
+        updatedAt: true,
         orders: {
           orderBy: { createdAt: 'asc' },
-          include: {
+          select: {
+            id: true,
+            marketId: true,
+            outcomeId: true,
+            clobTokenId: true,
+            side: true,
+            orderMode: true,
+            orderType: true,
+            limitPrice: true,
+            estimatedFillPrice: true,
+            size: true,
+            amountUsd: true,
+            externalOrderId: true,
+            status: true,
+            errorMessage: true,
             market: {
               select: { id: true, slug: true, question: true },
             },
@@ -337,7 +357,15 @@ describe('PortfolioService', () => {
     expect(externalPositionFindMany).toHaveBeenCalledWith({
       where: { userId: 'user_1' },
       orderBy: { syncedAt: 'desc' },
-      include: {
+      select: {
+        marketId: true,
+        outcomeId: true,
+        clobTokenId: true,
+        size: true,
+        avgPrice: true,
+        currentPrice: true,
+        currentValue: true,
+        pnl: true,
         market: {
           select: {
             id: true,
@@ -495,7 +523,7 @@ describe('PortfolioService', () => {
         },
         $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
       },
-      { getCurrentPositions },
+      dataApiAvailable({ getCurrentPositions }),
     );
 
     const result = await service.syncPositions(currentUser());
@@ -626,7 +654,7 @@ describe('PortfolioService', () => {
         },
         $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
       },
-      { getCurrentPositions },
+      dataApiAvailable({ getCurrentPositions }),
     );
 
     const result = await service.syncPositions(currentUser());
@@ -666,7 +694,7 @@ describe('PortfolioService', () => {
           update: syncRunUpdate,
         },
       },
-      { getCurrentPositions },
+      dataApiAvailable({ getCurrentPositions }),
     );
 
     await expect(service.syncPositions(currentUser())).rejects.toThrow('data api unavailable');
@@ -678,6 +706,34 @@ describe('PortfolioService', () => {
         error: 'data api unavailable',
       },
     });
+  });
+
+  it('rejects position sync before creating a run when Data API capability is unavailable', async () => {
+    const getCurrentPositions = vi.fn();
+    const syncRunCreate = vi.fn();
+    const service = createService(
+      {
+        syncRun: {
+          create: syncRunCreate,
+        },
+      },
+      {
+        getCapability: vi.fn().mockReturnValue({
+          status: 'unavailable',
+          reason: 'Polymarket Data API is disabled',
+        }),
+        getCurrentPositions,
+      },
+    );
+
+    await expect(service.syncPositions(currentUser())).rejects.toMatchObject({
+      response: {
+        code: 'CAPABILITY_UNAVAILABLE',
+        message: 'Polymarket Data API is disabled',
+      },
+    });
+    expect(syncRunCreate).not.toHaveBeenCalled();
+    expect(getCurrentPositions).not.toHaveBeenCalled();
   });
 
   it('lists local completed orders as degraded trade history', async () => {
@@ -753,7 +809,22 @@ describe('PortfolioService', () => {
       },
       orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
       take: 26,
-      include: {
+      select: {
+        id: true,
+        orderIntentId: true,
+        marketId: true,
+        outcomeId: true,
+        clobTokenId: true,
+        side: true,
+        orderMode: true,
+        orderType: true,
+        limitPrice: true,
+        estimatedFillPrice: true,
+        size: true,
+        amountUsd: true,
+        externalOrderId: true,
+        status: true,
+        updatedAt: true,
         orderIntent: {
           select: {
             id: true,
@@ -830,6 +901,16 @@ function createService(prisma: unknown, dataApiOverrides: Partial<DataApiClient>
   } as unknown as DataApiClient;
 
   return new PortfolioService(dataApiClient, prisma as PrismaService);
+}
+
+function dataApiAvailable(overrides: Partial<DataApiClient> = {}): Partial<DataApiClient> {
+  return {
+    getCapability: vi.fn().mockReturnValue({
+      status: 'available',
+      reason: null,
+    }),
+    ...overrides,
+  };
 }
 
 function encodeTestCursor(payload: Record<string, unknown>): string {

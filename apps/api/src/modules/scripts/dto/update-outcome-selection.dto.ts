@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsIn, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class UpdateOutcomeSelectionDto {
   @IsOptional()
@@ -31,5 +31,6 @@ export class UpdateOutcomeSelectionDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   reason?: string;
 }
