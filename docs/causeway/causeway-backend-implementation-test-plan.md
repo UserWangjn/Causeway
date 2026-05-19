@@ -23,7 +23,7 @@
 - Polymarket Gamma 同步基础。
 - DB-backed markets、scripts、orders、portfolio、sync 服务边界。
 - `dry_run` 订单预览、提交和幂等基础。
-- AI、CLOB orderbook、real trading 的明确 unavailable capability。
+- AI OpenAI-compatible JSON adapter、CLOB orderbook、real trading 的明确 capability 边界。
 - health/readiness、rate limit、生产环境 secret 校验和 B9 运维手册。
 - API build、lint、test、audit 验证。
 
@@ -377,12 +377,13 @@ npm audit --omit=dev
 
 交付物：
 
-- portfolio summary。
+- portfolio summary，包含空 summary 对最近 positions sync 状态和现金余额 capability 的区分。
 - local orders list。
-- external positions sync adapter。
+- external positions sync adapter，包含 `POLYMARKET_DATA_API_ENABLED` capability gate 和上游错误 wallet query 脱敏。
 - trades/history capability state。
 - order status refresh job boundary。
 - script monitoring refresh boundary。
+- internal sync runs read model，支持过滤和 opaque cursor 分页。
 
 先写测试：
 

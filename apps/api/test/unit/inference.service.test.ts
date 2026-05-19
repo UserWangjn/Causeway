@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CurrentUser } from '../../src/common/decorators/current-user.decorator';
 import type { PrismaService } from '../../src/database/prisma.service';
 import type { AiClientService } from '../../src/integrations/ai/services/ai-client.service';
-import { MOCK_INFERENCE_MODEL } from '../../src/modules/inference/inference-engine';
+import { buildMockInferenceOutput, MOCK_INFERENCE_MODEL } from '../../src/modules/inference/inference-engine';
 import { InferenceService } from '../../src/modules/inference/inference.service';
+import type { InferencePromptInput } from '../../src/modules/inference/inference.types';
 
 describe('InferenceService', () => {
   it('rejects non-mock models when the AI provider is unavailable', async () => {
@@ -31,6 +32,87 @@ describe('InferenceService', () => {
     );
     expect(polymarketMarketFindUnique).not.toHaveBeenCalled();
     expect(inferenceRunCreate).not.toHaveBeenCalled();
+    expect(aiClient.runStructuredInference).not.toHaveBeenCalled();
+  });
+
+  it('uses the configured AI provider for non-mock models', async () => {
+    const scriptMarketCreate = vi.fn().mockResolvedValueOnce({ id: 'script_market_root' }).mockResolvedValueOnce({
+      id: 'script_market_candidate',
+    });
+    const tx = {
+      causalScript: {
+        create: vi.fn().mockResolvedValue({ id: 'script_1' }),
+      },
+      scriptMarket: {
+        create: scriptMarketCreate,
+        update: vi.fn(),
+      },
+      scriptOutcomeSelection: {
+        create: vi.fn(),
+      },
+      polymarketOutcome: {
+        findUnique: vi.fn().mockResolvedValue({
+          bestAsk: '0.5',
+          price: '0.45',
+          lastTradePrice: null,
+        }),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const aiClient = {
+      getCapability: vi.fn().mockReturnValue({
+        status: 'available',
+        reason: null,
+        model: 'gpt-test',
+      }),
+      runStructuredInference: vi.fn((input: InferencePromptInput) => Promise.resolve(buildMockInferenceOutput(input))),
+    };
+    const service = createService({
+      polymarketMarket: {
+        findUnique: vi.fn().mockResolvedValue(rootMarket()),
+        findMany: vi.fn().mockResolvedValue([candidateMarket()]),
+      },
+      inferenceRun: {
+        create: vi.fn().mockResolvedValue({ id: 'run_1' }),
+        update: vi.fn(),
+      },
+      inferenceCacheEntry: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        upsert: vi.fn(),
+      },
+      $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
+    }, aiClient);
+
+    const result = await service.createRun(currentUser(), createRunDto('gpt-test'));
+
+    expect(result).toMatchObject({
+      runId: 'run_1',
+      status: 'completed',
+      scriptId: 'script_1',
+    });
+    expect(aiClient.runStructuredInference).toHaveBeenCalledWith(expect.any(Object), { model: 'gpt-test' });
+  });
+
+  it('rejects non-mock models that do not match the configured provider model', async () => {
+    const aiClient = {
+      getCapability: vi.fn().mockReturnValue({
+        status: 'available',
+        reason: null,
+        model: 'gpt-configured',
+      }),
+      runStructuredInference: vi.fn(),
+    };
+    const service = createService({
+      polymarketMarket: {
+        findUnique: vi.fn(),
+      },
+    }, aiClient);
+
+    await expect(service.createRun(currentUser(), createRunDto('gpt-other'))).rejects.toThrow(
+      'AI model gpt-other is not configured',
+    );
     expect(aiClient.runStructuredInference).not.toHaveBeenCalled();
   });
 

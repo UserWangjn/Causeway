@@ -1,6 +1,12 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, SyncRunStatus } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
+import {
+  decodeOpaqueCursor,
+  encodeOpaqueCursor,
+  invalidPaginationCursor,
+  isRecord,
+} from '../../common/pagination/opaque-cursor';
 import { PrismaService } from '../../database/prisma.service';
 import {
   getGammaMarketSkipReason,
@@ -9,6 +15,7 @@ import {
 } from '../../integrations/polymarket/gamma-normalizer';
 import { GammaClient } from '../../integrations/polymarket/services/gamma.client';
 import { SyncPolymarketDto } from './dto/sync-polymarket.dto';
+import { SyncRunsQueryDto } from './dto/sync-runs-query.dto';
 
 @Injectable()
 export class PolymarketSyncService {
@@ -102,14 +109,29 @@ export class PolymarketSyncService {
     }
   }
 
-  async listRuns() {
+  async listRuns(query: SyncRunsQueryDto = {}) {
+    const limit = query.limit ?? 50;
+    const cursor = decodeSyncRunCursor(query.cursor);
     const runs = await this.prisma.syncRun.findMany({
-      orderBy: { startedAt: 'desc' },
-      take: 50,
+      where: buildSyncRunWhere(query, cursor),
+      select: {
+        id: true,
+        jobType: true,
+        scope: true,
+        status: true,
+        fetchedCount: true,
+        upsertedCount: true,
+        error: true,
+        startedAt: true,
+        finishedAt: true,
+      },
+      orderBy: [{ startedAt: 'desc' }, { id: 'asc' }],
+      take: limit + 1,
     });
+    const items = runs.slice(0, limit);
 
     return {
-      items: runs.map((run) => ({
+      items: items.map((run) => ({
         id: run.id,
         jobType: run.jobType,
         scope: run.scope,
@@ -120,8 +142,8 @@ export class PolymarketSyncService {
         startedAt: run.startedAt.toISOString(),
         finishedAt: run.finishedAt?.toISOString() ?? null,
       })),
-      nextCursor: null,
-      hasMore: false,
+      nextCursor: runs.length > limit ? encodeSyncRunCursor(items.at(-1)) : null,
+      hasMore: runs.length > limit,
     };
   }
 
@@ -351,6 +373,86 @@ type MarketIdentityMatch = {
   value: string;
   id: string;
 };
+
+type DecodedSyncRunCursor = {
+  id: string;
+  startedAt: Date;
+};
+
+type SyncRunCursorRecord = {
+  id: string;
+  startedAt?: Date;
+};
+
+function buildSyncRunWhere(
+  query: SyncRunsQueryDto,
+  cursor: DecodedSyncRunCursor | null,
+): Prisma.SyncRunWhereInput {
+  const base: Prisma.SyncRunWhereInput = {
+    jobType: query.jobType,
+    scope: query.scope,
+    status: query.status ? mapSyncRunStatus(query.status) : undefined,
+  };
+  if (!cursor) return base;
+
+  return {
+    AND: [
+      base,
+      {
+        OR: [
+          { startedAt: { lt: cursor.startedAt } },
+          {
+            AND: [
+              { startedAt: cursor.startedAt },
+              { id: { gt: cursor.id } },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function mapSyncRunStatus(status: string): SyncRunStatus {
+  if (status === SyncRunStatus.running) return SyncRunStatus.running;
+  if (status === SyncRunStatus.completed) return SyncRunStatus.completed;
+  if (status === SyncRunStatus.failed) return SyncRunStatus.failed;
+  throw invalidPaginationCursor();
+}
+
+function encodeSyncRunCursor(record: SyncRunCursorRecord | undefined): string | null {
+  if (!record?.startedAt) return null;
+  return encodeOpaqueCursor({
+    v: 1,
+    scope: 'internal_sync_runs',
+    id: record.id,
+    startedAt: record.startedAt.toISOString(),
+  });
+}
+
+function decodeSyncRunCursor(cursor: string | undefined): DecodedSyncRunCursor | null {
+  if (!cursor) return null;
+  const decoded = decodeOpaqueCursor(cursor);
+  if (
+    !isRecord(decoded)
+    || decoded.v !== 1
+    || decoded.scope !== 'internal_sync_runs'
+    || typeof decoded.id !== 'string'
+    || typeof decoded.startedAt !== 'string'
+  ) {
+    throw invalidPaginationCursor();
+  }
+
+  const startedAt = new Date(decoded.startedAt);
+  if (Number.isNaN(startedAt.getTime())) {
+    throw invalidPaginationCursor();
+  }
+
+  return {
+    id: decoded.id,
+    startedAt,
+  };
+}
 
 function readStringField(payload: Record<string, unknown>, field: string): string | null {
   const value = payload[field];

@@ -20,10 +20,13 @@ describe('validateEnv', () => {
     expect(env.LOG_LEVEL).toBe('log');
     expect(env.LOG_HTTP_REQUESTS).toBe('true');
     expect(env.POLYMARKET_MARKET_SYNC_ENABLED).toBe('false');
+    expect(env.POLYMARKET_DATA_API_ENABLED).toBe('true');
     expect(env.POLYMARKET_MARKET_SYNC_INTERVAL_MS).toBe(300_000);
     expect(env.POLYMARKET_MARKET_SYNC_LIMIT).toBe(1000);
     expect(env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS).toBe(900_000);
     expect(env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP).toBe('false');
+    expect(env.AI_HTTP_TIMEOUT_MS).toBe(30_000);
+    expect(env.AI_MAX_OUTPUT_TOKENS).toBe(4_000);
   });
 
   it('requires Redis for production rate limiting', () => {
@@ -161,6 +164,85 @@ describe('validateEnv', () => {
         SUPPORTED_CHAIN_IDS: '137,,80002',
       }),
     ).toThrow(/SUPPORTED_CHAIN_IDS/);
+  });
+
+  it('allows empty AI provider settings but rejects unsafe AI base URLs', () => {
+    const base = {
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+      JWT_SECRET: 'dev-secret',
+      AI_API_KEY: 'provider-secret',
+      AI_MODEL: 'gpt-test',
+    };
+
+    const env = validateEnv({
+      ...base,
+      AI_BASE_URL: '',
+      AI_API_KEY: '',
+      AI_MODEL: '',
+    });
+
+    expect(env.AI_BASE_URL).toBe('');
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        AI_BASE_URL: 'not-a-url',
+      }),
+    ).toThrow(/AI_BASE_URL|Invalid URL/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        AI_BASE_URL: 'https://provider.test/v1?api_key=secret',
+      }),
+    ).toThrow(/AI_BASE_URL/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        AI_BASE_URL: 'https://user:pass@provider.test/v1',
+      }),
+    ).toThrow(/AI_BASE_URL/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        AI_BASE_URL: 'http://provider.test/v1',
+      }),
+    ).toThrow(/AI_BASE_URL/);
+  });
+
+  it('allows local HTTP AI providers outside production but requires HTTPS in production', () => {
+    const base = {
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+      JWT_SECRET: 'dev-secret',
+      AI_BASE_URL: 'http://127.0.0.1:11434/v1',
+      AI_API_KEY: 'provider-secret',
+      AI_MODEL: 'gpt-test',
+    };
+
+    expect(validateEnv(base).AI_BASE_URL).toBe('http://127.0.0.1:11434/v1');
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        NODE_ENV: 'production',
+        JWT_SECRET: productionSecrets.JWT_SECRET,
+        INTERNAL_API_TOKEN: productionSecrets.INTERNAL_API_TOKEN,
+        RATE_LIMIT_ENABLED: 'false',
+      }),
+    ).toThrow(/AI_BASE_URL/);
+
+    expect(
+      validateEnv({
+        ...base,
+        NODE_ENV: 'production',
+        JWT_SECRET: productionSecrets.JWT_SECRET,
+        INTERNAL_API_TOKEN: productionSecrets.INTERNAL_API_TOKEN,
+        RATE_LIMIT_ENABLED: 'false',
+        AI_BASE_URL: 'https://provider.test/v1',
+      }).AI_BASE_URL,
+    ).toBe('https://provider.test/v1');
   });
 
   it('rejects unsafe market sync scheduler settings', () => {

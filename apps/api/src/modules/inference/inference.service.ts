@@ -29,11 +29,21 @@ export class InferenceService {
   async createRun(user: CurrentUser, dto: CreateInferenceRunDto) {
     if (dto.model !== MOCK_INFERENCE_MODEL) {
       const capability = this.aiClient.getCapability();
-      throw new ApiException(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        'CAPABILITY_UNAVAILABLE',
-        capability.reason ?? 'AI inference client is unavailable',
-      );
+      if (capability.status !== 'available') {
+        throw new ApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          'CAPABILITY_UNAVAILABLE',
+          capability.reason ?? 'AI inference client is unavailable',
+        );
+      }
+      if (capability.model !== dto.model) {
+        throw new ApiException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          'CAPABILITY_UNAVAILABLE',
+          `AI model ${dto.model} is not configured`,
+          { configuredModel: capability.model },
+        );
+      }
     }
 
     const root = await this.loadRootMarket(dto.rootMarketId, dto.rootOutcomeId);
@@ -206,7 +216,7 @@ export class InferenceService {
     const output =
       dto.model === MOCK_INFERENCE_MODEL
         ? buildMockInferenceOutput(promptInput)
-        : await this.aiClient.runStructuredInference<AiInferenceOutput>(promptInput);
+        : await this.aiClient.runStructuredInference<AiInferenceOutput>(promptInput, { model: dto.model });
     return { output, cacheHit: false };
   }
 

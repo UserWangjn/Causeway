@@ -18,6 +18,8 @@ import { DataApiClient } from '../../integrations/polymarket/services/data-api.c
 import { PortfolioOrdersQueryDto } from './dto/portfolio-orders-query.dto';
 import { PortfolioTradesQueryDto } from './dto/portfolio-trades-query.dto';
 
+const CASH_BALANCE_UNAVAILABLE_REASON = 'cash balance source is not wired yet';
+
 @Injectable()
 export class PortfolioService {
   constructor(
@@ -43,17 +45,25 @@ export class PortfolioService {
     const openPositionsValue = sumNullable(positions.map((position) => position.currentValue));
     const pnl = sumNullable(positions.map((position) => position.pnl));
     const openOrdersValue = sumNullable(openOrders.map((order) => order.amountUsd));
+    const hasLocalExposure = positions.length > 0 || openOrders.length > 0;
+    const summaryState = hasLocalExposure
+      ? {
+          capability: 'degraded' as const,
+          dataSource: resolvePortfolioSummaryDataSource(positions.length, openOrders.length),
+          error: CASH_BALANCE_UNAVAILABLE_REASON,
+        }
+      : resolveEmptySummaryState(await this.findLatestPositionSync(user.id), capability);
 
     return {
-      capability: positions.length || openOrders.length ? 'degraded' : capability.status,
-      dataSource: resolvePortfolioSummaryDataSource(positions.length, openOrders.length),
+      capability: summaryState.capability,
+      dataSource: summaryState.dataSource,
       cashAvailable: null,
       portfolioValue: openPositionsValue,
       openPositionsValue,
       openOrdersValue,
       pnl,
       refreshedAt: new Date().toISOString(),
-      error: capability.reason,
+      error: summaryState.error,
     };
   }
 
@@ -144,7 +154,6 @@ export class PortfolioService {
         status: 'running',
         metadata: toJson({
           userId: user.id,
-          walletAddress: user.walletAddress,
         }),
       },
     });
@@ -467,6 +476,42 @@ function resolvePortfolioSummaryDataSource(positionCount: number, openOrderCount
   if (positionCount > 0) return 'polymarket_data_api';
   if (openOrderCount > 0) return 'local';
   return 'stub';
+}
+
+function resolveEmptySummaryState(
+  latestSync: { status: string; error: string | null } | null,
+  dataApiCapability: { status: 'available' | 'unavailable'; reason: string | null },
+): {
+  capability: 'degraded' | 'unavailable';
+  dataSource: 'polymarket_data_api' | 'stub';
+  error: string | null;
+} {
+  if (latestSync?.status === 'completed') {
+    return {
+      capability: 'degraded',
+      dataSource: 'polymarket_data_api',
+      error: CASH_BALANCE_UNAVAILABLE_REASON,
+    };
+  }
+  if (latestSync?.status === 'failed') {
+    return {
+      capability: 'unavailable',
+      dataSource: 'stub',
+      error: latestSync.error ?? 'positions sync failed',
+    };
+  }
+  if (dataApiCapability.status === 'unavailable') {
+    return {
+      capability: 'unavailable',
+      dataSource: 'stub',
+      error: dataApiCapability.reason ?? 'positions sync is unavailable',
+    };
+  }
+  return {
+    capability: 'degraded',
+    dataSource: 'stub',
+    error: 'positions have not been synced yet',
+  };
 }
 
 function resolveEmptyPositionState(latestSync: { status: string; error: string | null } | null): {

@@ -315,7 +315,7 @@ type MarketNetwork = {
 }
 ```
 
-说明：一期后端支持 `mock-causeway-v1` 本地 mock 推演模型，用于开发和测试完整脚本链路。该模式可能同步返回 `status="completed"` 和 `scriptId`。真实 AI provider 或持久 worker 未配置时，非 mock 模型必须返回 `503 CAPABILITY_UNAVAILABLE`，不允许伪造成真实 AI 成功或留下不可恢复的后台任务。
+说明：一期后端支持 `mock-causeway-v1` 本地 mock 推演模型，用于开发和测试完整脚本链路。该模式可能同步返回 `status="completed"` 和 `scriptId`。配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 后，非 mock 模型通过 OpenAI-compatible `POST /chat/completions` JSON 输出通道执行；`AI_BASE_URL` 必须是纯 base URL，生产环境必须使用 HTTPS，且请求中的 `model` 必须等于当前 `AI_MODEL`。真实 AI provider 未配置、请求模型不匹配或 provider 输出不能通过后端 schema 校验时，接口返回结构化错误，不允许伪造成真实 AI 成功或留下不可恢复的后台任务。
 
 ### `GET /inference-runs/:runId`
 
@@ -621,7 +621,7 @@ type PortfolioSummary = {
 };
 ```
 
-`openOrdersValue` 只统计已经提交但未完全结束的订单，例如 `submitted`、`partially_filled`。`preview_ready` 和 `user_confirming` 只代表预览或确认中，不能计入资产敞口。
+`openOrdersValue` 只统计已经提交但未完全结束的订单，例如 `submitted`、`partially_filled`。`preview_ready` 和 `user_confirming` 只代表预览或确认中，不能计入资产敞口。现金余额源未接通时，`cashAvailable=null` 且 summary 必须返回 `capability="degraded"` 或 `capability="unavailable"`；不能因为 Data API 可配置就把空 summary 伪造成 `available`。没有本地持仓和订单时，summary 必须结合最近一次 positions sync 状态区分“未同步”“同步失败”和“已同步为空”。
 
 ### `GET /portfolio/positions`
 
@@ -654,7 +654,7 @@ type Position = {
 
 ### `POST /portfolio/positions/sync`
 
-触发当前登录用户的钱包持仓同步。后端从 Polymarket Data API 拉取公开 positions 数据，按 `clobTokenId` 关联本地 outcome，按 `conditionId` 辅助关联 market。同步结果写入本地 `ExternalPosition`，读取接口仍然只读本地数据库。
+触发当前登录用户的钱包持仓同步。后端从 Polymarket Data API 拉取公开 positions 数据，按 `clobTokenId` 关联本地 outcome，按 `conditionId` 辅助关联 market。同步结果写入本地 `ExternalPosition`，读取接口仍然只读本地数据库。`POLYMARKET_DATA_API_ENABLED=false` 时，该接口返回 `503 CAPABILITY_UNAVAILABLE`，不会访问外部 Data API；上游失败响应不得把钱包地址 query 参数暴露给前端。
 
 响应：
 
@@ -816,6 +816,38 @@ type PortfolioTrade = {
 ### `GET /internal/sync/runs`
 
 查看同步任务历史。
+
+查询参数：
+```text
+jobType
+scope
+status=running|completed|failed
+cursor
+limit
+```
+
+`cursor` 为服务端返回的 opaque cursor，按 `startedAt desc, id asc` 稳定分页。`limit` 默认 50，最大 100。
+
+响应：
+```ts
+type SyncRunsResponse = {
+  items: SyncRunItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
+type SyncRunItem = {
+  id: string;
+  jobType: string;
+  scope: string;
+  status: "running" | "completed" | "failed";
+  fetchedCount: number;
+  upsertedCount: number;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
+```
 
 ## 11. Monitor
 

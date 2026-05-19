@@ -24,6 +24,9 @@ export const configuration = () => ({
     gammaBaseUrl: process.env.POLYMARKET_GAMMA_BASE_URL ?? 'https://gamma-api.polymarket.com',
     clobBaseUrl: process.env.POLYMARKET_CLOB_BASE_URL ?? 'https://clob.polymarket.com',
     dataBaseUrl: process.env.POLYMARKET_DATA_BASE_URL ?? 'https://data-api.polymarket.com',
+    dataApi: {
+      enabled: process.env.POLYMARKET_DATA_API_ENABLED !== 'false',
+    },
     httpTimeoutMs: Number(process.env.POLYMARKET_HTTP_TIMEOUT_MS ?? 10_000),
     httpRetries: Number(process.env.POLYMARKET_HTTP_RETRIES ?? 2),
     marketSync: {
@@ -38,6 +41,8 @@ export const configuration = () => ({
     baseUrl: process.env.AI_BASE_URL,
     apiKey: process.env.AI_API_KEY,
     model: process.env.AI_MODEL,
+    httpTimeoutMs: Number(process.env.AI_HTTP_TIMEOUT_MS ?? 30_000),
+    maxOutputTokens: Number(process.env.AI_MAX_OUTPUT_TOKENS ?? 4_000),
   },
   orders: {
     enableRealOrders: process.env.ENABLE_REAL_ORDERS === 'true',

@@ -31,6 +31,19 @@ const PLACEHOLDER_SECRET_FRAGMENTS = [
   'replace-me',
   'replace-with',
 ];
+const aiBaseUrlSchema = z.preprocess(
+  (value) => (typeof value === 'string' ? value.trim() : value),
+  z
+    .union([
+      z.literal(''),
+      z.string().url().refine(hasNoUnsafeUrlParts, {
+        message: 'AI_BASE_URL must not include credentials, query parameters, or fragments',
+      }).refine(hasSupportedAiBaseUrlProtocol, {
+        message: 'AI_BASE_URL must use https, or http only for local loopback development',
+      }),
+    ])
+    .optional(),
+);
 
 const envSchema = z
   .object({
@@ -49,6 +62,7 @@ const envSchema = z
     POLYMARKET_GAMMA_BASE_URL: z.string().url().default('https://gamma-api.polymarket.com'),
     POLYMARKET_CLOB_BASE_URL: z.string().url().default('https://clob.polymarket.com'),
     POLYMARKET_DATA_BASE_URL: z.string().url().default('https://data-api.polymarket.com'),
+    POLYMARKET_DATA_API_ENABLED: z.enum(['true', 'false']).default('true'),
     POLYMARKET_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
     POLYMARKET_HTTP_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
     POLYMARKET_MARKET_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
@@ -56,9 +70,11 @@ const envSchema = z
     POLYMARKET_MARKET_SYNC_LIMIT: z.coerce.number().int().min(1).max(1000).default(1000),
     POLYMARKET_MARKET_SYNC_LOCK_TTL_MS: z.coerce.number().int().min(60_000).default(900_000),
     POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP: z.enum(['true', 'false']).default('false'),
-    AI_BASE_URL: z.string().optional(),
+    AI_BASE_URL: aiBaseUrlSchema,
     AI_API_KEY: z.string().optional(),
     AI_MODEL: z.string().optional(),
+    AI_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+    AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(16_000).default(4_000),
     ENABLE_REAL_ORDERS: z.enum(['true', 'false']).default('false'),
     DRY_RUN: z.enum(['true', 'false']).default('true'),
     INTERNAL_API_TOKEN: z.string().optional(),
@@ -93,6 +109,14 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ['REDIS_URL'],
         message: 'REDIS_URL is required for production rate limiting',
+      });
+    }
+
+    if (value.AI_BASE_URL && !isHttpsUrl(value.AI_BASE_URL)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AI_BASE_URL'],
+        message: 'AI_BASE_URL must use https in production',
       });
     }
   });
@@ -167,4 +191,23 @@ function isValidSupportedChainIds(value: string): boolean {
     const chainId = Number(part);
     return Number.isSafeInteger(chainId) && chainId > 0;
   });
+}
+
+function hasNoUnsafeUrlParts(value: string): boolean {
+  const url = new URL(value);
+  return !url.username && !url.password && !url.search && !url.hash;
+}
+
+function hasSupportedAiBaseUrlProtocol(value: string): boolean {
+  const url = new URL(value);
+  return url.protocol === 'https:' || (url.protocol === 'http:' && isLoopbackHostname(url.hostname));
+}
+
+function isHttpsUrl(value: string): boolean {
+  return new URL(value).protocol === 'https:';
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
 }

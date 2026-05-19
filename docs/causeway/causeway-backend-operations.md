@@ -69,6 +69,10 @@ $env:AI_MODEL="<model>"
 npm run smoke:api:ai
 ```
 
+API 推演接口使用同一组 AI provider 配置。`AI_BASE_URL` 必须是纯 base URL，不得包含 credentials、query 参数或 fragment；生产环境必须使用 HTTPS，开发/测试环境只允许 localhost/loopback provider 使用 HTTP。非 mock `model` 必须等于 `AI_MODEL`，provider 调用使用 OpenAI-compatible `POST /chat/completions`，并由 `AI_HTTP_TIMEOUT_MS` 和 `AI_MAX_OUTPUT_TOKENS` 控制请求边界。
+
+Portfolio position sync 默认通过 Polymarket Data API 拉取公开 positions。需要保持本地只读或外部 Data API 不可用时，将 `POLYMARKET_DATA_API_ENABLED=false`；此时持仓同步返回 `503 CAPABILITY_UNAVAILABLE`。Data API 上游错误响应只允许暴露脱敏后的 endpoint，不记录或返回钱包地址 query 参数。
+
 `smoke:api:polymarket` 会读取真实 Gamma market，并使用一个 CLOB token id 检查只读 order book。可以通过 `SMOKE_CLOB_TOKEN_ID` 指定固定 token。`smoke:api:real-orders` 只保留安全边界；真实订单 Spike 通过前不会提交订单。
 
 ## 5. 生产部署流程

@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Inject, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Post, Query, UseGuards } from '@nestjs/common';
 import { InternalRoute } from '../../common/decorators/internal-route.decorator';
 import { InternalAuthGuard } from '../../common/guards/internal-auth.guard';
 import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
 import { SyncPolymarketDto } from './dto/sync-polymarket.dto';
+import { SyncRunsQueryDto } from './dto/sync-runs-query.dto';
 import { PolymarketSyncService } from './polymarket-sync.service';
 
 @InternalRoute()
@@ -17,7 +18,7 @@ export class PolymarketSyncController {
   }
 
   @Get('runs')
-  listRuns() {
-    return this.syncService.listRuns();
+  listRuns(@Query(createDtoValidationPipe(SyncRunsQueryDto)) query: SyncRunsQueryDto) {
+    return this.syncService.listRuns(query);
   }
 }

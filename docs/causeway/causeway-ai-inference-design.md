@@ -171,6 +171,18 @@ type AiEdge = {
 - 根节点的 `sourceOutcomeId` 必须等于用户选择的 root outcome。
 - 若一个 market 中多个 outcome 都受到影响，应分别返回 outcome recommendation；edge 连接到最主要的 target outcome。
 
+### 5.1 Provider 接入
+
+一期后端提供 OpenAI-compatible `POST /chat/completions` adapter：
+
+- `AI_BASE_URL`：provider base URL，例如 `https://provider.example.com/v1`；不得包含 credentials、query 参数或 fragment。生产环境必须使用 HTTPS；开发/测试环境只允许 localhost/loopback provider 使用 HTTP。
+- `AI_API_KEY`：provider bearer token。
+- `AI_MODEL`：唯一允许的非 mock 推演模型；请求体中的 `model` 必须完全匹配。
+- `AI_HTTP_TIMEOUT_MS`：provider 请求超时。
+- `AI_MAX_OUTPUT_TOKENS`：结构化输出 token 上限。
+
+默认本地和测试环境可以不配置真实 provider；此时只有 `mock-causeway-v1` 可用。真实 provider 返回结果必须先解析为 JSON，再通过后端 `AiInferenceOutput` schema 和 market/outcome 引用校验，失败则推演任务进入 `failed`，不能生成脚本。
+
 ## 6. Outcome 选择规则
 
 AI 不能只说“美联储降息”，必须对该 Market 下每个可交易 outcome 给出默认动作。

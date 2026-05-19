@@ -45,11 +45,113 @@ describe('PortfolioService', () => {
     });
     expect(result).toMatchObject({
       capability: 'degraded',
+      dataSource: 'polymarket_data_api',
       cashAvailable: null,
       portfolioValue: 12.5,
       openPositionsValue: 12.5,
       openOrdersValue: 25.25,
       pnl: 1.25,
+      error: 'cash balance source is not wired yet',
+    });
+  });
+
+  it('returns degraded empty summary when positions have not been synced yet', async () => {
+    const syncRunFindFirst = vi.fn().mockResolvedValue(null);
+    const service = createService(
+      {
+        externalPosition: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        causewayOrder: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        syncRun: {
+          findFirst: syncRunFindFirst,
+        },
+      },
+      {
+        getCapability: vi.fn().mockReturnValue({
+          status: 'available',
+          reason: null,
+        }),
+      },
+    );
+
+    const result = await service.summary(currentUser());
+
+    expect(syncRunFindFirst).toHaveBeenCalledWith({
+      where: {
+        jobType: 'portfolio_positions_sync',
+        scope: 'portfolio_positions',
+        metadata: {
+          path: ['userId'],
+          equals: 'user_1',
+        },
+      },
+      orderBy: { startedAt: 'desc' },
+      select: {
+        status: true,
+        error: true,
+      },
+    });
+    expect(result).toMatchObject({
+      capability: 'degraded',
+      dataSource: 'stub',
+      cashAvailable: null,
+      portfolioValue: null,
+      openPositionsValue: null,
+      openOrdersValue: null,
+      pnl: null,
+      error: 'positions have not been synced yet',
+    });
+  });
+
+  it('keeps empty summary degraded after a completed empty position sync because cash balance is unavailable', async () => {
+    const service = createService({
+      externalPosition: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      causewayOrder: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      syncRun: {
+        findFirst: vi.fn().mockResolvedValue({
+          status: 'completed',
+          error: null,
+        }),
+      },
+    });
+
+    const result = await service.summary(currentUser());
+
+    expect(result).toMatchObject({
+      capability: 'degraded',
+      dataSource: 'polymarket_data_api',
+      cashAvailable: null,
+      error: 'cash balance source is not wired yet',
+    });
+  });
+
+  it('returns unavailable empty summary when position sync capability is unavailable', async () => {
+    const service = createService({
+      externalPosition: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      causewayOrder: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      syncRun: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+    });
+
+    const result = await service.summary(currentUser());
+
+    expect(result).toMatchObject({
+      capability: 'unavailable',
+      dataSource: 'stub',
+      cashAvailable: null,
+      error: 'fixture data api unavailable',
     });
   });
 
@@ -410,7 +512,6 @@ describe('PortfolioService', () => {
         status: 'running',
         metadata: {
           userId: 'user_1',
-          walletAddress: '0x1111111111111111111111111111111111111111',
         },
       },
     });

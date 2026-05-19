@@ -221,6 +221,96 @@ describe('PolymarketSyncService', () => {
       },
     });
   });
+
+  it('lists sync runs with filters and an opaque pagination cursor', async () => {
+    const syncRunFindMany = vi.fn().mockResolvedValue([
+      syncRunRecord('run_1', '2026-05-18T00:00:00.000Z'),
+      syncRunRecord('run_2', '2026-05-17T00:00:00.000Z'),
+      syncRunRecord('run_3', '2026-05-16T00:00:00.000Z'),
+    ]);
+    const service = new PolymarketSyncService(
+      {} as unknown as GammaClient,
+      {
+        syncRun: {
+          findMany: syncRunFindMany,
+        },
+      } as unknown as PrismaService,
+    );
+    const cursor = encodeTestCursor({
+      v: 1,
+      scope: 'internal_sync_runs',
+      id: 'run_before',
+      startedAt: '2026-05-19T00:00:00.000Z',
+    });
+
+    const result = await service.listRuns({
+      jobType: 'polymarket_sync',
+      scope: 'markets',
+      status: 'completed',
+      limit: 2,
+      cursor,
+    });
+
+    expect(syncRunFindMany).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          {
+            jobType: 'polymarket_sync',
+            scope: 'markets',
+            status: 'completed',
+          },
+          {
+            OR: [
+              { startedAt: { lt: new Date('2026-05-19T00:00:00.000Z') } },
+              {
+                AND: [
+                  { startedAt: new Date('2026-05-19T00:00:00.000Z') },
+                  { id: { gt: 'run_before' } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      select: {
+        id: true,
+        jobType: true,
+        scope: true,
+        status: true,
+        fetchedCount: true,
+        upsertedCount: true,
+        error: true,
+        startedAt: true,
+        finishedAt: true,
+      },
+      orderBy: [{ startedAt: 'desc' }, { id: 'asc' }],
+      take: 3,
+    });
+    expect(result).toMatchObject({
+      hasMore: true,
+      items: [
+        {
+          id: 'run_1',
+          jobType: 'polymarket_sync',
+          scope: 'markets',
+          status: 'completed',
+          startedAt: '2026-05-18T00:00:00.000Z',
+          finishedAt: null,
+        },
+        {
+          id: 'run_2',
+          startedAt: '2026-05-17T00:00:00.000Z',
+        },
+      ],
+    });
+    expect(result.nextCursor).toBeTruthy();
+    expect(decodeTestCursor(result.nextCursor)).toEqual({
+      v: 1,
+      scope: 'internal_sync_runs',
+      id: 'run_2',
+      startedAt: '2026-05-17T00:00:00.000Z',
+    });
+  });
 });
 
 function gammaMarket(index: number) {
@@ -235,4 +325,27 @@ function gammaMarket(index: number) {
     active: true,
     closed: false,
   };
+}
+
+function syncRunRecord(id: string, startedAt: string) {
+  return {
+    id,
+    jobType: 'polymarket_sync',
+    scope: 'markets',
+    status: 'completed',
+    fetchedCount: 10,
+    upsertedCount: 9,
+    error: null,
+    startedAt: new Date(startedAt),
+    finishedAt: null,
+  };
+}
+
+function encodeTestCursor(payload: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function decodeTestCursor(cursor: string | null): unknown {
+  if (!cursor) return null;
+  return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
 }

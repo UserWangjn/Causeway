@@ -79,6 +79,10 @@ $env:AI_MODEL="<model>"
 npm run smoke:api:ai
 ```
 
+The AI inference path supports OpenAI-compatible `POST /chat/completions` providers when `AI_BASE_URL`, `AI_API_KEY`, and `AI_MODEL` are configured. `AI_BASE_URL` must be a plain base URL without credentials, query parameters, or fragments; production requires HTTPS, while development/test may use HTTP only for localhost or loopback providers. Non-mock inference requests must use the configured `AI_MODEL`; otherwise the API returns `503 CAPABILITY_UNAVAILABLE`. `AI_HTTP_TIMEOUT_MS` and `AI_MAX_OUTPUT_TOKENS` control provider request bounds.
+
+Portfolio position sync uses the public Polymarket Data API when `POLYMARKET_DATA_API_ENABLED=true`. Set `POLYMARKET_DATA_API_ENABLED=false` to keep portfolio reads local-only and make position sync return `503 CAPABILITY_UNAVAILABLE`; upstream Data API errors only expose the redacted endpoint path in API responses.
+
 `npm run smoke:api:real-orders` is intentionally safety-gated and will not submit real orders until the real CLOB Spike is approved and implemented.
 
 The Polymarket market sync scheduler is disabled by default. Enable it explicitly with

@@ -7,11 +7,13 @@ export type DataApiPositionPayload = Record<string, unknown>;
 
 @Injectable()
 export class DataApiClient {
+  private readonly enabled: boolean;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly retries: number;
 
   constructor(@Inject(ConfigService) config: ConfigService) {
+    this.enabled = config.get<boolean>('polymarket.dataApi.enabled', true);
     this.baseUrl = config.get<string>('polymarket.dataBaseUrl', 'https://data-api.polymarket.com');
     this.timeoutMs = config.get<number>('polymarket.httpTimeoutMs', 10_000);
     this.retries = config.get<number>('polymarket.httpRetries', 2);
@@ -21,6 +23,14 @@ export class DataApiClient {
     userAddress: string,
     params: { limit?: number; offset?: number; sizeThreshold?: number } = {},
   ): Promise<DataApiPositionPayload[]> {
+    if (!this.enabled) {
+      throw new ApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'CAPABILITY_UNAVAILABLE',
+        'Polymarket Data API is disabled',
+      );
+    }
+
     let normalizedAddress: string;
     try {
       normalizedAddress = getAddress(userAddress);
@@ -38,6 +48,13 @@ export class DataApiClient {
   }
 
   getCapability() {
+    if (!this.enabled) {
+      return {
+        status: 'unavailable' as const,
+        reason: 'Polymarket Data API is disabled',
+      };
+    }
+
     return {
       status: 'available' as const,
       reason: null,
@@ -48,7 +65,7 @@ export class DataApiClient {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt += 1) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+      const timeout = setTimeout(() => controller.abort(new Error('Data API request timed out')), this.timeoutMs);
       try {
         const response = await fetch(url, {
           headers: {
@@ -70,7 +87,7 @@ export class DataApiClient {
         if (!retryable || attempt === this.retries) {
           throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Data API request failed', {
             status: response.status,
-            url: url.toString(),
+            endpoint: redactUrl(url),
           });
         }
       } catch (error) {
@@ -78,7 +95,8 @@ export class DataApiClient {
         lastError = error;
         if (attempt === this.retries) {
           throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Data API request failed after retries', {
-            url: url.toString(),
+            endpoint: redactUrl(url),
+            cause: summarizeError(error),
           });
         }
       } finally {
@@ -89,7 +107,7 @@ export class DataApiClient {
     }
 
     throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Data API request failed', {
-      cause: lastError instanceof Error ? lastError.message : String(lastError),
+      cause: summarizeError(lastError),
     });
   }
 }
@@ -102,4 +120,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function redactUrl(url: URL): string {
+  const redacted = new URL(url.toString());
+  redacted.username = '';
+  redacted.password = '';
+  redacted.search = '';
+  return redacted.toString();
+}
+
+function summarizeError(error: unknown): string {
+  if (error instanceof Error && error.name) return error.name;
+  return 'UnknownError';
 }
