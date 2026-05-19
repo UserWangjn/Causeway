@@ -28,6 +28,7 @@ import {
   Bot,
   BrainCircuit,
   CheckCircle2,
+  Copy,
   Cpu,
   Download,
   ExternalLink,
@@ -36,6 +37,7 @@ import {
   Globe2,
   Info,
   Landmark,
+  LogOut,
   Pencil,
   Play,
   Plus,
@@ -47,6 +49,9 @@ import {
   Trash2,
   WalletCards,
 } from 'lucide-react'
+import { ConnectButton } from '@rainbow-me/rainbowkit'
+import { useAccount, useDisconnect, useSignMessage, useSwitchChain } from 'wagmi'
+import { supportedChain } from './wallet-config'
 
 type View = 'network' | 'detail' | 'infer' | 'progress' | 'script' | 'scripts'
 
@@ -355,7 +360,7 @@ type BackendScript = {
 
 type InferenceScope = 'news' | 'markets' | 'social' | 'all'
 type InferenceDepth = 1 | 2 | 3
-type InferenceModelPreference = 'auto' | 'deepseek-v4-pro' | 'deepseek-v4-flash'
+type InferenceModelPreference = 'mock-causeway-v1' | 'auto' | 'deepseek-v4-pro' | 'deepseek-v4-flash'
 type ConfidenceMode = 'broad' | 'balanced' | 'strict'
 
 type InferenceSettingsState = {
@@ -371,7 +376,7 @@ type InferenceSettingsState = {
 const defaultInferenceSettings: InferenceSettingsState = {
   scope: 'all',
   timeRange: 'until_close',
-  modelPreference: 'auto',
+  modelPreference: 'mock-causeway-v1',
   confidenceMode: 'balanced',
   depth: 2,
   confidenceThreshold: 0.55,
@@ -461,6 +466,37 @@ type ApiEnvelope<T> = {
   requestId?: string
 }
 
+type AuthNonceResponse = {
+  nonce: string
+  expiresAt: string
+}
+
+type AuthVerifyResponse = {
+  accessToken: string
+  user: {
+    id: string
+    walletAddress: string
+  }
+}
+
+type StoredAuthSession = {
+  accessToken: string
+  walletAddress: string
+  chainId: number
+}
+
+type CausewayAuth = {
+  accessToken: string | null
+  walletAddress: string | null
+  chainId: number | null
+  error: string | null
+  isAuthenticated: boolean
+  isConnected: boolean
+  isSigningIn: boolean
+  signIn: () => Promise<void>
+  signOut: () => void
+}
+
 type BackendMarketNetwork = {
   nodes: Array<{
     id: string
@@ -482,6 +518,8 @@ type BackendMarketNetwork = {
 
 const API_PREFIX = '/api/v1'
 const ACCESS_TOKEN_STORAGE_KEY = 'causeway.accessToken'
+const ACCESS_WALLET_STORAGE_KEY = 'causeway.walletAddress'
+const ACCESS_CHAIN_STORAGE_KEY = 'causeway.chainId'
 
 async function readApiData<T>(response: Response): Promise<T> {
   const payload = await response.json() as ApiEnvelope<T>
@@ -535,7 +573,143 @@ function getAccessToken() {
   return window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY)
 }
 
+function readStoredAuthSession(): StoredAuthSession | null {
+  const accessToken = window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY)
+  const walletAddress = window.localStorage.getItem(ACCESS_WALLET_STORAGE_KEY)
+  const chainId = Number(window.localStorage.getItem(ACCESS_CHAIN_STORAGE_KEY))
+
+  if (!accessToken || !walletAddress || !Number.isFinite(chainId)) return null
+  return { accessToken, walletAddress, chainId }
+}
+
+function storeAuthSession(session: StoredAuthSession) {
+  window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, session.accessToken)
+  window.localStorage.setItem(ACCESS_WALLET_STORAGE_KEY, session.walletAddress)
+  window.localStorage.setItem(ACCESS_CHAIN_STORAGE_KEY, String(session.chainId))
+}
+
+function clearAuthSession() {
+  window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY)
+  window.localStorage.removeItem(ACCESS_WALLET_STORAGE_KEY)
+  window.localStorage.removeItem(ACCESS_CHAIN_STORAGE_KEY)
+}
+
+function sameAddress(left?: string | null, right?: string | null) {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase())
+}
+
+function shortAddress(address?: string | null) {
+  if (!address) return 'Wallet'
+  return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
+
+function walletInitials(address?: string | null) {
+  if (!address) return 'CW'
+  return address.slice(2, 4).toUpperCase()
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function useCausewayAuth(): CausewayAuth {
+  const { address, chainId, isConnected } = useAccount()
+  const { disconnect } = useDisconnect()
+  const { signMessageAsync } = useSignMessage()
+  const { switchChainAsync } = useSwitchChain()
+  const [session, setSession] = useState<StoredAuthSession | null>(() => readStoredAuthSession())
+  const [isSigningIn, setIsSigningIn] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const clearSession = useCallback(() => {
+    clearAuthSession()
+    setSession(null)
+  }, [])
+
+  useEffect(() => {
+    if (!session) return
+    if (!isConnected || !sameAddress(session.walletAddress, address) || session.chainId !== chainId) {
+      const timer = window.setTimeout(clearSession, 0)
+      return () => window.clearTimeout(timer)
+    }
+  }, [address, chainId, clearSession, isConnected, session])
+
+  const signIn = useCallback(async () => {
+    if (!address) {
+      setError('Connect a wallet before signing in.')
+      return
+    }
+
+    setIsSigningIn(true)
+    setError(null)
+
+    try {
+      const activeChainId = chainId === supportedChain.id
+        ? chainId
+        : (await switchChainAsync({ chainId: supportedChain.id })).id
+
+      const noncePayload = await fetch(`${API_PREFIX}/auth/nonce`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, chainId: activeChainId }),
+      }).then((response) => readApiData<AuthNonceResponse>(response))
+
+      const signature = await signMessageAsync({ message: noncePayload.nonce })
+
+      const authPayload = await fetch(`${API_PREFIX}/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          address,
+          chainId: activeChainId,
+          message: noncePayload.nonce,
+          signature,
+        }),
+      }).then((response) => readApiData<AuthVerifyResponse>(response))
+
+      const nextSession = {
+        accessToken: authPayload.accessToken,
+        walletAddress: authPayload.user.walletAddress,
+        chainId: activeChainId,
+      }
+      storeAuthSession(nextSession)
+      setSession(nextSession)
+    } catch (signInError) {
+      const message = errorMessage(signInError)
+      clearSession()
+      setError(message)
+    } finally {
+      setIsSigningIn(false)
+    }
+  }, [address, chainId, clearSession, signMessageAsync, switchChainAsync])
+
+  const signOut = useCallback(() => {
+    clearSession()
+    disconnect()
+  }, [clearSession, disconnect])
+
+  const isAuthenticated = Boolean(
+    session?.accessToken
+    && isConnected
+    && sameAddress(session.walletAddress, address)
+    && session.chainId === chainId,
+  )
+
+  return {
+    accessToken: isAuthenticated ? session?.accessToken ?? null : null,
+    walletAddress: isAuthenticated ? session?.walletAddress ?? null : null,
+    chainId: isAuthenticated ? session?.chainId ?? null : null,
+    error,
+    isAuthenticated,
+    isConnected,
+    isSigningIn,
+    signIn,
+    signOut,
+  }
+}
+
 function inferenceModel(settings: InferenceSettingsState) {
+  if (settings.modelPreference === 'mock-causeway-v1') return 'mock-causeway-v1'
   if (settings.modelPreference === 'deepseek-v4-pro') return 'deepseek-v4-pro'
   return 'deepseek-v4-flash'
 }
@@ -1576,6 +1750,7 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
 }
 
 function App() {
+  const auth = useCausewayAuth()
   const [view, setView] = useState<View>('network')
   const [selectedMarket, setSelectedMarket] = useState<Market>(rootMarket)
   const [inferenceResult, setInferenceResult] = useState<InferenceResult | null>(null)
@@ -1607,17 +1782,18 @@ function App() {
   return (
     <div className={introVisible ? 'app-shell app-intro-active' : 'app-shell'}>
       {introVisible ? <IntroLoader /> : null}
-      <Header activeNav={activeNav} onNavigate={setView} />
+      <Header activeNav={activeNav} auth={auth} onNavigate={setView} />
       <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
         {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
         {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={openInferenceSettings} />}
-        {view === 'infer' && <InferenceSettings initialSettings={inferenceSettings} market={selectedMarket} onBack={() => setView('detail')} onStart={startInference} />}
+        {view === 'infer' && <InferenceSettings auth={auth} initialSettings={inferenceSettings} market={selectedMarket} onBack={() => setView('detail')} onStart={startInference} />}
         {view === 'progress' && (
           <InferenceProgress
             market={selectedMarket}
             onBack={() => setView('infer')}
             onDone={() => setView('script')}
             onResult={setInferenceResult}
+            auth={auth}
             result={inferenceResult}
             settings={inferenceSettings}
           />
@@ -1650,7 +1826,7 @@ function IntroLoader() {
   )
 }
 
-function Header({ activeNav, onNavigate }: { activeNav: string; onNavigate: (view: View) => void }) {
+function Header({ activeNav, auth, onNavigate }: { activeNav: string; auth: CausewayAuth; onNavigate: (view: View) => void }) {
   const navItems = [
     { id: 'network', label: '市场网络', view: 'network' as View },
     { id: 'discover', label: '发现', view: 'infer' as View },
@@ -1684,13 +1860,94 @@ function Header({ activeNav, onNavigate }: { activeNav: string; onNavigate: (vie
         <button className="icon-button has-dot" aria-label="通知" type="button">
           <Bell size={20} />
         </button>
-        <button className="cash-pill" type="button">
-          <WalletCards size={16} />
-          Cash unavailable
-        </button>
-        <div className="avatar">CW</div>
+        <AccountControls auth={auth} />
       </div>
     </header>
+  )
+}
+
+function AccountControls({ auth }: { auth: CausewayAuth }) {
+  const [copied, setCopied] = useState(false)
+
+  const copyWalletAddress = useCallback(async (address?: string | null) => {
+    if (!address) return
+    await navigator.clipboard.writeText(address)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }, [])
+
+  return (
+    <ConnectButton.Custom>
+      {({ account, chain, mounted, openAccountModal, openChainModal, openConnectModal }) => {
+        if (!mounted) {
+          return <button className="cash-pill" type="button" disabled><WalletCards size={16} /> Wallet</button>
+        }
+
+        if (!account) {
+          return (
+            <button className="cash-pill wallet-ready" type="button" onClick={openConnectModal}>
+              <WalletCards size={16} />
+              Connect wallet
+            </button>
+          )
+        }
+
+        if (!chain || chain.unsupported || chain.id !== supportedChain.id) {
+          return (
+            <button className="cash-pill wallet-warning" type="button" onClick={openChainModal}>
+              <WalletCards size={16} />
+              Switch to Polygon
+            </button>
+          )
+        }
+
+        const address = account.address
+        const displayAddress = shortAddress(address)
+        const statusText = auth.isAuthenticated ? 'Signed in' : auth.isSigningIn ? 'Signing...' : 'Sign in'
+
+        return (
+          <div className="account-menu">
+            <button
+              className={auth.isAuthenticated ? 'cash-pill wallet-authed' : 'cash-pill wallet-ready'}
+              type="button"
+              onClick={auth.isAuthenticated ? openAccountModal : auth.signIn}
+              disabled={auth.isSigningIn}
+            >
+              <WalletCards size={16} />
+              {statusText}
+            </button>
+            <button className="avatar" type="button" onClick={auth.isAuthenticated ? openAccountModal : auth.signIn}>
+              {walletInitials(address)}
+            </button>
+            <div className="account-popover">
+              <div className="account-popover-head">
+                <span>{displayAddress}</span>
+                <small>{chain.name}</small>
+              </div>
+              {auth.error ? <p className="account-error">{auth.error}</p> : null}
+              {!auth.isAuthenticated ? (
+                <button className="account-action primary" type="button" onClick={auth.signIn} disabled={auth.isSigningIn}>
+                  <ShieldCheck size={16} />
+                  {auth.isSigningIn ? 'Waiting for signature' : 'Sign message'}
+                </button>
+              ) : null}
+              <button className="account-action" type="button" onClick={() => copyWalletAddress(address)}>
+                <Copy size={16} />
+                {copied ? 'Copied' : 'Copy address'}
+              </button>
+              <button className="account-action" type="button" onClick={openAccountModal}>
+                <WalletCards size={16} />
+                Wallet details
+              </button>
+              <button className="account-action danger" type="button" onClick={auth.signOut}>
+                <LogOut size={16} />
+                Sign out
+              </button>
+            </div>
+          </div>
+        )
+      }}
+    </ConnectButton.Custom>
   )
 }
 
@@ -1936,7 +2193,7 @@ function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () 
     [eventDetail],
   )
   const displayMarket = eventMarkets.length > 1 ? eventToMarket(eventDetail?.event || null, market) : market
-  const detailMarkets = eventMarkets.length > 1 ? eventMarkets : [market]
+  const detailMarkets = eventMarkets.length ? eventMarkets : [market]
   const ruleCopy = marketRuleCopy(displayMarket)
   const primaryMarket = [...detailMarkets].sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))[0] || market
   return (
@@ -2046,9 +2303,19 @@ function timeRangeLabel(range: InferenceSettingsState['timeRange'], market: Mark
 
 function modelPreferenceLabel(model: InferenceModelPreference) {
   return {
+    'mock-causeway-v1': 'Mock Causeway v1',
     auto: 'DeepSeek v4 Pro / Flash',
     'deepseek-v4-pro': 'DeepSeek v4 Pro',
     'deepseek-v4-flash': 'DeepSeek v4 Flash',
+  }[model]
+}
+
+function modelPreferenceHint(model: InferenceModelPreference) {
+  return {
+    'mock-causeway-v1': '使用本地 demo 推演，适合验证前后端流程',
+    auto: '优先使用已配置的推理模型',
+    'deepseek-v4-pro': '适合正式推演，需要后端配置 AI provider',
+    'deepseek-v4-flash': '速度更快，需要后端配置 AI provider',
   }[model]
 }
 
@@ -2063,17 +2330,19 @@ function confidenceModeLabel(mode: ConfidenceMode) {
 function estimateInference(settings: InferenceSettingsState) {
   const scopeCost = settings.scope === 'all' ? 12 : settings.scope === 'markets' ? 5 : 8
   const depthCost = settings.depth * 5
-  const modelCost = settings.modelPreference === 'deepseek-v4-flash' ? 3 : 8
-  const minutes = settings.modelPreference === 'deepseek-v4-flash' ? '1-2 分钟' : settings.depth === 3 ? '3-5 分钟' : '2-3 分钟'
+  const modelCost = settings.modelPreference === 'mock-causeway-v1' ? 1 : settings.modelPreference === 'deepseek-v4-flash' ? 3 : 8
+  const minutes = settings.modelPreference === 'mock-causeway-v1' ? '<1 分钟' : settings.modelPreference === 'deepseek-v4-flash' ? '1-2 分钟' : settings.depth === 3 ? '3-5 分钟' : '2-3 分钟'
   return { minutes, points: scopeCost + depthCost + modelCost }
 }
 
 function InferenceSettings({
+  auth,
   initialSettings,
   market,
   onBack,
   onStart,
 }: {
+  auth: CausewayAuth
   initialSettings: InferenceSettingsState
   market: Market
   onBack: () => void
@@ -2151,11 +2420,12 @@ function InferenceSettings({
             <label className="field">
               <span>AI 模型</span>
               <select value={settings.modelPreference} onChange={(event) => updateSettings({ modelPreference: event.target.value as InferenceModelPreference })}>
+                <option value="mock-causeway-v1">Mock Causeway v1</option>
                 <option value="auto">自动：v4 Pro 优先，Flash 兜底</option>
                 <option value="deepseek-v4-pro">DeepSeek v4 Pro</option>
                 <option value="deepseek-v4-flash">DeepSeek v4 Flash</option>
               </select>
-              <small>{settings.modelPreference === 'deepseek-v4-flash' ? '速度更快，适合快速预览' : '优先使用推理模型，适合正式推演'}</small>
+              <small>{modelPreferenceHint(settings.modelPreference)}</small>
             </label>
             <label className="field">
               <span>置信度偏好</span>
@@ -2205,7 +2475,24 @@ function InferenceSettings({
               <ShieldCheck size={18} /> 预计消耗积分：{estimate.points} 积分
             </span>
           </div>
-          <button className="primary-action inside" type="button" onClick={() => onStart(settings)}>
+          {!auth.isAuthenticated ? (
+            <div className="soft-note auth-note">
+              <ShieldCheck size={18} />
+              AI 推演需要先用钱包签名登录，后端会用 Bearer Token 保护你的脚本、订单和组合数据。
+            </div>
+          ) : null}
+          <button
+            className="primary-action inside"
+            type="button"
+            onClick={() => {
+              if (!auth.isAuthenticated) {
+                void auth.signIn()
+                return
+              }
+              onStart(settings)
+            }}
+            disabled={auth.isSigningIn}
+          >
             <Play size={18} /> 启动 AI 推演
           </button>
         </Card>
@@ -2241,6 +2528,7 @@ function InferenceSettings({
 }
 
 function InferenceProgress({
+  auth,
   market,
   onBack,
   onDone,
@@ -2248,6 +2536,7 @@ function InferenceProgress({
   result,
   settings,
 }: {
+  auth: CausewayAuth
   market: Market
   onBack: () => void
   onDone: () => void
@@ -2267,19 +2556,33 @@ function InferenceProgress({
     if (result?.rootMarket?.id === market.id) {
       return
     }
+    if (!auth.isAuthenticated) {
+      const timer = window.setTimeout(() => {
+        setError('请先连接钱包并签名登录，然后再启动 AI 推演。')
+        setLoading(false)
+      }, 0)
+      return () => window.clearTimeout(timer)
+    }
     const controller = new AbortController()
-    runBackendInference(market, settings, controller.signal)
-      .then((payload) => {
-        onResult(payload)
-      })
-      .catch((fetchError: Error) => {
-        if (fetchError.name !== 'AbortError') setError(fetchError.message)
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
-    return () => controller.abort()
-  }, [market, market.id, onResult, result?.rootMarket?.id, settings])
+    const timer = window.setTimeout(() => {
+      setError(null)
+      setLoading(true)
+      runBackendInference(market, settings, controller.signal)
+        .then((payload) => {
+          onResult(payload)
+        })
+        .catch((fetchError: Error) => {
+          if (fetchError.name !== 'AbortError') setError(fetchError.message)
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false)
+        })
+    }, 0)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [auth.isAuthenticated, market, market.id, onResult, result?.rootMarket?.id, settings])
 
   return (
     <section className="page">

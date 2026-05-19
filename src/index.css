@@ -409,10 +409,131 @@ button {
 
 .avatar {
   width: 36px;
+  border: 0;
   color: #fff;
   background: linear-gradient(135deg, var(--ink), #35577d);
   font-size: 12px;
   font-weight: 800;
+}
+
+.wallet-ready {
+  border-color: rgba(22, 119, 255, 0.28);
+  color: var(--blue);
+  background: #f3f8ff;
+}
+
+.wallet-authed {
+  border-color: rgba(20, 184, 122, 0.28);
+  color: #0f8f62;
+  background: #f0fdf8;
+}
+
+.wallet-warning {
+  border-color: rgba(245, 158, 11, 0.34);
+  color: #a16207;
+  background: #fffbeb;
+}
+
+.account-menu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-popover {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 50;
+  display: grid;
+  width: 248px;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 22px 60px rgba(8, 27, 51, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+  backdrop-filter: blur(16px);
+}
+
+.account-menu:hover .account-popover,
+.account-menu:focus-within .account-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.account-popover-head {
+  display: grid;
+  gap: 2px;
+  padding: 4px 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-popover-head span {
+  font-size: 14px;
+  font-weight: 780;
+}
+
+.account-popover-head small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-error {
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: #991b1b;
+  background: #fef2f2;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.account-action {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.account-action:hover {
+  background: var(--soft);
+}
+
+.account-action.primary {
+  color: var(--blue);
+  background: #f3f8ff;
+}
+
+.account-action.danger {
+  color: #b91c1c;
+}
+
+.auth-note {
+  margin-top: 16px;
+  border-color: rgba(22, 119, 255, 0.22);
+  color: #1e3a8a;
+  background: #eff6ff;
+}
+
+.auth-retry {
+  width: max-content;
+  margin: 0 0 18px;
 }
 
 .app-main {

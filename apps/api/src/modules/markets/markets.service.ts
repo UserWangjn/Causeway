@@ -717,6 +717,7 @@ export class MarketsService {
       rules: market.rules,
       acceptingOrders: market.acceptingOrders,
       outcomes: market.outcomes.map((outcome) => ({
+        outcomeId: outcome.id,
         label: outcome.label,
         price: toNullableNumber(outcome.price),
         tokenId: outcome.clobTokenId,
