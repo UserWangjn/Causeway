@@ -123,8 +123,12 @@ Portfolio position sync uses the public Polymarket Data API when `POLYMARKET_DAT
 Real CLOB submission is safety-gated. Keep `ENABLE_REAL_ORDERS=false` for normal frontend integration. To enable `executionMode="real"`, configure `POLYMARKET_CLOB_API_KEY`, `POLYMARKET_CLOB_API_SECRET`, `POLYMARKET_CLOB_API_PASSPHRASE`, `POLYMARKET_CLOB_API_ADDRESS`, and `POLYMARKET_CLOB_SIGNATURE_TYPE=2`; frontend `prepare-signature` requests must include the user's Gnosis Safe / proxy `funderAddress`. `npm run smoke:api:real-orders` performs preflight validation only and does not submit an order.
 
 The Polymarket market sync scheduler is disabled by default. Enable it explicitly with
-`POLYMARKET_MARKET_SYNC_ENABLED=true`; it runs incremental market syncs using
-`POLYMARKET_MARKET_SYNC_INTERVAL_MS`, `POLYMARKET_MARKET_SYNC_LIMIT`,
-`POLYMARKET_MARKET_SYNC_LOCK_TTL_MS`, and optional `POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP=true`.
-The default market master-data interval is 900000 ms (15 minutes).
-Multiple API instances coordinate through the `SchedulerLock` table so only one instance runs the market sync at a time.
+`POLYMARKET_MARKET_SYNC_ENABLED=true`. `POLYMARKET_MARKET_SYNC_MODE=incremental`
+uses `/markets` with `POLYMARKET_MARKET_SYNC_LIMIT`; `POLYMARKET_MARKET_SYNC_MODE=full`
+uses `/events` discovery and stores all active/open markets returned under active/open events.
+Full sync clears stale flags on seen rows and soft-stales active/open rows not seen in the completed
+discovery so public market APIs and order previews exclude them. Do not run full discovery every
+15 minutes; use a multi-hour interval such as 21600000 ms (6 hours), and use order-book refreshes
+for trading-time freshness. Multiple API instances coordinate through the `SchedulerLock` table so
+only one instance runs the market sync at a time; expired running `SyncRun` rows are recovered on
+startup and before each scheduled run.

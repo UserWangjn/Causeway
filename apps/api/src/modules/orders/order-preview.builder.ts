@@ -9,6 +9,8 @@ export type OrderPreviewContext = {
     id: string;
     active: boolean;
     closed: boolean;
+    archived?: boolean;
+    staleDetectedAt?: Date | string | null;
     acceptingOrders: boolean;
     enableOrderBook: boolean;
     bestAsk: unknown;
@@ -66,7 +68,7 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
   const tickSize = context.orderBook?.tickSize ?? toNullableNumber(context.market.orderPriceMinTickSize);
   const minOrderSize = context.orderBook?.minOrderSize ?? toNullableNumber(context.market.orderMinSize);
 
-  if (!context.market.active || context.market.closed) {
+  if (!context.market.active || context.market.closed || context.market.archived || context.market.staleDetectedAt) {
     errors.push('MARKET_NOT_TRADABLE');
   }
 

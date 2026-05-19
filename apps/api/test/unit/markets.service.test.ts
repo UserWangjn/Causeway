@@ -116,6 +116,8 @@ describe('MarketsService', () => {
           {
             active: true,
             closed: false,
+            archived: false,
+            staleDetectedAt: null,
             OR: [
               { question: { contains: 'Election', mode: 'insensitive' } },
               { slug: { contains: 'Election', mode: 'insensitive' } },
@@ -178,6 +180,7 @@ describe('MarketsService', () => {
         active: true,
         closed: false,
         archived: false,
+        staleDetectedAt: null,
       },
       select: {
         question: true,
@@ -304,6 +307,7 @@ describe('MarketsService', () => {
         active: true,
         closed: false,
         archived: false,
+        staleDetectedAt: null,
       },
       orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
       take: 6,
@@ -333,6 +337,86 @@ describe('MarketsService', () => {
       ],
     });
     expect(result.outcomes.map((outcome) => outcome.tokenId)).toEqual(['token_yes', 'token_no', 'token_other']);
+  });
+
+  it('returns the clicked market separately from its parent event detail', async () => {
+    const selectedMarket = {
+      ...marketRecord('market_1', 'market-one', 'Will selected market resolve?'),
+      description: 'Selected market description',
+      rules: null,
+      orderMinSize: '1',
+      orderPriceMinTickSize: '0.01',
+      event: {
+        id: 'event_1',
+        slug: 'event-one',
+        title: 'Parent Event Title',
+        tags: ['sports'],
+        icon: null,
+        image: null,
+        volume: '100',
+        liquidity: '50',
+        endDate: new Date('2026-12-31T00:00:00.000Z'),
+        syncedAt: new Date('2026-05-18T00:00:00.000Z'),
+        description: 'Parent event description',
+      },
+      outcomes: [outcomeRecord('outcome_yes', 0, 'Yes', 'token_yes', '0.42')],
+    };
+    const eventRecord = {
+      id: 'event_1',
+      slug: 'event-one',
+      title: 'Parent Event Title',
+      description: 'Parent event description',
+      icon: null,
+      image: null,
+      tags: ['sports'],
+      endDate: new Date('2026-12-31T00:00:00.000Z'),
+      volume: '100',
+      liquidity: '50',
+      syncedAt: new Date('2026-05-18T00:00:00.000Z'),
+      markets: [
+        selectedMarket,
+        {
+          ...selectedMarket,
+          id: 'market_2',
+          slug: 'market-two',
+          question: 'Will another market resolve?',
+        },
+      ],
+    };
+    const marketFindUnique = vi.fn().mockResolvedValue(selectedMarket);
+    const eventFindUnique = vi.fn().mockResolvedValue(eventRecord);
+    const service = createService({
+      polymarketMarket: {
+        findUnique: marketFindUnique,
+      },
+      polymarketEvent: {
+        findUnique: eventFindUnique,
+      },
+    });
+
+    const result = await service.getEventDetail({ marketId: 'market_1' });
+
+    expect(result).toMatchObject({
+      event: {
+        id: 'event_1',
+        title: 'Parent Event Title',
+      },
+      selectedMarket: {
+        id: 'market_1',
+        title: 'Will selected market resolve?',
+        eventTitle: 'Parent Event Title',
+      },
+      markets: [
+        {
+          id: 'market_1',
+          title: 'Will selected market resolve?',
+        },
+        {
+          id: 'market_2',
+          title: 'Will another market resolve?',
+        },
+      ],
+    });
   });
 
   it('throws MARKET_NOT_FOUND for missing markets', async () => {

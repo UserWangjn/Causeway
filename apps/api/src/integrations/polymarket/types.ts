@@ -1,4 +1,5 @@
 export type GammaMarketPayload = Record<string, unknown>;
+export type GammaEventPayload = Record<string, unknown>;
 
 export type NormalizedOutcome = {
   outcomeIndex: number;

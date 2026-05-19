@@ -11,6 +11,7 @@ import { PrismaService } from '../../database/prisma.service';
 import {
   getGammaMarketSkipReason,
   normalizeGammaMarket,
+  type NormalizedGammaEvent,
   type NormalizedGammaMarket,
 } from '../../integrations/polymarket/gamma-normalizer';
 import { GammaClient } from '../../integrations/polymarket/services/gamma.client';
@@ -20,6 +21,8 @@ import { SyncRunsQueryDto } from './dto/sync-runs-query.dto';
 @Injectable()
 export class PolymarketSyncService {
   private readonly pageSize = 100;
+  private readonly eventPageSize = 100;
+  private readonly marketUpsertConcurrency = 8;
 
   constructor(
     @Inject(GammaClient)
@@ -49,18 +52,28 @@ export class PolymarketSyncService {
 
     try {
       throwIfSyncAborted(options.abortSignal);
-      const payloads = await this.fetchMarkets(dto.limit ?? 100, mode, options.abortSignal);
-      fetchedCount = payloads.length;
-      throwIfSyncAborted(options.abortSignal);
-      const normalizedResult = this.normalizePayloads(payloads);
-      skippedPayloads = normalizedResult.skippedPayloads;
-
-      for (const market of normalizedResult.normalizedMarkets) {
+      let metadata: Record<string, unknown> = {};
+      if (mode === 'full') {
+        const result = await this.syncFullDiscovery(syncRun.id, dto.limit, options.abortSignal);
+        fetchedCount = result.fetchedCount;
+        upsertedCount = result.upsertedCount;
+        skippedPayloads = result.skippedPayloads;
+        metadata = result.metadata;
+      } else {
+        const payloads = await this.fetchMarkets(dto.limit ?? 100, mode, options.abortSignal);
+        fetchedCount = payloads.length;
         throwIfSyncAborted(options.abortSignal);
-        await this.upsertMarket(market, options.abortSignal);
-        upsertedCount += 1;
+        const normalizedResult = this.normalizePayloads(payloads);
+        skippedPayloads = normalizedResult.skippedPayloads;
+
+        for (const market of normalizedResult.normalizedMarkets) {
+          throwIfSyncAborted(options.abortSignal);
+          await this.upsertMarket(market, { abortSignal: options.abortSignal, seenAt: new Date() });
+          upsertedCount += 1;
+        }
+        throwIfSyncAborted(options.abortSignal);
+        metadata = { pageSize: this.pageSize };
       }
-      throwIfSyncAborted(options.abortSignal);
 
       const completedRun = await this.prisma.syncRun.update({
         where: { id: syncRun.id },
@@ -72,7 +85,7 @@ export class PolymarketSyncService {
           cursor: String(fetchedCount),
           metadata: toJson({
             mode,
-            pageSize: this.pageSize,
+            ...metadata,
             skippedCount: skippedPayloads.length,
             skippedPayloads: skippedPayloads.slice(0, 50),
           }),
@@ -99,7 +112,7 @@ export class PolymarketSyncService {
           error: error instanceof Error ? error.message : String(error),
           metadata: toJson({
             mode,
-            pageSize: this.pageSize,
+            pageSize: mode === 'full' ? this.eventPageSize : this.pageSize,
             skippedCount: skippedPayloads.length,
             skippedPayloads: skippedPayloads.slice(0, 50),
           }),
@@ -194,12 +207,237 @@ export class PolymarketSyncService {
     return payloads;
   }
 
-  private async upsertMarket(market: NormalizedGammaMarket, abortSignal?: AbortSignal): Promise<void> {
+  private async syncFullDiscovery(
+    syncRunId: string,
+    marketLimit: number | undefined,
+    abortSignal?: AbortSignal,
+  ): Promise<FullDiscoveryResult> {
+    const syncStartedAt = new Date();
+    let fetchedCount = 0;
+    let upsertedCount = 0;
+    let eventCount = 0;
+    let pageCount = 0;
+    let skippedPayloads: SkippedGammaPayload[] = [];
+    const completeDiscovery = marketLimit == null;
+    const seenMarketKeys = new Set<string>();
+
+    for (let offset = 0; ; offset += this.eventPageSize) {
+      throwIfSyncAborted(abortSignal);
+      const events = await this.gammaClient.getEvents(
+        {
+          limit: this.eventPageSize,
+          offset,
+          active: true,
+          closed: false,
+        },
+        { signal: abortSignal },
+      );
+      throwIfSyncAborted(abortSignal);
+
+      pageCount += 1;
+      eventCount += events.length;
+      const remaining = marketLimit == null ? Number.POSITIVE_INFINITY : Math.max(0, marketLimit - fetchedCount);
+      const payloads = takeNewMarketPayloads(flattenEventMarketPayloads(events), seenMarketKeys, remaining);
+      fetchedCount += payloads.length;
+
+      const normalizedResult = this.normalizePayloads(payloads);
+      skippedPayloads = skippedPayloads.concat(normalizedResult.skippedPayloads.map((payload) => ({
+        ...payload,
+        index: payload.index + fetchedCount - payloads.length,
+      })));
+
+      const eventIdByExternalId = await this.upsertEventsForMarkets(normalizedResult.normalizedMarkets, syncStartedAt, abortSignal);
+      await mapWithConcurrency(
+        normalizedResult.normalizedMarkets,
+        this.marketUpsertConcurrency,
+        async (market) => {
+          throwIfSyncAborted(abortSignal);
+          await this.upsertMarket(market, {
+            abortSignal,
+            seenAt: syncStartedAt,
+            eventId: market.event ? eventIdByExternalId.get(market.event.externalEventId) ?? null : null,
+            skipEventUpsert: true,
+          });
+        },
+      );
+      upsertedCount += normalizedResult.normalizedMarkets.length;
+
+      await this.prisma.syncRun.update({
+        where: { id: syncRunId },
+        data: {
+          fetchedCount,
+          upsertedCount,
+          cursor: String(offset + events.length),
+          metadata: toJson({
+            mode: 'full',
+            source: 'events',
+            eventPageSize: this.eventPageSize,
+            eventCount,
+            pageCount,
+            uniqueMarketCount: seenMarketKeys.size,
+            skippedCount: skippedPayloads.length,
+            partial: !completeDiscovery,
+          }),
+        },
+      });
+
+      if (events.length < this.eventPageSize || (marketLimit != null && fetchedCount >= marketLimit)) {
+        break;
+      }
+    }
+
+    const stale = completeDiscovery ? await this.markStaleAfterFullDiscovery(syncStartedAt) : { staleMarkets: 0, staleEvents: 0 };
+    return {
+      fetchedCount,
+      upsertedCount,
+      skippedPayloads,
+      metadata: {
+        source: 'events',
+        eventPageSize: this.eventPageSize,
+        eventCount,
+        pageCount,
+        uniqueMarketCount: seenMarketKeys.size,
+        staleMarkets: stale.staleMarkets,
+        staleEvents: stale.staleEvents,
+        partial: !completeDiscovery,
+      },
+    };
+  }
+
+  private async upsertEventsForMarkets(
+    markets: NormalizedGammaMarket[],
+    seenAt: Date,
+    abortSignal?: AbortSignal,
+  ): Promise<Map<string, string>> {
+    const events = new Map<string, NormalizedGammaEvent>();
+    for (const market of markets) {
+      if (market.event) {
+        events.set(market.event.externalEventId, market.event);
+      }
+    }
+
+    await mapWithConcurrency([...events.values()], this.marketUpsertConcurrency, async (event) => {
+      throwIfSyncAborted(abortSignal);
+      await this.upsertEvent(event, seenAt);
+    });
+
+    if (!events.size) return new Map();
+    const rows = await this.prisma.polymarketEvent.findMany({
+      where: {
+        externalEventId: {
+          in: [...events.keys()],
+        },
+      },
+      select: {
+        id: true,
+        externalEventId: true,
+      },
+    });
+    return new Map(rows.map((row) => [row.externalEventId, row.id]));
+  }
+
+  private async upsertEvent(event: NormalizedGammaEvent, seenAt: Date): Promise<string> {
+    const saved = await this.prisma.polymarketEvent.upsert({
+      where: { externalEventId: event.externalEventId },
+      update: {
+        slug: event.slug,
+        title: event.title,
+        description: event.description,
+        image: event.image,
+        icon: event.icon,
+        tags: toJson(event.tags),
+        active: event.active,
+        closed: event.closed,
+        archived: event.archived,
+        restricted: event.restricted,
+        endDate: event.endDate,
+        volume: event.volume,
+        liquidity: event.liquidity,
+        openInterest: event.openInterest,
+        rawPayload: toJson(event.rawPayload),
+        syncedAt: seenAt,
+        lastSeenAt: seenAt,
+        staleDetectedAt: null,
+        staleReason: null,
+      },
+      create: {
+        externalEventId: event.externalEventId,
+        slug: event.slug,
+        title: event.title,
+        description: event.description,
+        image: event.image,
+        icon: event.icon,
+        tags: toJson(event.tags),
+        active: event.active,
+        closed: event.closed,
+        archived: event.archived,
+        restricted: event.restricted,
+        endDate: event.endDate,
+        volume: event.volume,
+        liquidity: event.liquidity,
+        openInterest: event.openInterest,
+        rawPayload: toJson(event.rawPayload),
+        syncedAt: seenAt,
+        lastSeenAt: seenAt,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    return saved.id;
+  }
+
+  private async markStaleAfterFullDiscovery(syncStartedAt: Date): Promise<{ staleMarkets: number; staleEvents: number }> {
+    const staleDetectedAt = new Date();
+    const staleMarkets = await this.prisma.polymarketMarket.updateMany({
+      where: {
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        OR: [
+          { lastSeenAt: null },
+          { lastSeenAt: { lt: syncStartedAt } },
+        ],
+      },
+      data: {
+        acceptingOrders: false,
+        enableOrderBook: false,
+        staleDetectedAt,
+        staleReason: 'not_seen_in_full_discovery',
+      },
+    });
+    const staleEvents = await this.prisma.polymarketEvent.updateMany({
+      where: {
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        OR: [
+          { lastSeenAt: null },
+          { lastSeenAt: { lt: syncStartedAt } },
+        ],
+      },
+      data: {
+        staleDetectedAt,
+        staleReason: 'not_seen_in_full_discovery',
+      },
+    });
+
+    return {
+      staleMarkets: staleMarkets.count,
+      staleEvents: staleEvents.count,
+    };
+  }
+
+  private async upsertMarket(market: NormalizedGammaMarket, options: UpsertMarketOptions = {}): Promise<void> {
+    const { abortSignal, seenAt = new Date(), eventId = null, skipEventUpsert = false } = options;
     throwIfSyncAborted(abortSignal);
     await this.prisma.$transaction(async (tx) => {
       throwIfSyncAborted(abortSignal);
-      const syncedAt = new Date();
-      const event = market.event
+      const syncedAt = seenAt;
+      const event = !skipEventUpsert && market.event
         ? await tx.polymarketEvent.upsert({
             where: { externalEventId: market.event.externalEventId },
             update: {
@@ -219,6 +457,9 @@ export class PolymarketSyncService {
               openInterest: market.event.openInterest,
               rawPayload: toJson(market.event.rawPayload),
               syncedAt,
+              lastSeenAt: syncedAt,
+              staleDetectedAt: null,
+              staleReason: null,
             },
             create: {
               externalEventId: market.event.externalEventId,
@@ -238,13 +479,14 @@ export class PolymarketSyncService {
               openInterest: market.event.openInterest,
               rawPayload: toJson(market.event.rawPayload),
               syncedAt,
+              lastSeenAt: syncedAt,
             },
           })
         : null;
       throwIfSyncAborted(abortSignal);
 
       const marketData = {
-        eventId: event?.id ?? null,
+        eventId: eventId ?? event?.id ?? null,
         externalMarketId: market.externalMarketId,
         conditionId: market.conditionId,
         questionId: market.questionId,
@@ -272,16 +514,14 @@ export class PolymarketSyncService {
         endDate: market.endDate,
         rawPayload: toJson(market.rawPayload),
         syncedAt,
+        lastSeenAt: syncedAt,
+        staleDetectedAt: null,
+        staleReason: null,
       };
-      const existingMarketId = await this.resolveExistingMarketId(tx, market);
-      const savedMarket = existingMarketId
-        ? await tx.polymarketMarket.update({
-            where: { id: existingMarketId },
-            data: marketData,
-          })
-        : await tx.polymarketMarket.create({
-            data: marketData,
-          });
+      const externalMarketId = market.externalMarketId;
+      const savedMarket = externalMarketId
+        ? await this.upsertMarketWithExternalId(tx, externalMarketId, market, marketData)
+        : await this.upsertMarketWithoutExternalId(tx, market, marketData);
 
       for (const outcome of market.outcomes) {
         throwIfSyncAborted(abortSignal);
@@ -307,6 +547,42 @@ export class PolymarketSyncService {
         });
       }
     });
+  }
+
+  private async upsertMarketWithExternalId(
+    tx: Prisma.TransactionClient,
+    externalMarketId: string,
+    market: NormalizedGammaMarket,
+    marketData: Prisma.PolymarketMarketUncheckedCreateInput,
+  ) {
+    try {
+      return await tx.polymarketMarket.upsert({
+        where: { externalMarketId },
+        update: marketData,
+        create: marketData,
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error;
+      }
+      return this.upsertMarketWithoutExternalId(tx, market, marketData);
+    }
+  }
+
+  private async upsertMarketWithoutExternalId(
+    tx: Prisma.TransactionClient,
+    market: NormalizedGammaMarket,
+    marketData: Prisma.PolymarketMarketUncheckedCreateInput,
+  ) {
+    const existingMarketId = await this.resolveExistingMarketId(tx, market);
+    return existingMarketId
+      ? tx.polymarketMarket.update({
+          where: { id: existingMarketId },
+          data: marketData,
+        })
+      : tx.polymarketMarket.create({
+          data: marketData,
+        });
   }
 
   private async resolveExistingMarketId(
@@ -361,11 +637,29 @@ function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
 type SkippedGammaPayload = {
   index: number;
   reason: string;
   externalMarketId: string | null;
   slug: string | null;
+};
+
+type FullDiscoveryResult = {
+  fetchedCount: number;
+  upsertedCount: number;
+  skippedPayloads: SkippedGammaPayload[];
+  metadata: Record<string, unknown>;
+};
+
+type UpsertMarketOptions = {
+  abortSignal?: AbortSignal;
+  seenAt?: Date;
+  eventId?: string | null;
+  skipEventUpsert?: boolean;
 };
 
 type MarketIdentityMatch = {
@@ -459,6 +753,67 @@ function readStringField(payload: Record<string, unknown>, field: string): strin
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return null;
+}
+
+function flattenEventMarketPayloads(events: Record<string, unknown>[]): Record<string, unknown>[] {
+  return events.flatMap((event) => {
+    const markets = event.markets;
+    if (!Array.isArray(markets)) return [];
+    const eventPayload = stripEventMarkets(event);
+    return markets.filter(isRecord).map((market) => ({
+      ...market,
+      event: eventPayload,
+    }));
+  });
+}
+
+function stripEventMarkets(event: Record<string, unknown>): Record<string, unknown> {
+  const { markets: _markets, ...rest } = event;
+  return rest;
+}
+
+function takeNewMarketPayloads(
+  payloads: Record<string, unknown>[],
+  seenMarketKeys: Set<string>,
+  remaining: number,
+): Record<string, unknown>[] {
+  const selected: Record<string, unknown>[] = [];
+  for (const payload of payloads) {
+    if (selected.length >= remaining) break;
+    const marketKey = getMarketPayloadKey(payload);
+    if (marketKey && seenMarketKeys.has(marketKey)) continue;
+    if (marketKey) {
+      seenMarketKeys.add(marketKey);
+    }
+    selected.push(payload);
+  }
+  return selected;
+}
+
+function getMarketPayloadKey(payload: Record<string, unknown>): string | null {
+  const externalMarketId = readStringField(payload, 'id') ?? readStringField(payload, 'marketId');
+  if (externalMarketId) return `externalMarketId:${externalMarketId}`;
+  const conditionId = readStringField(payload, 'conditionId');
+  if (conditionId) return `conditionId:${conditionId}`;
+  const slug = readStringField(payload, 'slug');
+  return slug ? `slug:${slug}` : null;
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      await worker(items[index], index);
+    }
+  }));
 }
 
 function throwIfSyncAborted(signal?: AbortSignal): void {

@@ -93,6 +93,7 @@ export class PolymarketSyncScheduler implements OnModuleInit, OnModuleDestroy {
     let lockHeartbeat: LockHeartbeatRef | undefined;
     let syncPromise: ReturnType<PolymarketSyncService['syncPolymarket']> | undefined;
     try {
+      await this.recoverInterruptedRuns();
       lockAcquired = await this.acquireDistributedLock();
       if (!lockAcquired) {
         return {
@@ -103,12 +104,13 @@ export class PolymarketSyncScheduler implements OnModuleInit, OnModuleDestroy {
       }
       lockHeartbeat = this.startLockHeartbeat(abortController);
 
+      const mode = this.config.get<'incremental' | 'full'>('polymarket.marketSync.mode', 'incremental');
       const limit = this.config.get<number>('polymarket.marketSync.limit', 1000);
       syncPromise = this.syncService.syncPolymarket(
         {
           scope: 'markets',
-          mode: 'incremental',
-          limit,
+          mode,
+          ...(mode === 'incremental' ? { limit } : {}),
         },
         {
           abortSignal: abortController.signal,

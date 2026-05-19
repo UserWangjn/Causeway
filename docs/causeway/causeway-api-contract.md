@@ -351,6 +351,22 @@ eventId
 eventSlug
 ```
 
+Response:
+
+```ts
+type EventDetail = {
+  event: EventSummary | null;
+  selectedMarket: ExplorerMarket | null;
+  markets: ExplorerMarket[];
+  source: "database";
+  generatedAt: string;
+};
+```
+
+When `marketId` is provided, `selectedMarket` is the exact clicked market and its `title` is the market question.
+`event.title` is the parent event/group title. Frontend detail pages should use `selectedMarket.title` as the primary
+market title and `event.title` as the group subtitle.
+
 ### `GET /markets/history`
 
 查询参数：

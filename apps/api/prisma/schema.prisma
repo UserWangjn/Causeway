@@ -162,11 +162,16 @@ model PolymarketEvent {
   openInterest    Decimal?
   rawPayload      Json
   syncedAt        DateTime
+  lastSeenAt      DateTime?
+  staleDetectedAt DateTime?
+  staleReason     String?
   markets         PolymarketMarket[]
 
   @@index([active, closed])
   @@index([volume])
   @@index([syncedAt])
+  @@index([lastSeenAt])
+  @@index([staleDetectedAt])
 }
 
 model PolymarketMarket {
@@ -199,6 +204,9 @@ model PolymarketMarket {
   endDate               DateTime?
   rawPayload            Json
   syncedAt              DateTime
+  lastSeenAt            DateTime?
+  staleDetectedAt       DateTime?
+  staleReason           String?
   event                 PolymarketEvent?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
   outcomes              PolymarketOutcome[]
   snapshots             MarketSnapshot[]
@@ -210,9 +218,12 @@ model PolymarketMarket {
   externalPositions     ExternalPosition[]
 
   @@index([active, closed, acceptingOrders, enableOrderBook])
+  @@index([active, closed, archived, staleDetectedAt])
   @@index([volume24hr])
   @@index([endDate])
   @@index([syncedAt])
+  @@index([lastSeenAt])
+  @@index([staleDetectedAt])
 }
 
 model PolymarketOutcome {

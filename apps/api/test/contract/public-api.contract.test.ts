@@ -148,10 +148,16 @@ describe('documented public API contracts', () => {
       'matchedBy',
     ]);
 
-    const eventDetailData = apiData<{ event: Record<string, unknown> | null; markets: Record<string, unknown>[]; generatedAt: string; source: string }>(
+    const eventDetailData = apiData<{
+      event: Record<string, unknown> | null;
+      selectedMarket: Record<string, unknown> | null;
+      markets: Record<string, unknown>[];
+      generatedAt: string;
+      source: string;
+    }>(
       await request(httpServer).get('/api/v1/events/detail').query({ marketId: fixture.marketBinary.id }).expect(200),
     );
-    expectKeys(eventDetailData, ['event', 'markets', 'generatedAt', 'source']);
+    expectKeys(eventDetailData, ['event', 'selectedMarket', 'markets', 'generatedAt', 'source']);
     expectKeys(readRecord(eventDetailData, 'event'), [
       'id',
       'slug',
@@ -171,6 +177,7 @@ describe('documented public API contracts', () => {
       'marketsCount',
       'syncedAt',
     ]);
+    expectKeys(readRecord(eventDetailData, 'selectedMarket'), ['id', 'slug', 'title', 'eventId', 'eventTitle', 'outcomes']);
     expect(eventDetailData.markets.length).toBeGreaterThan(0);
 
     const historyData = apiData<{ history: Record<string, unknown[]>; generatedAt: string; source: string }>(

@@ -1,7 +1,7 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiException } from '../../../common/errors/api.exception';
-import type { GammaMarketPayload } from '../types';
+import type { GammaEventPayload, GammaMarketPayload } from '../types';
 
 @Injectable()
 export class GammaClient {
@@ -28,7 +28,20 @@ export class GammaClient {
     return this.getJsonArray(url, options);
   }
 
-  private async getJsonArray(url: URL, options: { signal?: AbortSignal }): Promise<GammaMarketPayload[]> {
+  async getEvents(
+    params: { limit: number; offset?: number; active?: boolean; closed?: boolean },
+    options: { signal?: AbortSignal } = {},
+  ): Promise<GammaEventPayload[]> {
+    const url = new URL('/events', this.baseUrl);
+    url.searchParams.set('limit', String(params.limit));
+    url.searchParams.set('offset', String(params.offset ?? 0));
+    if (params.active != null) url.searchParams.set('active', String(params.active));
+    if (params.closed != null) url.searchParams.set('closed', String(params.closed));
+
+    return this.getJsonArray(url, options);
+  }
+
+  private async getJsonArray<T extends Record<string, unknown>>(url: URL, options: { signal?: AbortSignal }): Promise<T[]> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt += 1) {
       throwIfAborted(options.signal);
@@ -55,7 +68,7 @@ export class GammaClient {
           if (!Array.isArray(json)) {
             throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Gamma API returned a non-array body');
           }
-          return json.filter(isRecord);
+          return json.filter(isRecord) as T[];
         }
 
         const retryable = response.status === 429 || response.status >= 500;

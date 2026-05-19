@@ -134,6 +134,7 @@ const EVENT_DETAIL_SELECT = Prisma.validator<Prisma.PolymarketEventSelect>()({
       active: true,
       closed: false,
       archived: false,
+      staleDetectedAt: null,
     },
     orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
     take: 50,
@@ -181,6 +182,7 @@ export class MarketsService {
         active: true,
         closed: false,
         archived: false,
+        staleDetectedAt: null,
       },
       select: {
         question: true,
@@ -234,6 +236,7 @@ export class MarketsService {
           active: true,
           closed: false,
           archived: false,
+          staleDetectedAt: null,
           OR: [
             { question: { contains: q, mode: 'insensitive' } },
             { slug: { contains: q, mode: 'insensitive' } },
@@ -249,6 +252,7 @@ export class MarketsService {
           active: true,
           closed: false,
           archived: false,
+          staleDetectedAt: null,
           OR: [
             { title: { contains: q, mode: 'insensitive' } },
             { slug: { contains: q, mode: 'insensitive' } },
@@ -381,9 +385,11 @@ export class MarketsService {
         throw new ApiException(HttpStatus.NOT_FOUND, 'MARKET_NOT_FOUND', 'Market was not found');
       }
       if (!market.eventId) {
+        const selectedMarket = this.formatExplorerMarketNode(market, 0);
         return {
           event: null,
-          markets: [this.formatExplorerMarketNode(market, 0)],
+          selectedMarket,
+          markets: [selectedMarket],
           source: 'database',
           generatedAt: new Date().toISOString(),
         };
@@ -394,15 +400,17 @@ export class MarketsService {
         select: EVENT_DETAIL_SELECT,
       });
       if (!event) {
+        const selectedMarket = this.formatExplorerMarketNode(market, 0);
         return {
           event: null,
-          markets: [this.formatExplorerMarketNode(market, 0)],
+          selectedMarket,
+          markets: [selectedMarket],
           source: 'database',
           generatedAt: new Date().toISOString(),
         };
       }
 
-      return this.formatEventDetail(event);
+      return this.formatEventDetail(event, market);
     }
 
     const event = await this.prisma.polymarketEvent.findUnique({
@@ -536,9 +544,13 @@ export class MarketsService {
     const includeCategory = options.includeCategory ?? true;
     const search = trimToUndefined(query.q);
     const category = normalizeCategoryFilter(query.category);
+    const closed = parseBoolean(query.closed);
+    const active = parseBoolean(query.active);
     return {
-      active: parseBoolean(query.active),
-      closed: parseBoolean(query.closed),
+      active: active ?? (closed === true ? undefined : true),
+      closed: closed ?? false,
+      archived: false,
+      staleDetectedAt: null,
       OR: search
         ? [
             { question: { contains: search, mode: 'insensitive' } },
@@ -659,8 +671,17 @@ export class MarketsService {
     };
   }
 
-  private formatEventDetail(event: EventDetailRecord) {
+  private formatEventDetail(event: EventDetailRecord, selectedMarket: ExplorerMarketRecord | null = null) {
     const category = readMarketCategoryKey(event.tags, [event.title, event.slug]);
+    const markets = event.markets.map((market, index) => this.formatExplorerMarketNode(market, index));
+    const selectedMarketIndex = selectedMarket
+      ? event.markets.findIndex((market) => market.id === selectedMarket.id)
+      : -1;
+    const selectedMarketNode = selectedMarket
+      ? selectedMarketIndex >= 0
+        ? markets[selectedMarketIndex]
+        : this.formatExplorerMarketNode(selectedMarket, 0)
+      : null;
     return {
       event: {
         id: event.id,
@@ -681,7 +702,8 @@ export class MarketsService {
         marketsCount: event.markets.length,
         syncedAt: event.syncedAt.toISOString(),
       },
-      markets: event.markets.map((market, index) => this.formatExplorerMarketNode(market, index)),
+      selectedMarket: selectedMarketNode,
+      markets,
       source: 'database',
       generatedAt: new Date().toISOString(),
     };
@@ -774,6 +796,7 @@ export class MarketsService {
         active: true,
         closed: false,
         archived: false,
+        staleDetectedAt: null,
       },
       orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
       take: 6,

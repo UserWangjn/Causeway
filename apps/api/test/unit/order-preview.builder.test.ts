@@ -6,6 +6,8 @@ const tradableContext = {
     id: 'market_1',
     active: true,
     closed: false,
+    archived: false,
+    staleDetectedAt: null,
     acceptingOrders: true,
     enableOrderBook: true,
     bestAsk: 0.5,
@@ -149,5 +151,25 @@ describe('buildPreviewOrder', () => {
 
     expect(order.valid).toBe(false);
     expect(order.error).toBe('ORDERBOOK_UNAVAILABLE');
+  });
+
+  it('rejects stale markets even when old trading flags still look enabled', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'market',
+        amountUsd: 10,
+      },
+      {
+        ...tradableContext,
+        market: {
+          ...tradableContext.market,
+          staleDetectedAt: new Date('2026-05-20T00:00:00.000Z'),
+        },
+      },
+    );
+
+    expect(order.valid).toBe(false);
+    expect(order.error).toBe('MARKET_NOT_TRADABLE');
   });
 });

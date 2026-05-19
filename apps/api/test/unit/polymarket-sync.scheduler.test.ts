@@ -114,6 +114,30 @@ describe('PolymarketSyncScheduler', () => {
     });
   });
 
+  it('runs a full market discovery sync without applying the incremental limit', async () => {
+    const { scheduler, syncPolymarket } = createScheduler({
+      'polymarket.marketSync.mode': 'full',
+      'polymarket.marketSync.limit': 250,
+    });
+
+    const result = await scheduler.runOnce('test');
+
+    expect(syncPolymarket).toHaveBeenCalledWith(
+      {
+        scope: 'markets',
+        mode: 'full',
+      },
+      {
+        abortSignal: expect.any(AbortSignal) as AbortSignal,
+      },
+    );
+    expect(result).toEqual({
+      status: 'completed',
+      trigger: 'test',
+      runId: 'sync_run_1',
+    });
+  });
+
   it('renews the distributed lock while a sync is running', async () => {
     vi.useFakeTimers();
     try {
@@ -387,6 +411,8 @@ type SyncRunMock = {
 };
 
 async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();

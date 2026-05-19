@@ -162,6 +162,7 @@ type EventDetail = {
     marketsCount: number | null
     syncedAt: string | null
   } | null
+  selectedMarket?: ApiMarketNode | null
   markets: ApiMarketNode[]
   source: string
   generatedAt: string
@@ -2192,8 +2193,13 @@ function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () 
     () => eventDetail?.markets.map(apiNodeToMarket) || [],
     [eventDetail],
   )
-  const displayMarket = eventMarkets.length > 1 ? eventToMarket(eventDetail?.event || null, market) : market
-  const detailMarkets = eventMarkets.length ? eventMarkets : [market]
+  const selectedEventMarket = useMemo(() => {
+    if (eventDetail?.selectedMarket) return apiNodeToMarket(eventDetail.selectedMarket, 0)
+    return eventMarkets.find((item) => item.id === market.id) || market
+  }, [eventDetail, eventMarkets, market])
+  const eventSummaryMarket = eventMarkets.length > 1 ? eventToMarket(eventDetail?.event || null, market) : selectedEventMarket
+  const displayMarket = selectedEventMarket
+  const detailMarkets = eventMarkets.length > 1 ? eventMarkets : [selectedEventMarket]
   const ruleCopy = marketRuleCopy(displayMarket)
   const primaryMarket = [...detailMarkets].sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))[0] || market
   return (
@@ -2206,7 +2212,8 @@ function MarketDetail({ market, onBack, onInfer }: { market: Market; onBack: () 
             <div>
               <div className="market-page-meta">
                 <span>{displayMarket.officialCategory || displayMarket.category}</span>
-                {eventMarkets.length > 1 ? <span>{detailMarkets.length} 个盘口</span> : displayMarket.eventTitle ? <span>{displayMarket.eventTitle}</span> : null}
+                {eventMarkets.length > 1 ? <span>{displayMarket.eventTitle || eventSummaryMarket.title}</span> : displayMarket.eventTitle ? <span>{displayMarket.eventTitle}</span> : null}
+                {eventMarkets.length > 1 ? <span>{detailMarkets.length} 个盘口</span> : null}
               </div>
               <h1>{displayMarket.title}</h1>
             </div>

@@ -39,6 +39,7 @@ export const configuration = () => ({
     httpRetries: Number(process.env.POLYMARKET_HTTP_RETRIES ?? 2),
     marketSync: {
       enabled: process.env.POLYMARKET_MARKET_SYNC_ENABLED === 'true',
+      mode: process.env.POLYMARKET_MARKET_SYNC_MODE ?? 'incremental',
       intervalMs: Number(process.env.POLYMARKET_MARKET_SYNC_INTERVAL_MS ?? 900_000),
       limit: Number(process.env.POLYMARKET_MARKET_SYNC_LIMIT ?? 1000),
       lockTtlMs: Number(process.env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS ?? 900_000),
