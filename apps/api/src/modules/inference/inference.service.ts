@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { HttpStatus, Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
@@ -34,6 +35,9 @@ const EMERGENCY_PROMPT_EVENT_TEXT_LENGTH = 80;
 const EMERGENCY_PROMPT_OUTCOME_LABEL_LENGTH = 80;
 const MAX_INFERENCE_PROMPT_INPUT_CHARS = 60_000;
 const MAX_AI_RAW_CONTENT_AUDIT_CHARS = 8_000;
+const SCRIPT_PERSIST_TRANSACTION_MAX_WAIT_MS = 5_000;
+const SCRIPT_PERSIST_TRANSACTION_TIMEOUT_MS = 20_000;
+const DEFAULT_SCRIPT_BUY_AMOUNT_USD = '10';
 
 const CANDIDATE_MARKET_INCLUDE = {
   event: true,
@@ -435,6 +439,10 @@ export class InferenceService implements OnModuleDestroy {
     root: LoadedRootMarket,
     output: AiInferenceOutput,
   ) {
+    const outcomePriceById = await this.loadOutcomePriceById(output);
+    const incomingEdgeCountByNodeId = countIncomingEdgesByTarget(output.edges);
+    const scriptMarketIdByNodeId = new Map(output.nodes.map((node) => [node.clientNodeId, randomUUID()]));
+
     return this.prisma.$transaction(async (tx) => {
       const script = await tx.causalScript.create({
         data: {
@@ -450,50 +458,39 @@ export class InferenceService implements OnModuleDestroy {
         },
       });
 
-      const scriptMarketIdByNodeId = new Map<string, string>();
-      for (const node of output.nodes) {
-        const scriptMarket = await tx.scriptMarket.create({
-          data: {
-            scriptId: script.id,
-            marketId: node.marketId,
-            layer: node.layer,
-            impactDirection: node.impactDirection,
-            confidence: node.confidence,
-            reason: node.reason,
-            metadata: toJson({
-              clientNodeId: node.clientNodeId,
-              edgeCount: output.edges.filter((edge) => edge.targetClientNodeId === node.clientNodeId).length,
-            }),
-          },
-        });
-        scriptMarketIdByNodeId.set(node.clientNodeId, scriptMarket.id);
+      await tx.scriptMarket.createMany({
+        data: output.nodes.map((node) => ({
+          id: requireScriptMarketId(scriptMarketIdByNodeId, node.clientNodeId),
+          scriptId: script.id,
+          marketId: node.marketId,
+          parentScriptMarketId: resolveParentScriptMarketId(node, output.edges, scriptMarketIdByNodeId),
+          layer: node.layer,
+          impactDirection: node.impactDirection,
+          confidence: node.confidence,
+          reason: node.reason,
+          metadata: toJson({
+            clientNodeId: node.clientNodeId,
+            edgeCount: incomingEdgeCountByNodeId.get(node.clientNodeId) ?? 0,
+          }),
+        })),
+      });
 
-        for (const recommendation of node.outcomes) {
-          await tx.scriptOutcomeSelection.create({
-            data: {
-              scriptMarketId: scriptMarket.id,
-              outcomeId: recommendation.outcomeId,
-              aiAction: recommendation.aiAction,
-              userAction: recommendation.aiAction === 'buy' ? 'buy' : 'skip',
-              orderMode: 'limit',
-              limitPrice: recommendation.aiAction === 'buy' ? await resolveOutcomePrice(tx, recommendation.outcomeId) : null,
-              amountUsd: recommendation.aiAction === 'buy' ? '10' : '0',
-              confidence: recommendation.confidence,
-              reason: recommendation.reason,
-            },
-          });
-        }
-      }
-
-      for (const node of output.nodes) {
-        const scriptMarketId = scriptMarketIdByNodeId.get(node.clientNodeId);
-        const parentScriptMarketId = resolveParentScriptMarketId(node, output.edges, scriptMarketIdByNodeId);
-        if (!scriptMarketId || !parentScriptMarketId) continue;
-        await tx.scriptMarket.update({
-          where: { id: scriptMarketId },
-          data: { parentScriptMarketId },
-        });
-      }
+      await tx.scriptOutcomeSelection.createMany({
+        data: output.nodes.flatMap((node) => {
+          const scriptMarketId = requireScriptMarketId(scriptMarketIdByNodeId, node.clientNodeId);
+          return node.outcomes.map((recommendation) => ({
+            scriptMarketId,
+            outcomeId: recommendation.outcomeId,
+            aiAction: recommendation.aiAction,
+            userAction: recommendation.aiAction === 'buy' ? 'buy' : 'skip',
+            orderMode: 'limit',
+            limitPrice: recommendation.aiAction === 'buy' ? outcomePriceById.get(recommendation.outcomeId) ?? null : null,
+            amountUsd: recommendation.aiAction === 'buy' ? DEFAULT_SCRIPT_BUY_AMOUNT_USD : '0',
+            confidence: recommendation.confidence,
+            reason: recommendation.reason,
+          }));
+        }),
+      });
 
       await tx.auditEvent.create({
         data: {
@@ -513,7 +510,27 @@ export class InferenceService implements OnModuleDestroy {
       });
 
       return script;
+    }, {
+      maxWait: SCRIPT_PERSIST_TRANSACTION_MAX_WAIT_MS,
+      timeout: SCRIPT_PERSIST_TRANSACTION_TIMEOUT_MS,
     });
+  }
+
+  private async loadOutcomePriceById(output: AiInferenceOutput): Promise<Map<string, string>> {
+    const buyOutcomeIds = collectBuyOutcomeIds(output);
+    if (buyOutcomeIds.length === 0) return new Map();
+
+    const outcomes = await this.prisma.polymarketOutcome.findMany({
+      where: { id: { in: buyOutcomeIds } },
+      select: { id: true, price: true, bestAsk: true, lastTradePrice: true },
+    });
+
+    return new Map(
+      outcomes.flatMap((outcome) => {
+        const price = resolveOutcomePrice(outcome);
+        return price == null ? [] : [[outcome.id, price]];
+      }),
+    );
   }
 
   private async loadRootMarket(rootMarketId: string, rootOutcomeId: string): Promise<LoadedRootMarket> {
@@ -1210,14 +1227,42 @@ function resolveParentScriptMarketId(
   return scriptMarketIdByNodeId.get(parentEdge.sourceClientNodeId) ?? null;
 }
 
-async function resolveOutcomePrice(tx: Prisma.TransactionClient, outcomeId: string): Promise<string | null> {
-  const outcome = await tx.polymarketOutcome.findUnique({
-    where: { id: outcomeId },
-    select: { price: true, bestAsk: true, lastTradePrice: true },
-  });
+function resolveOutcomePrice(outcome: OutcomePriceFields | null | undefined): string | null {
   const price = toNullableNumber(outcome?.bestAsk) ?? toNullableNumber(outcome?.price) ?? toNullableNumber(outcome?.lastTradePrice);
   return price == null ? null : String(price);
 }
+
+function collectBuyOutcomeIds(output: AiInferenceOutput): string[] {
+  const ids = new Set<string>();
+  for (const node of output.nodes) {
+    for (const outcome of node.outcomes) {
+      if (outcome.aiAction === 'buy') ids.add(outcome.outcomeId);
+    }
+  }
+  return [...ids];
+}
+
+function countIncomingEdgesByTarget(edges: AiInferenceOutput['edges']): Map<string, number> {
+  const countByTarget = new Map<string, number>();
+  for (const edge of edges) {
+    countByTarget.set(edge.targetClientNodeId, (countByTarget.get(edge.targetClientNodeId) ?? 0) + 1);
+  }
+  return countByTarget;
+}
+
+function requireScriptMarketId(scriptMarketIdByNodeId: Map<string, string>, clientNodeId: string): string {
+  const id = scriptMarketIdByNodeId.get(clientNodeId);
+  if (!id) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'INFERENCE_FAILED', `Missing generated script market id for ${clientNodeId}`);
+  }
+  return id;
+}
+
+type OutcomePriceFields = {
+  bestAsk: unknown;
+  price: unknown;
+  lastTradePrice: unknown;
+};
 
 function stringTags(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];

@@ -38,31 +38,7 @@ describe('InferenceService', () => {
   });
 
   it('uses the configured AI provider for non-mock models', async () => {
-    const scriptMarketCreate = vi.fn().mockResolvedValueOnce({ id: 'script_market_root' }).mockResolvedValueOnce({
-      id: 'script_market_candidate',
-    });
-    const tx = {
-      causalScript: {
-        create: vi.fn().mockResolvedValue({ id: 'script_1' }),
-      },
-      scriptMarket: {
-        create: scriptMarketCreate,
-        update: vi.fn(),
-      },
-      scriptOutcomeSelection: {
-        create: vi.fn(),
-      },
-      polymarketOutcome: {
-        findUnique: vi.fn().mockResolvedValue({
-          bestAsk: '0.5',
-          price: '0.45',
-          lastTradePrice: null,
-        }),
-      },
-      auditEvent: {
-        create: vi.fn(),
-      },
-    };
+    const tx = createPersistTransactionClient();
     const aiClient = {
       getCapability: vi.fn().mockReturnValue({
         status: 'available',
@@ -84,6 +60,9 @@ describe('InferenceService', () => {
       polymarketMarket: {
         findUnique: vi.fn().mockResolvedValue(rootMarket()),
         findMany: vi.fn().mockResolvedValue([candidateMarket()]),
+      },
+      polymarketOutcome: {
+        findMany: vi.fn().mockResolvedValue(outcomePriceRows()),
       },
       inferenceRun: {
         create: inferenceRunCreate,
@@ -134,31 +113,7 @@ describe('InferenceService', () => {
   });
 
   it('repairs invalid provider output once before completing the run', async () => {
-    const scriptMarketCreate = vi.fn().mockResolvedValueOnce({ id: 'script_market_root' }).mockResolvedValueOnce({
-      id: 'script_market_candidate',
-    });
-    const tx = {
-      causalScript: {
-        create: vi.fn().mockResolvedValue({ id: 'script_1' }),
-      },
-      scriptMarket: {
-        create: scriptMarketCreate,
-        update: vi.fn(),
-      },
-      scriptOutcomeSelection: {
-        create: vi.fn(),
-      },
-      polymarketOutcome: {
-        findUnique: vi.fn().mockResolvedValue({
-          bestAsk: '0.5',
-          price: '0.45',
-          lastTradePrice: null,
-        }),
-      },
-      auditEvent: {
-        create: vi.fn(),
-      },
-    };
+    const tx = createPersistTransactionClient();
     let providerCallCount = 0;
     const aiClient = {
       getCapability: vi.fn().mockReturnValue({
@@ -186,6 +141,9 @@ describe('InferenceService', () => {
       polymarketMarket: {
         findUnique: vi.fn().mockResolvedValue(rootMarket()),
         findMany: vi.fn().mockResolvedValue([candidateMarket()]),
+      },
+      polymarketOutcome: {
+        findMany: vi.fn().mockResolvedValue(outcomePriceRows()),
       },
       inferenceRun: {
         create: inferenceRunCreate,
@@ -227,31 +185,7 @@ describe('InferenceService', () => {
   });
 
   it('repairs invalid provider JSON content once before completing the run', async () => {
-    const scriptMarketCreate = vi.fn().mockResolvedValueOnce({ id: 'script_market_root' }).mockResolvedValueOnce({
-      id: 'script_market_candidate',
-    });
-    const tx = {
-      causalScript: {
-        create: vi.fn().mockResolvedValue({ id: 'script_1' }),
-      },
-      scriptMarket: {
-        create: scriptMarketCreate,
-        update: vi.fn(),
-      },
-      scriptOutcomeSelection: {
-        create: vi.fn(),
-      },
-      polymarketOutcome: {
-        findUnique: vi.fn().mockResolvedValue({
-          bestAsk: '0.5',
-          price: '0.45',
-          lastTradePrice: null,
-        }),
-      },
-      auditEvent: {
-        create: vi.fn(),
-      },
-    };
+    const tx = createPersistTransactionClient();
     let providerCallCount = 0;
     const aiClient = {
       getCapability: vi.fn().mockReturnValue({
@@ -275,6 +209,9 @@ describe('InferenceService', () => {
       polymarketMarket: {
         findUnique: vi.fn().mockResolvedValue(rootMarket()),
         findMany: vi.fn().mockResolvedValue([candidateMarket()]),
+      },
+      polymarketOutcome: {
+        findMany: vi.fn().mockResolvedValue(outcomePriceRows()),
       },
       inferenceRun: {
         create: inferenceRunCreate,
@@ -441,31 +378,7 @@ describe('InferenceService', () => {
   });
 
   it('queues the mock model and completes it through the inference worker', async () => {
-    const scriptMarketCreate = vi.fn().mockResolvedValueOnce({ id: 'script_market_root' }).mockResolvedValueOnce({
-      id: 'script_market_candidate',
-    });
-    const tx = {
-      causalScript: {
-        create: vi.fn().mockResolvedValue({ id: 'script_1' }),
-      },
-      scriptMarket: {
-        create: scriptMarketCreate,
-        update: vi.fn(),
-      },
-      scriptOutcomeSelection: {
-        create: vi.fn(),
-      },
-      polymarketOutcome: {
-        findUnique: vi.fn().mockResolvedValue({
-          bestAsk: '0.5',
-          price: '0.45',
-          lastTradePrice: null,
-        }),
-      },
-      auditEvent: {
-        create: vi.fn(),
-      },
-    };
+    const tx = createPersistTransactionClient();
     let createdInputJson: unknown;
     const inferenceRunCreate = vi.fn((args: InferenceRunCreateArgs) => {
       createdInputJson = args.data.inputJson;
@@ -476,6 +389,9 @@ describe('InferenceService', () => {
       polymarketMarket: {
         findUnique: vi.fn().mockResolvedValue(rootMarket()),
         findMany: vi.fn().mockResolvedValue([candidateMarket()]),
+      },
+      polymarketOutcome: {
+        findMany: vi.fn().mockResolvedValue(outcomePriceRows()),
       },
       inferenceRun: {
         create: inferenceRunCreate,
@@ -520,6 +436,28 @@ describe('InferenceService', () => {
       cacheHit: false,
       scriptId: 'script_1',
     });
+    expect(tx.scriptMarket.createMany).toHaveBeenCalledTimes(1);
+    const selectionCreateManyArgs: unknown = tx.scriptOutcomeSelection.createMany.mock.calls[0]?.[0];
+    const selectionRows = readArrayProperty(
+      readRecord(selectionCreateManyArgs, 'scriptOutcomeSelection.createMany args'),
+      'data',
+    );
+    expect(selectionRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          outcomeId: 'candidate_yes',
+          aiAction: 'buy',
+          limitPrice: '0.61',
+          amountUsd: '10',
+        }),
+        expect.objectContaining({
+          outcomeId: 'candidate_no',
+          aiAction: 'avoid',
+          limitPrice: null,
+          amountUsd: '0',
+        }),
+      ]),
+    );
     expect(inferenceRunUpdate).toHaveBeenCalledWith({
       where: { id: 'run_1' },
       data: {
@@ -551,6 +489,40 @@ function createService(
   },
 ): InferenceService {
   return new InferenceService(prisma as PrismaService, aiClient as AiClientService);
+}
+
+function createPersistTransactionClient() {
+  return {
+    causalScript: {
+      create: vi.fn().mockResolvedValue({ id: 'script_1' }),
+    },
+    scriptMarket: {
+      createMany: vi.fn().mockResolvedValue({ count: 2 }),
+    },
+    scriptOutcomeSelection: {
+      createMany: vi.fn().mockResolvedValue({ count: 3 }),
+    },
+    auditEvent: {
+      create: vi.fn(),
+    },
+  };
+}
+
+function outcomePriceRows() {
+  return [
+    {
+      id: 'root_outcome',
+      bestAsk: '0.51',
+      price: '0.5',
+      lastTradePrice: '0.5',
+    },
+    {
+      id: 'candidate_yes',
+      bestAsk: '0.61',
+      price: '0.6',
+      lastTradePrice: '0.6',
+    },
+  ];
 }
 
 type InferenceRunCreateArgs = {
