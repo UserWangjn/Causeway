@@ -699,7 +699,7 @@ export class PolymarketSyncService {
         : null;
       throwIfSyncAborted(abortSignal);
 
-      const marketData = {
+      const marketBaseData = {
         eventId: eventId ?? event?.id ?? null,
         externalMarketId: market.externalMarketId,
         conditionId: market.conditionId,
@@ -732,10 +732,18 @@ export class PolymarketSyncService {
         staleDetectedAt: null,
         staleReason: null,
       };
+      const marketCreateData = {
+        ...marketBaseData,
+        discoveredAt: market.discoveredAt ?? syncedAt,
+      };
+      const marketUpdateData = {
+        ...marketBaseData,
+        ...(market.discoveredAt ? { discoveredAt: market.discoveredAt } : {}),
+      };
       const externalMarketId = market.externalMarketId;
       const savedMarket = externalMarketId
-        ? await this.upsertMarketWithExternalId(tx, externalMarketId, market, marketData)
-        : await this.upsertMarketWithoutExternalId(tx, market, marketData);
+        ? await this.upsertMarketWithExternalId(tx, externalMarketId, market, marketUpdateData, marketCreateData)
+        : await this.upsertMarketWithoutExternalId(tx, market, marketUpdateData, marketCreateData);
 
       for (const outcome of market.outcomes) {
         throwIfSyncAborted(abortSignal);
@@ -767,35 +775,37 @@ export class PolymarketSyncService {
     tx: Prisma.TransactionClient,
     externalMarketId: string,
     market: NormalizedGammaMarket,
-    marketData: Prisma.PolymarketMarketUncheckedCreateInput,
+    marketUpdateData: Prisma.PolymarketMarketUncheckedUpdateInput,
+    marketCreateData: Prisma.PolymarketMarketUncheckedCreateInput,
   ) {
     try {
       return await tx.polymarketMarket.upsert({
         where: { externalMarketId },
-        update: marketData,
-        create: marketData,
+        update: marketUpdateData,
+        create: marketCreateData,
       });
     } catch (error) {
       if (!isUniqueConstraintError(error)) {
         throw error;
       }
-      return this.upsertMarketWithoutExternalId(tx, market, marketData);
+      return this.upsertMarketWithoutExternalId(tx, market, marketUpdateData, marketCreateData);
     }
   }
 
   private async upsertMarketWithoutExternalId(
     tx: Prisma.TransactionClient,
     market: NormalizedGammaMarket,
-    marketData: Prisma.PolymarketMarketUncheckedCreateInput,
+    marketUpdateData: Prisma.PolymarketMarketUncheckedUpdateInput,
+    marketCreateData: Prisma.PolymarketMarketUncheckedCreateInput,
   ) {
     const existingMarketId = await this.resolveExistingMarketId(tx, market);
     return existingMarketId
       ? tx.polymarketMarket.update({
           where: { id: existingMarketId },
-          data: marketData,
+          data: marketUpdateData,
         })
       : tx.polymarketMarket.create({
-          data: marketData,
+          data: marketCreateData,
         });
   }
 

@@ -1521,15 +1521,29 @@ const categoryTones: Record<string, Market['tone']> = {
 }
 
 const fallbackCategories: ApiMarketCategory[] = [
-  { key: 'all', label: '全部', count: 0 },
-  { key: 'hot', label: '热门', count: 0 },
-  { key: 'politics', label: '政治', count: 0 },
-  { key: 'macro', label: '宏观', count: 0 },
-  { key: 'crypto', label: '加密', count: 0 },
-  { key: 'tech', label: '科技', count: 0 },
-  { key: 'entertainment', label: '娱乐', count: 0 },
-  { key: 'other', label: '其他', count: 0 },
+  { key: 'all', label: 'All', count: 0 },
+  { key: 'hot', label: 'Hot', count: 0 },
+  { key: 'new', label: 'New', count: 0 },
+  { key: 'politics', label: 'Politics', count: 0 },
+  { key: 'sports', label: 'Sports', count: 0 },
+  { key: 'macro', label: 'Macro', count: 0 },
+  { key: 'crypto', label: 'Crypto', count: 0 },
+  { key: 'tech', label: 'Technology', count: 0 },
+  { key: 'entertainment', label: 'Entertainment', count: 0 },
+  { key: 'other', label: 'Other', count: 0 },
 ]
+
+const primaryMarketCategoryKeys = ['hot', 'new'] as const
+const primaryMarketCategoryKeySet = new Set<string>(primaryMarketCategoryKeys)
+
+function orderVisibleMarketCategories(categories: ApiMarketCategory[]) {
+  const byKey = new Map(categories.map((category) => [category.key, category]))
+  const primary = primaryMarketCategoryKeys
+    .map((key) => byKey.get(key) ?? fallbackCategories.find((category) => category.key === key))
+    .filter((category): category is ApiMarketCategory => Boolean(category))
+  const secondary = categories.filter((category) => category.key !== 'all' && !primaryMarketCategoryKeySet.has(category.key))
+  return [...primary, ...secondary]
+}
 
 function formatCompactMoney(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return 'N/A'
@@ -2491,7 +2505,7 @@ function ResourceMenu() {
 
 function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) => void }) {
   const searchAreaRef = useRef<HTMLDivElement | null>(null)
-  const [activeCategory, setActiveCategory] = useState('all')
+  const [activeCategory, setActiveCategory] = useState('hot')
   const [categories, setCategories] = useState<ApiMarketCategory[]>(fallbackCategories)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedSearch, setSelectedSearch] = useState<MarketSearchResult | null>(null)
@@ -2505,11 +2519,12 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
     returned: markets.length,
     limit: 25,
     hasMore: false,
-    category: 'all',
+    category: 'hot',
     topologySource: 'local',
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const visibleCategories = useMemo(() => orderVisibleMarketCategories(categories), [categories])
   const activeCategoryLabel = useMemo(
     () => categories.find((category) => category.key === activeCategory)?.label || activeCategory,
     [activeCategory, categories],
@@ -2596,10 +2611,8 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       .then((data) => {
         const payload = backendNetworkToResponse(data)
         const nodes = payload.nodes.map(apiNodeToMarket)
-        if (nodes.length) {
-          setNetworkMarkets(nodes)
-          setNetworkEdges(payload.edges)
-        }
+        setNetworkMarkets(nodes)
+        setNetworkEdges(payload.edges)
         setNetworkSummary({
           total: data.total ?? nodes.length,
           returned: data.returned ?? nodes.length,
@@ -2686,7 +2699,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       </div>
       <CategoryChips
         active={activeCategory}
-        categories={categories}
+        categories={visibleCategories}
         onChange={(category) => {
           setLoading(true)
           setActiveCategory(category)
@@ -4399,18 +4412,28 @@ function CategoryChips({
 }) {
   return (
     <div className="chip-row">
-      {categories.map((category) => (
-        <button
-          className={active === category.key ? 'chip active' : 'chip'}
-          key={category.key}
-          type="button"
-          onClick={() => onChange(category.key)}
-        >
-          {category.key === 'hot' ? <Flame size={15} /> : null}
-          {category.label}
-          <span className="chip-count">{formatCompactCount(category.count)}</span>
-        </button>
-      ))}
+      {categories.map((category, index) => {
+        const separated = index > 0
+          && primaryMarketCategoryKeySet.has(categories[index - 1]?.key || '')
+          && !primaryMarketCategoryKeySet.has(category.key)
+        return (
+          <button
+            className={[
+              'chip',
+              active === category.key ? 'active' : '',
+              separated ? 'chip-after-primary' : '',
+            ].filter(Boolean).join(' ')}
+            key={category.key}
+            type="button"
+            onClick={() => onChange(category.key)}
+          >
+            {category.key === 'hot' ? <Flame size={15} /> : null}
+            {category.key === 'new' ? <Star size={15} /> : null}
+            {category.label}
+            <span className="chip-count">{formatCompactCount(category.count)}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }

@@ -12,7 +12,7 @@ import type {
 } from './inference.types';
 
 export const MOCK_INFERENCE_MODEL = 'mock-causeway-v1';
-export const INFERENCE_PROMPT_VERSION = 'causeway-b5-v1';
+export const INFERENCE_PROMPT_VERSION = 'causeway-b5-v2';
 export const INFERENCE_OUTPUT_SCHEMA_VERSION = 'causeway-ai-output-v1';
 
 const layerSchema = z.preprocess((value) => {
@@ -74,28 +74,66 @@ const aiInferenceOutputSchema = z
   .strict();
 
 export function buildInferenceCacheKey(input: {
-  rootMarketId: string;
-  rootOutcomeId: string;
-  depth: number;
-  maxMarketsPerLayer: number;
-  confidenceThreshold: number;
-  candidateMarkets: InferenceMarketInput[];
+  promptInput: InferencePromptInput;
   model: string;
 }): string {
   return hashJson({
-    rootMarketId: input.rootMarketId,
-    rootOutcomeId: input.rootOutcomeId,
-    depth: input.depth,
-    maxMarketsPerLayer: input.maxMarketsPerLayer,
-    confidenceThreshold: input.confidenceThreshold,
-    candidateSet: input.candidateMarkets.map((market) => ({
-      marketId: market.marketId,
-      outcomes: market.outcomes.map((outcome) => outcome.outcomeId).sort(),
-    })),
+    prompt: buildCacheComparablePrompt(input.promptInput),
     model: input.model,
     promptVersion: INFERENCE_PROMPT_VERSION,
     outputSchemaVersion: INFERENCE_OUTPUT_SCHEMA_VERSION,
   });
+}
+
+function buildCacheComparablePrompt(input: InferencePromptInput): unknown {
+  return {
+    root: {
+      marketId: input.root.marketId,
+      marketQuestion: input.root.marketQuestion,
+      selectedOutcome: buildCacheComparableOutcome(input.root.selectedOutcome),
+    },
+    settings: input.settings,
+    candidateMarkets: input.candidateMarkets.map((market) => ({
+      marketId: market.marketId,
+      eventTitle: market.eventTitle,
+      question: market.question,
+      description: market.description,
+      rules: market.rules,
+      category: market.category,
+      tags: [...market.tags].sort(),
+      active: market.active,
+      closed: market.closed,
+      acceptingOrders: market.acceptingOrders,
+      enableOrderBook: market.enableOrderBook,
+      orderMinSize: roundCacheNumber(market.orderMinSize),
+      orderPriceMinTickSize: roundCacheNumber(market.orderPriceMinTickSize),
+      bestBid: roundCacheNumber(market.bestBid),
+      bestAsk: roundCacheNumber(market.bestAsk),
+      lastTradePrice: roundCacheNumber(market.lastTradePrice),
+      spread: roundCacheNumber(market.spread),
+      volume: roundCacheNumber(market.volume),
+      volume24hr: roundCacheNumber(market.volume24hr),
+      liquidity: roundCacheNumber(market.liquidity),
+      endDate: market.endDate,
+      outcomes: market.outcomes.map(buildCacheComparableOutcome),
+    })),
+  };
+}
+
+function buildCacheComparableOutcome(outcome: InferenceMarketInput['outcomes'][number]): unknown {
+  return {
+    outcomeId: outcome.outcomeId,
+    label: outcome.label,
+    tokenId: outcome.tokenId,
+    price: roundCacheNumber(outcome.price),
+    bestBid: roundCacheNumber(outcome.bestBid),
+    bestAsk: roundCacheNumber(outcome.bestAsk),
+    lastTradePrice: roundCacheNumber(outcome.lastTradePrice),
+  };
+}
+
+function roundCacheNumber(value: number | null): number | null {
+  return value == null ? null : Math.round(value * 1_000) / 1_000;
 }
 
 export function buildMockInferenceOutput(input: InferencePromptInput): AiInferenceOutput {
@@ -128,8 +166,17 @@ export function buildMockInferenceOutput(input: InferencePromptInput): AiInferen
         active: true,
         closed: false,
         acceptingOrders: true,
+        enableOrderBook: true,
+        orderMinSize: null,
+        orderPriceMinTickSize: null,
+        bestBid: null,
+        bestAsk: null,
+        lastTradePrice: null,
+        spread: null,
         volume: null,
+        volume24hr: null,
         liquidity: null,
+        endDate: null,
         outcomes: [input.root.selectedOutcome],
       },
       input.root.selectedOutcome.outcomeId,
@@ -210,6 +257,9 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
       throw invalidOutput('AI output node layer exceeds requested depth', { clientNodeId: node.clientNodeId });
     }
     assertConfidence(node.confidence, `node ${node.clientNodeId}`);
+    if (node.clientNodeId !== 'root') {
+      assertConfidenceMeetsThreshold(node.confidence, input.settings.confidenceThreshold, `node ${node.clientNodeId}`);
+    }
 
     const allowedOutcomeIds = new Set((market?.outcomes ?? [input.root.selectedOutcome]).map((outcome) => outcome.outcomeId));
     const recommendedOutcomeIds = new Set(node.outcomes.map((outcome) => outcome.outcomeId));
@@ -226,6 +276,13 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
         });
       }
       assertConfidence(outcome.confidence, `outcome ${outcome.outcomeId}`);
+      if (node.clientNodeId !== 'root' && outcome.aiAction === 'buy') {
+        assertConfidenceMeetsThreshold(
+          outcome.confidence,
+          input.settings.confidenceThreshold,
+          `buy outcome ${outcome.outcomeId}`,
+        );
+      }
     }
     if (market && (node.outcomes.length !== market.outcomes.length || recommendedOutcomeIds.size !== market.outcomes.length)) {
       throw invalidOutput('AI output must include one recommendation for every market outcome', {
@@ -247,6 +304,11 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
       throw invalidOutput('Root edge must use the selected root outcome', edge);
     }
     assertConfidence(edge.confidence, `edge ${edge.sourceClientNodeId}->${edge.targetClientNodeId}`);
+    assertConfidenceMeetsThreshold(
+      edge.confidence,
+      input.settings.confidenceThreshold,
+      `edge ${edge.sourceClientNodeId}->${edge.targetClientNodeId}`,
+    );
     assertNodeHasOutcome(sourceNode, edge.sourceOutcomeId);
     assertNodeHasOutcome(targetNode, edge.targetOutcomeId);
   }
@@ -294,6 +356,15 @@ function roundConfidence(value: number): number {
 function assertConfidence(value: number, label: string): void {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw invalidOutput(`AI output confidence is invalid for ${label}`, { confidence: value });
+  }
+}
+
+function assertConfidenceMeetsThreshold(value: number, threshold: number, label: string): void {
+  if (value < threshold) {
+    throw invalidOutput(`AI output confidence is below threshold for ${label}`, {
+      confidence: value,
+      confidenceThreshold: threshold,
+    });
   }
 }
 

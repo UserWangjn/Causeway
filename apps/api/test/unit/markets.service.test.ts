@@ -158,7 +158,8 @@ describe('MarketsService', () => {
   it('builds market categories from normalized persisted event tags without loading every market', async () => {
     const count = vi.fn()
       .mockResolvedValueOnce(3)
-      .mockResolvedValueOnce(2);
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(1);
     const queryRaw = vi.fn().mockResolvedValue([
       { category: 'macro', count: 1n },
       { category: 'sports', count: 1n },
@@ -201,9 +202,27 @@ describe('MarketsService', () => {
         ],
       },
     });
+    expect(count).toHaveBeenNthCalledWith(3, {
+      where: {
+        AND: [
+          {
+            active: true,
+            closed: false,
+            archived: false,
+            staleDetectedAt: null,
+          },
+          {
+            discoveredAt: {
+              gte: expect.any(Date) as Date,
+            },
+          },
+        ],
+      },
+    });
     expect(result.categories).toEqual([
       { key: 'all', label: 'All', count: 3 },
       { key: 'hot', label: 'Hot', count: 2 },
+      { key: 'new', label: 'New', count: 1 },
       { key: 'macro', label: 'Macro', count: 1 },
       { key: 'politics', label: 'Politics', count: 1 },
       { key: 'sports', label: 'Sports', count: 1 },
@@ -613,6 +632,81 @@ describe('MarketsService', () => {
     });
   });
 
+  it('treats the new network category as a recently discovered market subset', async () => {
+    const networkNodeFindMany = vi.fn().mockResolvedValue([]);
+    const marketCount = vi.fn().mockResolvedValue(2);
+    const marketFindMany = vi.fn().mockResolvedValue([
+      networkMarket('market_1', 'event_1', 'Newest market', '0.55', ['politics'], {
+        discoveredAt: new Date('2026-05-19T00:00:00.000Z'),
+      }),
+      networkMarket('market_2', 'event_2', 'Older new market', '0.35', ['sports'], {
+        discoveredAt: new Date('2026-05-18T00:00:00.000Z'),
+      }),
+    ]);
+    const service = createService({
+      marketNetworkNode: {
+        findMany: networkNodeFindMany,
+      },
+      polymarketMarket: {
+        count: marketCount,
+        findMany: marketFindMany,
+      },
+    });
+
+    const result = await service.getMarketNetwork({ category: 'new', limit: 10 });
+
+    expect(marketCount).toHaveBeenCalledWith({
+      where: {
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        AND: [
+          {
+            discoveredAt: {
+              gte: expect.any(Date) as Date,
+            },
+          },
+        ],
+      },
+    });
+    expect(networkNodeFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        market: {
+          active: true,
+          closed: false,
+          archived: false,
+          staleDetectedAt: null,
+          AND: [
+            {
+              discoveredAt: {
+                gte: expect.any(Date) as Date,
+              },
+            },
+          ],
+        },
+        OR: undefined,
+      },
+    }));
+    expect(marketFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      orderBy: [
+        { discoveredAt: 'desc' },
+        { volume24hr: { sort: 'desc', nulls: 'last' } },
+        { liquidity: { sort: 'desc', nulls: 'last' } },
+        { id: 'asc' },
+      ],
+    }));
+    expect(result.nodes.map((node) => node.id)).toEqual(['market_1', 'market_2']);
+    expect(result).toMatchObject({
+      total: 2,
+      returned: 2,
+      limit: 10,
+      hasMore: false,
+      category: 'new',
+      topologySource: 'deterministic',
+    });
+  });
+
   it('diversifies deterministic network nodes across events and categories before filling the limit', async () => {
     const networkNodeFindMany = vi.fn().mockResolvedValue([]);
     const marketCount = vi.fn().mockResolvedValue(7);
@@ -760,7 +854,7 @@ function networkMarket(
   question: string,
   price: string,
   tags: string[],
-  options: { volume?: string; volume24hr?: string; liquidity?: string } = {},
+  options: { volume?: string; volume24hr?: string; liquidity?: string; discoveredAt?: Date } = {},
 ) {
   return {
     id,
@@ -777,6 +871,7 @@ function networkMarket(
     volume: options.volume ?? '100',
     volume24hr: options.volume24hr ?? '10',
     liquidity: options.liquidity ?? '50',
+    discoveredAt: options.discoveredAt ?? new Date('2026-05-18T00:00:00.000Z'),
     syncedAt: new Date('2026-05-18T00:00:00.000Z'),
     event: {
       slug: eventId,

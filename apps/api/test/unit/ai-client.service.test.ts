@@ -102,7 +102,18 @@ describe('AiClientService', () => {
 
     const result = await client.runStructuredInference<{ summary: string; warnings: string[] }>(
       { root: { marketId: 'market_1' } },
-      { model: 'gpt-test' },
+      {
+        model: 'gpt-test',
+        prompt: {
+          systemPrompt: 'Use numeric JSON numbers for layer and confidence values. Never point an edge into the root node.',
+          userPayload: {
+            contract: [
+              'Edges are UI graph edges, not free-form causal arrows: sourceClientNodeId must be a lower layer node and targetClientNodeId must be a higher layer node.',
+            ],
+            outputShape: {},
+          },
+        },
+      },
     );
 
     const [url, init] = readFetchCall(fetchMock);
@@ -115,7 +126,7 @@ describe('AiClientService', () => {
     expect(body.thinking).toBeUndefined();
     const messages = body.messages as Array<{ role: string; content: string }>;
     expect(messages[0].content).toContain('Use numeric JSON numbers for layer and confidence values');
-    expect(messages[0].content).toContain('never point an edge into the root node');
+    expect(messages[0].content).toContain('Never point an edge into the root node');
     const userMessage = JSON.parse(messages[1].content) as { contract: string[]; outputShape: Record<string, unknown> };
     expect(userMessage.contract).toContain(
       'Edges are UI graph edges, not free-form causal arrows: sourceClientNodeId must be a lower layer node and targetClientNodeId must be a higher layer node.',
@@ -147,6 +158,25 @@ describe('AiClientService', () => {
     const [, init] = readFetchCall(fetchMock);
     const body = readJsonBody(init.body);
     expect(body.thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('can return raw assistant content for caller-managed parsing and repair', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [
+          {
+            message: {
+              content: 'not-json',
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AiClientService(configService());
+
+    await expect(client.runStructuredInferenceContent({}, { model: 'gpt-test' })).resolves.toBe('not-json');
   });
 
   it('rejects requests for models other than the configured provider model', async () => {

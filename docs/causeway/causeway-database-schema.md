@@ -227,7 +227,11 @@ model PolymarketMarket {
   liquidity             Decimal?
   endDate               DateTime?
   rawPayload            Json
+  discoveredAt          DateTime            @default(now())
   syncedAt              DateTime
+  lastSeenAt            DateTime?
+  staleDetectedAt       DateTime?
+  staleReason           String?
   event                 PolymarketEvent?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
   outcomes              PolymarketOutcome[]
   snapshots             MarketSnapshot[]
@@ -236,9 +240,13 @@ model PolymarketMarket {
   orders                CausewayOrder[]
 
   @@index([active, closed, acceptingOrders, enableOrderBook])
+  @@index([active, closed, archived, staleDetectedAt])
   @@index([volume24hr])
   @@index([endDate])
+  @@index([discoveredAt])
   @@index([syncedAt])
+  @@index([lastSeenAt])
+  @@index([staleDetectedAt])
 }
 ```
 

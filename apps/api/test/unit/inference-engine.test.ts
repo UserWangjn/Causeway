@@ -12,23 +12,36 @@ describe('inference engine helpers', () => {
 
     expect(
       buildInferenceCacheKey({
-        rootMarketId: 'root_market',
-        rootOutcomeId: 'root_outcome',
-        depth: 2,
-        maxMarketsPerLayer: 3,
-        confidenceThreshold: 0.55,
-        candidateMarkets: candidates,
+        promptInput: {
+          ...inferencePromptInput(),
+          candidateMarkets: candidates,
+        },
         model: 'mock-causeway-v1',
       }),
     ).toBe(
       buildInferenceCacheKey({
         model: 'mock-causeway-v1',
-        candidateMarkets: candidates,
-        confidenceThreshold: 0.55,
-        maxMarketsPerLayer: 3,
-        depth: 2,
-        rootOutcomeId: 'root_outcome',
-        rootMarketId: 'root_market',
+        promptInput: {
+          candidateMarkets: candidates,
+          settings: {
+            confidenceThreshold: 0.55,
+            maxMarketsPerLayer: 3,
+            depth: 2,
+          },
+          root: {
+            selectedOutcome: {
+              bestAsk: null,
+              bestBid: null,
+              label: 'Yes',
+              lastTradePrice: null,
+              outcomeId: 'root_outcome',
+              price: 0.5,
+              tokenId: 'root_token',
+            },
+            marketQuestion: 'Will the root event happen?',
+            marketId: 'root_market',
+          },
+        },
       }),
     );
   });
@@ -210,6 +223,21 @@ describe('inference engine helpers', () => {
     expect(validated.edges.map((edge) => edge.targetClientNodeId)).toEqual(['candidate_1']);
     expect(validated.warnings).toContain('truncated_to_max_markets_per_layer');
   });
+
+  it('rejects non-root confidence values below the requested threshold', () => {
+    const promptInput = {
+      ...inferencePromptInput(),
+      settings: {
+        depth: 2,
+        maxMarketsPerLayer: 3,
+        confidenceThreshold: 0.75,
+      },
+    };
+    const output = validInferenceOutput(promptInput);
+    output.nodes[1].confidence = 0.74;
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output confidence is below threshold');
+  });
 });
 
 function inferencePromptInput(): InferencePromptInput {
@@ -222,6 +250,9 @@ function inferencePromptInput(): InferencePromptInput {
         label: 'Yes',
         tokenId: 'root_token',
         price: 0.5,
+        bestBid: null,
+        bestAsk: null,
+        lastTradePrice: null,
       },
     },
     settings: {
@@ -248,13 +279,25 @@ function candidateMarket(marketId: string, outcomeIds: string[]): InferenceMarke
     active: true,
     closed: false,
     acceptingOrders: true,
+    enableOrderBook: true,
+    orderMinSize: null,
+    orderPriceMinTickSize: null,
+    bestBid: 0.59,
+    bestAsk: 0.61,
+    lastTradePrice: 0.6,
+    spread: 0.02,
     volume: 100,
+    volume24hr: 10,
     liquidity: 50,
+    endDate: null,
     outcomes: outcomeIds.map((outcomeId, index) => ({
       outcomeId,
       label: index === 0 ? 'Yes' : 'No',
       tokenId: `${outcomeId}_token`,
       price: index === 0 ? 0.6 : 0.4,
+      bestBid: index === 0 ? 0.59 : 0.39,
+      bestAsk: index === 0 ? 0.61 : 0.41,
+      lastTradePrice: index === 0 ? 0.6 : 0.4,
     })),
   };
 }

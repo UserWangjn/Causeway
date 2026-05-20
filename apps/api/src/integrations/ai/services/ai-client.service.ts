@@ -8,6 +8,16 @@ export type AiClientCapability = {
   model: string | null;
 };
 
+export type AiStructuredPrompt = {
+  systemPrompt: string;
+  userPayload: unknown;
+};
+
+export type AiStructuredInferenceOptions = {
+  model?: string;
+  prompt?: AiStructuredPrompt;
+};
+
 @Injectable()
 export class AiClientService {
   constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
@@ -29,7 +39,15 @@ export class AiClientService {
     };
   }
 
-  async runStructuredInference<TOutput>(input: unknown, options: { model?: string } = {}): Promise<TOutput> {
+  async runStructuredInference<TOutput>(
+    input: unknown,
+    options: AiStructuredInferenceOptions = {},
+  ): Promise<TOutput> {
+    const content = await this.runStructuredInferenceContent(input, options);
+    return parseStructuredOutput<TOutput>(content);
+  }
+
+  async runStructuredInferenceContent(input: unknown, options: AiStructuredInferenceOptions = {}): Promise<string> {
     const settingsResult = this.readSettings();
     if (!settingsResult.ok) {
       throw new ApiException(
@@ -64,7 +82,7 @@ export class AiClientService {
           'content-type': 'application/json',
           'user-agent': 'causeway-api/0.1',
         },
-        body: JSON.stringify(buildChatCompletionRequest(settings, input)),
+        body: JSON.stringify(buildChatCompletionRequest(settings, options.prompt ?? buildDefaultStructuredPrompt(input))),
         signal: controller.signal,
       });
 
@@ -77,7 +95,7 @@ export class AiClientService {
       }
 
       const payload: unknown = await response.json();
-      return parseStructuredOutput<TOutput>(payload);
+      return readAssistantContent(payload);
     } catch (error) {
       if (error instanceof ApiException) throw error;
       throw new ApiException(HttpStatus.BAD_GATEWAY, 'AI_PROVIDER_ERROR', 'AI provider request failed', {
@@ -137,7 +155,7 @@ type AiClientSettings = {
   maxOutputTokens: number;
 };
 
-function buildChatCompletionRequest(settings: AiClientSettings, input: unknown): Record<string, unknown> {
+function buildChatCompletionRequest(settings: AiClientSettings, prompt: AiStructuredPrompt): Record<string, unknown> {
   const request: Record<string, unknown> = {
     model: settings.model,
     temperature: 0.1,
@@ -146,65 +164,11 @@ function buildChatCompletionRequest(settings: AiClientSettings, input: unknown):
     messages: [
       {
         role: 'system',
-        content: [
-          'You are Causeway inference engine.',
-          'Return only a JSON object that matches the requested Causeway inference output schema.',
-          'Do not include markdown, prose, code fences, or fields outside the schema.',
-          'Use numeric JSON numbers for layer and confidence values.',
-          'Every edge must point from a lower layer node to a higher layer node; never point an edge into the root node.',
-        ].join(' '),
+        content: prompt.systemPrompt,
       },
       {
         role: 'user',
-        content: JSON.stringify({
-          task: 'Analyze the root Polymarket outcome and candidate markets, then produce a Causeway causal graph.',
-          contract: [
-            'The root node must have clientNodeId "root", layer 0, the requested root marketId, and only the selected root outcome.',
-            'Non-root nodes must use only candidate marketIds from input.candidateMarkets and must have layer 1, 2, or 3.',
-            'Every non-root node must include one recommendation for every outcome in that market.',
-            'Edges are UI graph edges, not free-form causal arrows: sourceClientNodeId must be a lower layer node and targetClientNodeId must be a higher layer node.',
-            'The root node may be an edge source but must never be an edge target.',
-            'Do not output more than input.settings.maxMarketsPerLayer non-root nodes in any layer.',
-            'Do not output non-root nodes with layer greater than input.settings.depth.',
-            'If a candidate market is a cause or indicator for the root hypothesis, still orient the UI edge from root to that candidate node and explain the causal direction in reason.',
-            'Do not invent marketId, outcomeId, or clientNodeId values outside the nodes you output.',
-          ],
-          outputShape: {
-            summary: 'string',
-            nodes: [
-              {
-                clientNodeId: 'string',
-                marketId: 'string',
-                layer: 'number: 0 | 1 | 2 | 3',
-                confidence: 'number between 0 and 1',
-                impactDirection: 'supports | opposes | unclear',
-                reason: 'string',
-                outcomes: [
-                  {
-                    outcomeId: 'string',
-                    outcomeLabel: 'string',
-                    aiAction: 'buy | avoid',
-                    confidence: 'number between 0 and 1',
-                    reason: 'string',
-                  },
-                ],
-              },
-            ],
-            edges: [
-              {
-                sourceClientNodeId: 'string',
-                targetClientNodeId: 'string',
-                sourceOutcomeId: 'string',
-                targetOutcomeId: 'string',
-                relation: 'causes | supports | hedges | contradicts | correlates',
-                confidence: 'number between 0 and 1',
-                reason: 'string',
-              },
-            ],
-            warnings: ['string'],
-          },
-          input,
-        }),
+        content: JSON.stringify(prompt.userPayload),
       },
     ],
   };
@@ -214,8 +178,21 @@ function buildChatCompletionRequest(settings: AiClientSettings, input: unknown):
   return request;
 }
 
-function parseStructuredOutput<TOutput>(payload: unknown): TOutput {
-  const content = readAssistantContent(payload);
+function buildDefaultStructuredPrompt(input: unknown): AiStructuredPrompt {
+  return {
+    systemPrompt: [
+      'Return only a JSON object that matches the requested schema.',
+      'Do not include markdown, prose, code fences, or fields outside the schema.',
+      'Use numeric JSON numbers where numeric values are requested.',
+    ].join(' '),
+    userPayload: {
+      task: 'Produce structured JSON output for the provided input.',
+      input,
+    },
+  };
+}
+
+function parseStructuredOutput<TOutput>(content: string): TOutput {
   try {
     return JSON.parse(content) as TOutput;
   } catch (error) {

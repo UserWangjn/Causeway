@@ -10,6 +10,7 @@ describe('normalizeGammaMarket', () => {
       outcomes: '["Yes","No"]',
       outcomePrices: '["0.4","0.6"]',
       clobTokenIds: '["token_yes","token_no"]',
+      createdAt: '2026-05-17T12:00:00.000Z',
       active: true,
       closed: false,
       event: {
@@ -22,6 +23,7 @@ describe('normalizeGammaMarket', () => {
       { outcomeIndex: 0, label: 'Yes', clobTokenId: 'token_yes', price: 0.4 },
       { outcomeIndex: 1, label: 'No', clobTokenId: 'token_no', price: 0.6 },
     ]);
+    expect(market?.discoveredAt?.toISOString()).toBe('2026-05-17T12:00:00.000Z');
     expect(market?.event?.tags).toEqual(['sports']);
   });
 

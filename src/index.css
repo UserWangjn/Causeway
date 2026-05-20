@@ -843,6 +843,7 @@ button {
 }
 
 .chip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -851,11 +852,24 @@ button {
   gap: 6px;
   padding: 0 16px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fff;
   color: #0f172a;
   font-size: 14px;
   font-weight: 700;
+}
+
+.chip-after-primary {
+  margin-left: 18px;
+}
+
+.chip-after-primary::before {
+  position: absolute;
+  left: -16px;
+  width: 1px;
+  height: 20px;
+  content: "";
+  background: #d9e2f1;
 }
 
 .chip.active {
@@ -897,6 +911,16 @@ button {
   border: 1px solid var(--border);
   border-radius: 999px;
   background: #fff;
+}
+
+@media (max-width: 720px) {
+  .chip-after-primary {
+    margin-left: 0;
+  }
+
+  .chip-after-primary::before {
+    display: none;
+  }
 }
 
 .network-stage {

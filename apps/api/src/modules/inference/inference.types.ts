@@ -3,6 +3,9 @@ export type InferenceOutcomeInput = {
   label: string;
   tokenId: string;
   price: number | null;
+  bestBid: number | null;
+  bestAsk: number | null;
+  lastTradePrice: number | null;
 };
 
 export type InferenceMarketInput = {
@@ -16,8 +19,17 @@ export type InferenceMarketInput = {
   active: boolean;
   closed: boolean;
   acceptingOrders: boolean;
+  enableOrderBook: boolean;
+  orderMinSize: number | null;
+  orderPriceMinTickSize: number | null;
+  bestBid: number | null;
+  bestAsk: number | null;
+  lastTradePrice: number | null;
+  spread: number | null;
   volume: number | null;
+  volume24hr: number | null;
   liquidity: number | null;
+  endDate: string | null;
   outcomes: InferenceOutcomeInput[];
 };
 

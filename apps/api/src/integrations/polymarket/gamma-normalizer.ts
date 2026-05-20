@@ -53,6 +53,7 @@ export type NormalizedGammaMarket = {
   volume24hr: number | null;
   liquidity: number | null;
   endDate: Date | null;
+  discoveredAt: Date | null;
   outcomes: NormalizedGammaOutcome[];
   event: NormalizedGammaEvent | null;
   rawPayload: Record<string, unknown>;
@@ -95,6 +96,7 @@ export function normalizeGammaMarket(payload: Record<string, unknown>): Normaliz
     volume24hr: readNumber(payload.volume24hr),
     liquidity: readNumber(payload.liquidity),
     endDate: readDate(payload.endDate),
+    discoveredAt: readDate(payload.createdAt ?? payload.created_at ?? payload.createdDate ?? payload.startDate),
     outcomes,
     event: normalizeEvent(payload),
     rawPayload: payload,
