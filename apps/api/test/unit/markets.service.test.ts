@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiException } from '../../src/common/errors/api.exception';
 import type { PrismaService } from '../../src/database/prisma.service';
 import type { ClobClient } from '../../src/integrations/polymarket/services/clob.client';
+import type { GammaClient } from '../../src/integrations/polymarket/services/gamma.client';
 import { MarketsService } from '../../src/modules/markets/markets.service';
 
 describe('MarketsService', () => {
@@ -880,12 +881,16 @@ function encodeTestCursor(payload: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
 }
 
-function createService(prisma: unknown, clobOverrides: Partial<ClobClient> = {}) {
+function createService(prisma: unknown, clobOverrides: Partial<ClobClient> = {}, gammaOverrides: Partial<GammaClient> = {}) {
   const clobClient = {
     getOrderBook: vi.fn(),
     ...clobOverrides,
   } as unknown as ClobClient;
-  return new MarketsService(clobClient, prisma as PrismaService);
+  const gammaClient = {
+    searchV2: vi.fn(),
+    ...gammaOverrides,
+  } as unknown as GammaClient;
+  return new MarketsService(clobClient, gammaClient, prisma as PrismaService);
 }
 
 function networkMarket(

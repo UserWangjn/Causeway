@@ -481,11 +481,7 @@ export class MarketsService {
       }),
     ]);
     if (!nodes.length) {
-      return {
-        nodes: [],
-        edges: [],
-        ...this.formatNetworkMeta(query, limit, total, 0, 'precomputed'),
-      };
+      return this.buildDeterministicMarketNetwork(query, limit, total, candidateLimit);
     }
     const graphCandidates = nodes.map((node, index) => ({
       market: node.market,
@@ -516,14 +512,35 @@ export class MarketsService {
 
     return {
       nodes: selectedNodes.map((node) => this.formatNetworkNode(node.market, node.category)),
-      edges: edges.map((edge) => ({
-        id: edge.id,
-        source: edge.sourceMarketId,
-        target: edge.targetMarketId,
-        relationType: formatNetworkRelationType(edge.relationType),
-        weight: toNullableNumber(edge.weight) ?? 0,
-      })),
+      edges: edges.length
+        ? edges.map((edge) => ({
+            id: edge.id,
+            source: edge.sourceMarketId,
+            target: edge.targetMarketId,
+            relationType: formatNetworkRelationType(edge.relationType),
+            weight: toNullableNumber(edge.weight) ?? 0,
+          }))
+        : buildEventEdges(selectedNodes.map((node) => node.market)),
       ...this.formatNetworkMeta(query, limit, total, selectedNodes.length, 'precomputed'),
+    };
+  }
+
+  private async buildDeterministicMarketNetwork(
+    query: MarketQueryDto,
+    limit: number,
+    total: number,
+    candidateLimit = networkCandidateLimit(limit),
+  ) {
+    const selectedMarkets = selectNetworkCandidates(
+      await this.loadActivityNetworkCandidates(query, candidateLimit),
+      query,
+      limit,
+    );
+
+    return {
+      nodes: selectedMarkets.map((candidate) => this.formatNetworkNode(candidate.market, candidate.category)),
+      edges: buildEventEdges(selectedMarkets.map((candidate) => candidate.market)),
+      ...this.formatNetworkMeta(query, limit, total, selectedMarkets.length, 'deterministic'),
     };
   }
 
@@ -1277,6 +1294,28 @@ function networkCandidateCategory(market: NetworkMarketRecord): string {
     market.event?.title,
     market.event?.slug,
   ]);
+}
+
+function buildEventEdges(markets: NetworkMarketRecord[]) {
+  const groups = new Map<string, NetworkMarketRecord[]>();
+  for (const market of markets) {
+    if (!market.eventId) continue;
+    const group = groups.get(market.eventId) ?? [];
+    group.push(market);
+    groups.set(market.eventId, group);
+  }
+
+  return [...groups.entries()].flatMap(([eventId, group]) => {
+    const [root, ...related] = group;
+    if (!root) return [];
+    return related.map((market) => ({
+      id: `event:${eventId}:${root.id}:${market.id}`,
+      source: root.id,
+      target: market.id,
+      relationType: 'event' as const,
+      weight: 0.8,
+    }));
+  });
 }
 
 function normalizeHistoryInterval(value: string | undefined): '1h' | '6h' | '1d' | '1w' | '1m' | 'all' {
