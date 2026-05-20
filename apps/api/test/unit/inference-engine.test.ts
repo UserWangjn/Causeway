@@ -132,10 +132,10 @@ describe('inference engine helpers', () => {
     );
   });
 
-  it('rejects edges that point backward across graph layers', () => {
+  it('normalizes edges that point backward across graph layers', () => {
     const promptInput = inferencePromptInput();
     const output = validInferenceOutput(promptInput);
-    output.edges.push({
+    output.edges = [{
       sourceClientNodeId: 'candidate_1',
       targetClientNodeId: 'root',
       sourceOutcomeId: 'outcome_1',
@@ -143,11 +143,67 @@ describe('inference engine helpers', () => {
       relation: 'contradicts',
       confidence: 0.7,
       reason: 'backward edge',
-    });
+    }];
 
-    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow(
-      'AI output edge must point from a lower layer to a higher layer',
+    const validated = validateAiInferenceOutput(output, promptInput);
+
+    expect(validated.edges).toEqual([
+      expect.objectContaining({
+        sourceClientNodeId: 'root',
+        targetClientNodeId: 'candidate_1',
+        sourceOutcomeId: 'root_outcome',
+        targetOutcomeId: 'outcome_1',
+        reason: 'backward edge Direction normalized by backend to match UI layer order.',
+      }),
+    ]);
+    expect(validated.warnings).toContain('ai_output_reoriented_edges_to_layer_order');
+  });
+
+  it('drops same-layer edges while keeping connected lower-to-higher edges', () => {
+    const promptInput = inferencePromptInput();
+    const secondCandidate = promptInput.candidateMarkets[1];
+    const output = validInferenceOutput(promptInput);
+    output.nodes.push({
+      clientNodeId: 'candidate_2',
+      marketId: secondCandidate.marketId,
+      layer: 1,
+      confidence: 0.76,
+      impactDirection: 'supports',
+      reason: 'second candidate',
+      outcomes: secondCandidate.outcomes.map((outcome, index) => ({
+        outcomeId: outcome.outcomeId,
+        outcomeLabel: outcome.label,
+        aiAction: index === 0 ? 'buy' : 'avoid',
+        confidence: index === 0 ? 0.76 : 0.56,
+        reason: `recommendation ${index}`,
+      })),
+    });
+    output.edges.push(
+      {
+        sourceClientNodeId: 'root',
+        targetClientNodeId: 'candidate_2',
+        sourceOutcomeId: promptInput.root.selectedOutcome.outcomeId,
+        targetOutcomeId: secondCandidate.outcomes[0].outcomeId,
+        relation: 'supports',
+        confidence: 0.76,
+        reason: 'root to second candidate',
+      },
+      {
+        sourceClientNodeId: 'candidate_1',
+        targetClientNodeId: 'candidate_2',
+        sourceOutcomeId: 'outcome_1',
+        targetOutcomeId: secondCandidate.outcomes[0].outcomeId,
+        relation: 'correlates',
+        confidence: 0.7,
+        reason: 'same layer edge',
+      },
     );
+
+    const validated = validateAiInferenceOutput(output, promptInput);
+
+    expect(validated.edges).toHaveLength(2);
+    expect(validated.edges.some((edge) => edge.reason === 'same layer edge')).toBe(false);
+    expect(validated.warnings).toContain('ai_output_dropped_same_layer_edges');
   });
 
   it('validates all provider market references before truncating excess nodes', () => {

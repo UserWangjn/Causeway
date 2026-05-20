@@ -12,7 +12,7 @@ import type {
 } from './inference.types';
 
 export const MOCK_INFERENCE_MODEL = 'mock-causeway-v1';
-export const INFERENCE_PROMPT_VERSION = 'causeway-b5-v2';
+export const INFERENCE_PROMPT_VERSION = 'causeway-b5-v3';
 export const INFERENCE_OUTPUT_SCHEMA_VERSION = 'causeway-ai-output-v1';
 
 const layerSchema = z.preprocess((value) => {
@@ -291,6 +291,8 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
     }
   }
 
+  parsedOutput = normalizeEdgesForLayerOrder(parsedOutput, nodeByClientId);
+
   for (const edge of parsedOutput.edges) {
     const sourceNode = nodeByClientId.get(edge.sourceClientNodeId);
     const targetNode = nodeByClientId.get(edge.targetClientNodeId);
@@ -318,6 +320,65 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
   assertConnectedGraph(parsedOutput);
   assertAcyclicGraph(parsedOutput);
   return parsedOutput;
+}
+
+function normalizeEdgesForLayerOrder(
+  output: AiInferenceOutput,
+  nodeByClientId: Map<string, AiMarketNode>,
+): AiInferenceOutput {
+  let reoriented = false;
+  let droppedSameLayer = false;
+  const edges: AiEdge[] = [];
+
+  for (const edge of output.edges) {
+    const sourceNode = nodeByClientId.get(edge.sourceClientNodeId);
+    const targetNode = nodeByClientId.get(edge.targetClientNodeId);
+    if (!sourceNode || !targetNode) {
+      edges.push(edge);
+      continue;
+    }
+
+    if (sourceNode.layer < targetNode.layer) {
+      edges.push(edge);
+      continue;
+    }
+
+    if (sourceNode.layer > targetNode.layer) {
+      reoriented = true;
+      edges.push({
+        ...edge,
+        sourceClientNodeId: edge.targetClientNodeId,
+        targetClientNodeId: edge.sourceClientNodeId,
+        sourceOutcomeId: edge.targetOutcomeId,
+        targetOutcomeId: edge.sourceOutcomeId,
+        reason: appendEdgeNormalizationNote(edge.reason),
+      });
+      continue;
+    }
+
+    droppedSameLayer = true;
+  }
+
+  if (!reoriented && !droppedSameLayer) return output;
+
+  return {
+    ...output,
+    edges,
+    warnings: [
+      ...output.warnings,
+      ...(reoriented ? ['ai_output_reoriented_edges_to_layer_order'] : []),
+      ...(droppedSameLayer ? ['ai_output_dropped_same_layer_edges'] : []),
+    ].filter(uniqueString),
+  };
+}
+
+function appendEdgeNormalizationNote(reason: string): string {
+  const note = 'Direction normalized by backend to match UI layer order.';
+  return reason.includes(note) ? reason : `${reason} ${note}`;
+}
+
+function uniqueString(value: string, index: number, values: string[]): boolean {
+  return values.indexOf(value) === index;
 }
 
 function buildOutcomeRecommendations(
