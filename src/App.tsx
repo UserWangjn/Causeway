@@ -49,7 +49,7 @@ import {
   Trash2,
   WalletCards,
 } from 'lucide-react'
-import { ConnectButton } from '@rainbow-me/rainbowkit'
+import { ConnectButton, useConnectModal } from '@rainbow-me/rainbowkit'
 import { useAccount, useDisconnect, useSignMessage, useSignTypedData, useSwitchChain } from 'wagmi'
 import { supportedChain } from './wallet-config'
 
@@ -2935,6 +2935,7 @@ function InferenceSettings({
   onBack: () => void
   onStart: (settings: InferenceSettingsState) => void
 }) {
+  const { openConnectModal } = useConnectModal()
   const [settings, setSettings] = useState<InferenceSettingsState>(initialSettings)
   const updateSettings = useCallback((patch: Partial<InferenceSettingsState>) => {
     setSettings((current) => ({ ...current, ...patch }))
@@ -2947,6 +2948,18 @@ function InferenceSettings({
   }, [updateSettings])
   const estimate = estimateInference(settings)
   const canStartInference = Boolean(marketInferenceOutcome(market))
+  const handleStartInference = useCallback(() => {
+    if (!canStartInference) return
+    if (!auth.isConnected) {
+      openConnectModal?.()
+      return
+    }
+    if (!auth.isAuthenticated) {
+      void auth.signIn()
+      return
+    }
+    onStart(settings)
+  }, [auth, canStartInference, onStart, openConnectModal, settings])
   const scopeOptions: Array<[InferenceScope, string, string]> = [
     ['news', '相关新闻', '新闻报道和媒体'],
     ['markets', '相关市场', 'Polymarket 市场'],
@@ -3080,14 +3093,7 @@ function InferenceSettings({
           <button
             className="primary-action inside"
             type="button"
-            onClick={() => {
-              if (!canStartInference) return
-              if (!auth.isAuthenticated) {
-                void auth.signIn()
-                return
-              }
-              onStart(settings)
-            }}
+            onClick={handleStartInference}
             disabled={auth.isSigningIn || !canStartInference}
           >
             <Play size={18} /> 启动 AI 推演
