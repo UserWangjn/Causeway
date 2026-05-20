@@ -1,7 +1,7 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiException } from '../../../common/errors/api.exception';
-import type { GammaEventPayload, GammaMarketPayload } from '../types';
+import type { GammaEventPayload, GammaMarketPayload, GammaSearchPayload } from '../types';
 
 @Injectable()
 export class GammaClient {
@@ -49,6 +49,22 @@ export class GammaClient {
     if (params.ascending != null) url.searchParams.set('ascending', String(params.ascending));
 
     return this.getJsonArray(url, options);
+  }
+
+  async searchV2(
+    params: { q: string; limitPerType?: number; type?: string },
+    options: { signal?: AbortSignal } = {},
+  ): Promise<GammaSearchPayload> {
+    const url = new URL('/search-v2', this.baseUrl);
+    url.searchParams.set('q', params.q);
+    url.searchParams.set('optimized', 'true');
+    url.searchParams.set('limit_per_type', String(params.limitPerType ?? 6));
+    url.searchParams.set('search_tags', 'true');
+    url.searchParams.set('search_profiles', 'true');
+    url.searchParams.set('cache', 'true');
+    if (params.type) url.searchParams.set('type', params.type);
+
+    return this.getJsonRecord(url, options);
   }
 
   private async getJsonRecord<T extends Record<string, unknown>>(url: URL, options: { signal?: AbortSignal }): Promise<T> {

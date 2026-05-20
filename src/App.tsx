@@ -519,6 +519,7 @@ type InferenceSettingsState = {
   depth: InferenceDepth
   confidenceThreshold: number
   includeWebSearch: boolean
+  rootOutcomeId: string | null
 }
 
 const defaultInferenceSettings: InferenceSettingsState = {
@@ -529,6 +530,7 @@ const defaultInferenceSettings: InferenceSettingsState = {
   depth: 2,
   confidenceThreshold: 0.55,
   includeWebSearch: true,
+  rootOutcomeId: null,
 }
 
 type ExternalResource = {
@@ -600,6 +602,8 @@ type MarketSearchResult = {
   score: number
   matchedBy: string
 }
+
+type SearchResultType = MarketSearchResult['type']
 
 type MarketSearchResponse = {
   data: {
@@ -1131,19 +1135,6 @@ async function createOrderPreview(scriptId: string, executionMode: OrderExecutio
   }).then((response) => readApiData<OrderPreview>(response))
 }
 
-async function createDirectOrderScript(marketId: string, outcomeId: string, token: string) {
-  return fetch(`${API_PREFIX}/scripts/direct-order`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    body: JSON.stringify({
-      marketId,
-      outcomeId,
-      orderMode: 'market',
-      amountUsd: 10,
-    }),
-  }).then((response) => readApiData<BackendScript>(response))
-}
-
 async function prepareOrderSignatures(
   preview: OrderPreview,
   walletAddress: string,
@@ -1205,7 +1196,9 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
     throw new Error('需要先完成钱包登录，前端拿到 Bearer Token 后才能启动正式 AI 推演。')
   }
   const inferenceMarket = await loadMarketForInference(market, signal)
-  const rootOutcome = marketInferenceOutcome(inferenceMarket)
+  const rootOutcome =
+    inferenceMarket.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId)
+    ?? marketInferenceOutcome(inferenceMarket)
   const rootOutcomeId = rootOutcome?.outcomeId
   if (!rootOutcomeId) {
     throw new Error('当前市场缺少 outcomeId，请等待市场详情加载完成后再启动推演。')
@@ -1328,29 +1321,6 @@ function scriptToInferenceResult(script: BackendScript, run: BackendInferenceSta
       '已读取生成的 causal script。',
     ],
     generatedAt: run.completedAt || new Date().toISOString(),
-  }
-}
-
-function scriptToDirectOrderResult(script: BackendScript, market: Market): InferenceResult {
-  return {
-    ...scriptToInferenceResult(
-      script,
-      {
-        id: `direct:${script.id}`,
-        status: 'completed',
-        stage: null,
-        progress: 100,
-        cacheHit: false,
-        scriptId: script.id,
-        errorMessage: null,
-        createdAt: script.createdAt,
-        completedAt: script.updatedAt,
-      },
-      market,
-      { ...defaultInferenceSettings, modelPreference: 'mock-causeway-v1' },
-    ),
-    model: 'manual-order',
-    logs: ['Created a direct order draft from the selected market outcome.'],
   }
 }
 
@@ -2304,24 +2274,11 @@ function App() {
     setInferenceResult(null)
     setView('progress')
   }, [])
-  const openInferenceSettings = useCallback((market?: Market) => {
+  const openInferenceSettings = useCallback((market?: Market, outcomeId?: string | null) => {
     if (market) setSelectedMarket(market)
+    setInferenceSettings((current) => ({ ...current, rootOutcomeId: outcomeId ?? null }))
     setView('infer')
   }, [])
-  const startDirectOrder = useCallback(async (market: Market, outcomeId: string) => {
-    if (!auth.isAuthenticated) {
-      await auth.signIn()
-    }
-    const session = readStoredAuthSession()
-    const token = session?.accessToken ?? auth.accessToken
-    if (!token) {
-      throw new Error('Wallet sign-in is required before creating an order draft.')
-    }
-    const script = await createDirectOrderScript(market.id, outcomeId, token)
-    setSelectedMarket(market)
-    setInferenceResult(scriptToDirectOrderResult(script, market))
-    setView('script')
-  }, [auth])
 
   return (
     <div className={introVisible ? 'app-shell app-intro-active' : 'app-shell'}>
@@ -2329,7 +2286,7 @@ function App() {
       <Header activeNav={activeNav} auth={auth} onNavigate={setView} />
       <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
         {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
-        {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={openInferenceSettings} onOrder={startDirectOrder} />}
+        {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={openInferenceSettings} />}
         {view === 'infer' && <InferenceSettings auth={auth} initialSettings={inferenceSettings} market={selectedMarket} onBack={() => setView('detail')} onStart={startInference} />}
         {view === 'progress' && (
           <InferenceProgress
@@ -2531,9 +2488,10 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedSearch, setSelectedSearch] = useState<MarketSearchResult | null>(null)
   const [searchResults, setSearchResults] = useState<MarketSearchResult[]>([])
+  const [activeSearchType, setActiveSearchType] = useState<SearchResultType>('market')
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchLoading, setSearchLoading] = useState(false)
-  const [networkMarkets, setNetworkMarkets] = useState<Market[]>(markets)
+  const [networkMarkets, setNetworkMarkets] = useState<Market[]>([])
   const [networkEdges, setNetworkEdges] = useState<ApiMarketEdge[]>([])
   const [networkSummary, setNetworkSummary] = useState<NetworkSummary>({
     total: markets.length,
@@ -2594,11 +2552,14 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
         .then((data) => {
           setSearchResults(data.results)
           setSearchOpen(true)
+          if (!data.results.some((result) => result.type === activeSearchType)) {
+            setActiveSearchType(data.results.find((result) => result.type)?.type ?? 'market')
+          }
         })
         .catch((fetchError: Error) => {
           if (fetchError.name !== 'AbortError') {
             setSearchResults([])
-            setSearchOpen(false)
+            setSearchOpen(true)
           }
         })
         .finally(() => {
@@ -2609,10 +2570,16 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [searchQuery, selectedSearch])
+  }, [activeSearchType, searchQuery, selectedSearch])
 
   useEffect(() => {
     const controller = new AbortController()
+    let cancelled = false
+    let timedOut = false
+    const timeout = window.setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, 12000)
     const params = new URLSearchParams({ limit: '25' })
     const trimmedQuery = searchQuery.trim()
     if (selectedSearch?.type === 'market' && selectedSearch.marketId) {
@@ -2630,10 +2597,11 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
         return readApiData<BackendMarketNetwork>(response)
       })
       .then((data) => {
+        if (cancelled) return
         const payload = backendNetworkToResponse(data)
         const nodes = payload.nodes.map(apiNodeToMarket)
         setNetworkMarkets(nodes)
-        setNetworkEdges(payload.edges)
+        setNetworkEdges(nodes.length ? payload.edges : [])
         setNetworkSummary({
           total: data.total ?? nodes.length,
           returned: data.returned ?? nodes.length,
@@ -2645,22 +2613,28 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
         setError(null)
       })
       .catch((fetchError: Error) => {
-        if (fetchError.name !== 'AbortError') {
-          setError(fetchError.message)
-          setNetworkMarkets(markets)
-          setNetworkEdges([])
-        }
+        if (cancelled) return
+        if (fetchError.name === 'AbortError' && !timedOut) return
+        setError(timedOut ? '市场网络加载超时，请稍后重试。' : fetchError.message)
+        setNetworkMarkets([])
+        setNetworkEdges([])
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
+        window.clearTimeout(timeout)
+        if (!cancelled) setLoading(false)
       })
-    return () => controller.abort()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeout)
+      controller.abort()
+    }
   }, [activeCategory, searchQuery, selectedSearch])
 
   const chooseSearchResult = useCallback((result: MarketSearchResult) => {
     setSelectedSearch(result)
     setSearchQuery(result.title)
     setSearchOpen(false)
+    setActiveSearchType(result.type)
     setLoading(true)
   }, [])
 
@@ -2668,6 +2642,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
     setSelectedSearch(null)
     setSearchQuery('')
     setSearchResults([])
+    setActiveSearchType('market')
     setSearchOpen(false)
     setLoading(true)
   }, [])
@@ -2692,7 +2667,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
                 }
               }}
               onFocus={() => {
-                if (searchResults.length) setSearchOpen(true)
+                if (searchResults.length || searchQuery.trim().length >= 2) setSearchOpen(true)
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0])
@@ -2708,9 +2683,11 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
               </button>
             ) : null}
           </div>
-          {searchOpen && (searchLoading || searchResults.length) ? (
+          {searchOpen && (searchLoading || searchResults.length || searchQuery.trim().length >= 2) ? (
             <SearchPopover
+              activeType={activeSearchType}
               loading={searchLoading}
+              onTypeChange={setActiveSearchType}
               onSelect={chooseSearchResult}
               query={searchQuery}
               results={searchResults}
@@ -2733,24 +2710,30 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       </div>
       <div className="network-stage">
         <NetworkMap edges={networkEdges} loading={loading} markets={networkMarkets} onConfirmMarket={onConfirmMarket} />
-        {error ? <div className="network-error">后端数据暂不可用，正在显示本地示例图谱：{error}</div> : null}
+        {error ? <div className="network-error">后端数据暂不可用：{error}</div> : null}
       </div>
     </section>
   )
+}
+
+type SelectedInferenceOutcome = {
+  rootMarketId: string
+  market: Market
+  outcomeId: string
+  label: string
 }
 
 function MarketDetail({
   market,
   onBack,
   onInfer,
-  onOrder,
 }: {
   market: Market
   onBack: () => void
-  onInfer: (market?: Market) => void
-  onOrder: (market: Market, outcomeId: string) => Promise<void>
+  onInfer: (market?: Market, outcomeId?: string | null) => void
 }) {
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null)
+  const [selectedOutcome, setSelectedOutcome] = useState<SelectedInferenceOutcome | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -2780,8 +2763,19 @@ function MarketDetail({
   const ruleCopy = marketRuleCopy(displayMarket)
   const descriptionCopy = marketDescriptionCopy(displayMarket)
   const primaryMarket = [...detailMarkets].sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))[0] || market
-  const inferenceMarket = marketInferenceOutcome(displayMarket) ? displayMarket : primaryMarket
-  const inferenceReady = Boolean(marketInferenceOutcome(inferenceMarket))
+  const fallbackInferenceMarket = marketInferenceOutcome(displayMarket) ? displayMarket : primaryMarket
+  const activeSelectedOutcome = selectedOutcome?.rootMarketId === market.id ? selectedOutcome : null
+  const inferenceMarket = activeSelectedOutcome?.market ?? fallbackInferenceMarket
+  const inferenceReady = Boolean(activeSelectedOutcome?.outcomeId)
+  const handleSelectOutcome = useCallback((selectedMarket: Market, action: OrderbookOutcomeAction) => {
+    if (!action.outcomeId) return
+    setSelectedOutcome({
+      rootMarketId: market.id,
+      market: selectedMarket,
+      outcomeId: action.outcomeId,
+      label: action.label,
+    })
+  }, [market.id])
   return (
     <section className="page market-detail-page">
       <BackButton onClick={onBack} />
@@ -2828,7 +2822,13 @@ function MarketDetail({
               </div>
             </div>
             <MarketPriceChart eventMarkets={detailMarkets} market={displayMarket} />
-            <MarketOrderBook eventMarkets={detailMarkets} loading={!eventDetail} market={displayMarket} onOrder={onOrder} />
+            <MarketOrderBook
+              eventMarkets={detailMarkets}
+              loading={!eventDetail}
+              market={displayMarket}
+              onSelectOutcome={handleSelectOutcome}
+              selectedOutcomeId={activeSelectedOutcome?.outcomeId ?? null}
+            />
           </Card>
         </div>
 
@@ -2863,8 +2863,8 @@ function MarketDetail({
           </Card>
         </aside>
       </div>
-      <button className="primary-action" type="button" onClick={() => onInfer(inferenceMarket)} disabled={!inferenceReady}>
-        <BrainCircuit size={20} /> {inferenceReady ? '设定作为推演节点' : '正在加载推演数据'}
+      <button className="primary-action" type="button" onClick={() => onInfer(inferenceMarket, activeSelectedOutcome?.outcomeId ?? null)} disabled={!inferenceReady}>
+        <BrainCircuit size={20} /> {activeSelectedOutcome ? `设定 ${activeSelectedOutcome.label} 作为推演节点` : '先选择 Yes / No 推演方向'}
       </button>
     </section>
   )
@@ -2953,6 +2953,7 @@ function InferenceSettings({
     ['social', '社交媒体', '社交讨论和情绪'],
     ['all', '全部', '所有可用数据源'],
   ]
+  const selectedOutcome = market.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId) ?? market.outcomes?.find((outcome) => outcome.outcomeId)
   return (
     <section className="page">
       <BackButton onClick={onBack} />
@@ -2965,6 +2966,7 @@ function InferenceSettings({
             <div>
               <h3>{market.title}</h3>
               <p>{marketSubtitle(market)}</p>
+              {selectedOutcome ? <span className="root-outcome-pill">推演方向：{selectedOutcome.label}</span> : null}
             </div>
             <strong>{market.price}%</strong>
             <span className={market.change >= 0 ? 'green-text' : 'red-text'}>{marketChangeText(market)}</span>
@@ -3891,7 +3893,7 @@ function NetworkMap({
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number } | null>(null)
   const [hoverPlacement, setHoverPlacement] = useState<HoverPlacement>('right')
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const visibleMarkets = useMemo(() => (graphMarkets.length ? graphMarkets : markets).slice(0, MAX_FLOW_NODES), [graphMarkets])
+  const visibleMarkets = useMemo(() => graphMarkets.slice(0, MAX_FLOW_NODES), [graphMarkets])
   const layoutFocusId = visibleMarkets[0]?.id
   const selectedFocusId = selectedId && visibleMarkets.some((market) => market.id === selectedId) ? selectedId : layoutFocusId
   const graph = useMemo(
@@ -3988,6 +3990,7 @@ function NetworkMap({
         />
       ) : null}
       {loading ? <div className="network-loading">正在从 SQLite / Polymarket 同步市场网络...</div> : null}
+      {!loading && !visibleMarkets.length ? <div className="network-empty">暂无市场网络数据</div> : null}
       <div className="legend">
         <span><i className="dot blue" />政治</span>
         <span><i className="dot green" />宏观经济</span>
@@ -4392,25 +4395,40 @@ function BackButton({ onClick }: { onClick: () => void }) {
 }
 
 function SearchPopover({
+  activeType,
   loading,
+  onTypeChange,
   onSelect,
   query,
   results,
 }: {
+  activeType: SearchResultType
   loading: boolean
+  onTypeChange: (type: SearchResultType) => void
   onSelect: (result: MarketSearchResult) => void
   query: string
   results: MarketSearchResult[]
 }) {
+  const tabs: Array<{ type: SearchResultType; label: string }> = [
+    { type: 'market', label: '盘口' },
+    { type: 'event', label: '事件' },
+    { type: 'topic', label: '主题' },
+  ]
+  const filteredResults = results.filter((result) => result.type === activeType)
   return (
     <div className="search-popover">
       <div className="search-tabs">
-        <span className="active">盘口</span>
-        <span>事件</span>
-        <span>主题</span>
+        {tabs.map((tab) => {
+          const count = results.filter((result) => result.type === tab.type).length
+          return (
+            <button className={activeType === tab.type ? 'active' : ''} key={tab.type} type="button" onClick={() => onTypeChange(tab.type)}>
+              {tab.label}{count ? ` ${count}` : ''}
+            </button>
+          )
+        })}
       </div>
       <div className="search-result-list">
-        {results.map((result) => (
+        {filteredResults.map((result) => (
           <button className="search-result-item" key={`${result.type}:${result.id}`} type="button" onClick={() => onSelect(result)}>
             <span className="search-result-avatar">
               {result.image || result.icon ? <img alt="" src={result.image || result.icon || ''} /> : <i>{result.title.slice(0, 1)}</i>}
@@ -4425,12 +4443,17 @@ function SearchPopover({
             </span>
           </button>
         ))}
-        {!loading && !results.length ? <div className="search-empty">没有找到 “{query}” 的相关市场</div> : null}
+        {!loading && !filteredResults.length ? <div className="search-empty">没有找到 “{query}” 的{searchTypeLabel(activeType)}结果</div> : null}
         {loading ? <div className="search-empty">正在搜索 Polymarket 市场...</div> : null}
       </div>
-      {results.length ? <button className="search-all" type="button">查看全部结果 <ArrowRight size={15} /></button> : null}
     </div>
   )
+}
+
+function searchTypeLabel(type: SearchResultType) {
+  if (type === 'market') return '盘口'
+  if (type === 'event') return '事件'
+  return '主题'
 }
 
 function CategoryChips({
@@ -4599,18 +4622,91 @@ function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Ma
   )
 }
 
+type OrderbookOutcomeAction = {
+  label: string
+  outcomeId: string | null
+  price: number | null
+  tone: 'yes' | 'no'
+}
+
+function marketOutcomeActions(market: Market): OrderbookOutcomeAction[] {
+  const outcomes = market.outcomes ?? []
+  const yesOutcome = findOutcomeByLabel(outcomes, 'yes') ?? outcomes[0]
+  const noOutcome = findOutcomeByLabel(outcomes, 'no') ?? outcomes[1]
+  const yesPrice = firstValidUnitPrice(market.bestAsk, yesOutcome?.price, market.lastTradePrice, market.price / 100)
+  const noPrice = firstValidUnitPrice(noOutcome?.price, market.bestBid == null ? null : 1 - market.bestBid, yesPrice == null ? null : 1 - yesPrice)
+  const actions: OrderbookOutcomeAction[] = []
+  if (yesOutcome?.outcomeId) {
+    actions.push({ label: yesOutcome.label || 'Yes', outcomeId: yesOutcome.outcomeId, price: yesPrice, tone: 'yes' })
+  }
+  if (noOutcome?.outcomeId) {
+    actions.push({ label: noOutcome.label || 'No', outcomeId: noOutcome.outcomeId, price: noPrice, tone: 'no' })
+  }
+  return actions.length ? actions : [{ label: 'Yes', outcomeId: null, price: yesPrice, tone: 'yes' }]
+}
+
+function marketOutcomeRows(market: Market) {
+  const actions = marketOutcomeActions(market)
+  const isBinary = actions.length >= 2 && actions.some((action) => action.tone === 'yes') && actions.some((action) => action.tone === 'no')
+  if (isBinary) {
+    const yesPrice = actions.find((action) => action.tone === 'yes')?.price ?? market.bestAsk ?? market.price / 100
+    return [{
+      id: market.id,
+      market,
+      label: marketDisplayLabel(market),
+      subtitle: `Token ${formatToken(market.outcomes?.[0]?.tokenId)} · 市场成交量 ${market.volume}`,
+      index: 0,
+      percent: unitPriceToPercent(yesPrice),
+      bid: market.bestBid ?? yesPrice,
+      ask: market.bestAsk ?? yesPrice,
+      trend: outcomeTrend(0, yesPrice),
+      actions,
+    }]
+  }
+
+  return getOutcomeRows(market).map((outcome) => ({
+    id: `${outcome.label}-${outcome.index}`,
+    market,
+    label: outcome.label,
+    subtitle: `Token ${formatToken(outcome.tokenId)} · 市场成交量 ${market.volume}`,
+    index: outcome.index,
+    percent: outcome.percent,
+    bid: outcome.index === 0 ? market.bestBid ?? outcome.yesPrice : outcome.yesPrice,
+    ask: outcome.index === 0 ? market.bestAsk ?? outcome.yesPrice : outcome.yesPrice,
+    trend: outcomeTrend(outcome.index, outcome.price),
+    actions: [{
+      label: outcome.label,
+      outcomeId: outcome.outcomeId ?? null,
+      price: outcome.yesPrice,
+      tone: outcome.label.toLowerCase() === 'no' ? 'no' as const : 'yes' as const,
+    }],
+  }))
+}
+
+function findOutcomeByLabel(outcomes: NonNullable<Market['outcomes']>, label: string) {
+  return outcomes.find((outcome) => outcome.label.trim().toLowerCase() === label)
+}
+
+function firstValidUnitPrice(...values: Array<number | null | undefined>) {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return clamp(value, 0, 1)
+  }
+  return null
+}
+
 function MarketOrderBook({
   eventMarkets,
   loading,
   market,
-  onOrder,
+  onSelectOutcome,
+  selectedOutcomeId,
 }: {
   eventMarkets: Market[]
   loading: boolean
   market: Market
-  onOrder: (market: Market, outcomeId: string) => Promise<void>
+  onSelectOutcome: (market: Market, action: OrderbookOutcomeAction) => void
+  selectedOutcomeId: string | null
 }) {
-  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null)
   const [orderError, setOrderError] = useState<string | null>(null)
   const outcomeRows =
     eventMarkets.length > 1
@@ -4619,48 +4715,24 @@ function MarketOrderBook({
           .map((item, index) => ({
             id: item.id,
             market: item,
-            outcomeId: item.outcomes?.[0]?.outcomeId ?? null,
-            tokenId: item.outcomes?.[0]?.tokenId ?? null,
             label: marketDisplayLabel(item),
             subtitle: `Token ${formatToken(item.outcomes?.[0]?.tokenId)} · 市场成交量 ${item.volume}`,
             index,
             percent: item.price,
-            yesPrice: item.bestAsk ?? item.price / 100,
-            noPrice: item.bestBid == null ? 1 - item.price / 100 : 1 - item.bestBid,
             bid: item.bestBid ?? item.price / 100,
             ask: item.bestAsk ?? item.price / 100,
             trend: outcomeTrend(index, item.price / 100),
+            actions: marketOutcomeActions(item),
           }))
-      : getOutcomeRows(market).map((outcome) => ({
-          id: `${outcome.label}-${outcome.index}`,
-          market,
-          outcomeId: outcome.outcomeId ?? null,
-          tokenId: outcome.tokenId ?? null,
-          label: outcome.label,
-          subtitle: `Token ${formatToken(outcome.tokenId)} · 市场成交量 ${market.volume}`,
-          index: outcome.index,
-          percent: outcome.percent,
-          yesPrice: outcome.yesPrice,
-          noPrice: outcome.noPrice,
-          bid: outcome.index === 0 ? market.bestBid ?? outcome.yesPrice : outcome.yesPrice,
-          ask: outcome.index === 0 ? market.bestAsk ?? outcome.yesPrice : outcome.yesPrice,
-          trend: outcomeTrend(outcome.index, outcome.price),
-        }))
-  const handleOrder = useCallback(async (row: typeof outcomeRows[number]) => {
-    if (!row.outcomeId) {
+      : marketOutcomeRows(market)
+  const handleOutcomeSelect = useCallback((row: typeof outcomeRows[number], action: OrderbookOutcomeAction) => {
+    if (!action.outcomeId) {
       setOrderError('Selected outcome is missing an outcomeId.')
       return
     }
     setOrderError(null)
-    setPendingOrderId(row.id)
-    try {
-      await onOrder(row.market, row.outcomeId)
-    } catch (error) {
-      setOrderError(errorMessage(error))
-    } finally {
-      setPendingOrderId(null)
-    }
-  }, [onOrder])
+    onSelectOutcome(row.market, action)
+  }, [onSelectOutcome])
   return (
     <div className="market-orderbook">
       <div className="orderbook-head">
@@ -4689,15 +4761,25 @@ function MarketOrderBook({
                 <span>Bid {formatCents(outcome.bid)}</span>
                 <span>Ask {formatCents(outcome.ask)}</span>
               </div>
-              <button
-                className="buy-yes orderbook-order-button"
-                disabled={loading || pendingOrderId != null || outcome.market.acceptingOrders === false || !outcome.outcomeId}
-                type="button"
-                aria-label={`下单 ${outcome.label} ${formatCents(outcome.ask)}`}
-                onClick={() => void handleOrder(outcome)}
-              >
-                {pendingOrderId === outcome.id ? '创建中...' : `下单 ${formatCents(outcome.ask)}`}
-              </button>
+              <div className="orderbook-actions">
+                {outcome.actions.map((action) => (
+                  <button
+                    className={[
+                      action.tone === 'no' ? 'buy-no' : 'buy-yes',
+                      'orderbook-order-button',
+                      selectedOutcomeId === action.outcomeId ? 'selected' : '',
+                    ].filter(Boolean).join(' ')}
+                    disabled={loading || outcome.market.acceptingOrders === false || !action.outcomeId}
+                    key={action.label}
+                    type="button"
+                    aria-label={`推演 ${outcome.label} ${action.label} ${formatCents(action.price)}`}
+                    aria-pressed={selectedOutcomeId === action.outcomeId}
+                    onClick={() => handleOutcomeSelect(outcome, action)}
+                  >
+                    推演 {action.label} <span>{formatCents(action.price)}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )
         })}

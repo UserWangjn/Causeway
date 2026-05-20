@@ -681,9 +681,13 @@ button {
   font-weight: 760;
 }
 
-.search-tabs span {
+.search-tabs button {
   padding: 7px 10px;
+  border: 0;
   border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
 }
 
 .search-tabs .active {
@@ -778,18 +782,6 @@ button {
   padding: 18px 16px;
   color: #728197;
   font-size: 14px;
-}
-
-.search-all {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 16px 16px;
-  border: 0;
-  color: var(--blue);
-  background: transparent;
-  font-size: 14px;
-  font-weight: 760;
 }
 
 .searchbox.narrow {
@@ -1614,7 +1606,8 @@ button {
 }
 
 .network-loading,
-.network-error {
+.network-error,
+.network-empty {
   position: absolute;
   top: 14px;
   right: 14px;
@@ -1633,6 +1626,17 @@ button {
   top: 58px;
   color: #8a5b08;
   background: #fff8ed;
+}
+
+.network-empty {
+  top: 50%;
+  right: auto;
+  left: 50%;
+  max-width: 360px;
+  transform: translate(-50%, -50%);
+  color: #52637c;
+  background: rgba(255, 255, 255, 0.96);
+  text-align: center;
 }
 
 .dot {
@@ -2211,7 +2215,7 @@ button {
 
 .orderbook-row {
   display: grid;
-  grid-template-columns: minmax(230px, 1fr) 130px 150px 170px;
+  grid-template-columns: minmax(230px, 1fr) 130px 150px 220px;
   align-items: center;
   gap: 14px;
   min-height: 76px;
@@ -2262,16 +2266,28 @@ button {
   gap: 5px;
 }
 
+.orderbook-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .buy-yes,
 .buy-no {
   min-height: 46px;
-  padding: 0 14px;
+  padding: 0 12px;
   border: 0;
   border-radius: 8px;
   font-size: 14px;
   font-weight: 820;
   line-height: 1.15;
-  white-space: nowrap;
+}
+
+.buy-yes span,
+.buy-no span {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
 }
 
 .buy-yes {
@@ -2282,6 +2298,15 @@ button {
 .buy-no {
   color: #ef4444;
   background: #fde9e9;
+}
+
+.orderbook-order-button {
+  border: 1px solid transparent;
+}
+
+.orderbook-order-button.selected {
+  border-color: currentColor;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
 }
 
 .orderbook-order-button:disabled {
@@ -2703,6 +2728,18 @@ button {
 .root-market-card h3 {
   margin: 0 0 4px;
   font-size: 18px;
+}
+
+.root-outcome-pill {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 8px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #0b7d4b;
+  background: #ddf6e8;
+  font-size: 12px;
+  font-weight: 820;
 }
 
 .root-market-card > strong {
@@ -4340,7 +4377,7 @@ button {
   }
 
   .orderbook-row {
-    grid-template-columns: minmax(220px, 1fr) 110px 120px 150px;
+    grid-template-columns: minmax(220px, 1fr) 110px 120px 190px;
   }
 
   .order-draft-row {

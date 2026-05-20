@@ -16,6 +16,7 @@ import {
 import { toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
 import { ClobClient } from '../../integrations/polymarket/services/clob.client';
+import { GammaClient } from '../../integrations/polymarket/services/gamma.client';
 import { EventDetailQueryDto, MarketHistoryQueryDto, MarketSearchQueryDto } from './dto/market-explorer-query.dto';
 import { MarketQueryDto } from './dto/market-query.dto';
 
@@ -188,6 +189,8 @@ export class MarketsService {
   constructor(
     @Inject(ClobClient)
     private readonly clobClient: ClobClient,
+    @Inject(GammaClient)
+    private readonly gammaClient: GammaClient,
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
   ) {}
@@ -290,115 +293,13 @@ export class MarketsService {
   async searchMarkets(query: MarketSearchQueryDto) {
     const q = query.q.trim();
     const limit = query.limit ?? 8;
-    const [markets, events] = await Promise.all([
-      this.prisma.polymarketMarket.findMany({
-        where: {
-          active: true,
-          closed: false,
-          archived: false,
-          staleDetectedAt: null,
-          OR: [
-            { question: { contains: q, mode: 'insensitive' } },
-            { slug: { contains: q, mode: 'insensitive' } },
-            { description: { contains: q, mode: 'insensitive' } },
-          ],
-        },
-        orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
-        take: limit,
-        select: EXPLORER_MARKET_SELECT,
-      }),
-      this.prisma.polymarketEvent.findMany({
-        where: {
-          active: true,
-          closed: false,
-          archived: false,
-          staleDetectedAt: null,
-          OR: [
-            { title: { contains: q, mode: 'insensitive' } },
-            { slug: { contains: q, mode: 'insensitive' } },
-            { description: { contains: q, mode: 'insensitive' } },
-          ],
-        },
-        orderBy: [{ volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
-        take: Math.min(4, limit),
-        select: {
-          id: true,
-          slug: true,
-          title: true,
-          tags: true,
-          icon: true,
-          image: true,
-          volume: true,
-          liquidity: true,
-          endDate: true,
-          _count: {
-            select: {
-              markets: true,
-            },
-          },
-        },
-      }),
-    ]);
-
-    const marketResults = markets.map((market, index) => {
-      const category = readMarketCategoryKey(market.event?.tags, [
-        market.question,
-        market.slug,
-        market.event?.title,
-        market.event?.slug,
-    ]);
-      return {
-        type: 'market' as const,
-        id: `market:${market.id}`,
-        marketId: market.id,
-        eventId: market.event?.id ?? market.eventId,
-        eventSlug: market.event?.slug ?? null,
-        slug: market.slug,
-        title: market.question,
-        subtitle: market.event?.title ?? marketCategoryLabel(category),
-        category,
-        categoryKey: category,
-        icon: market.icon ?? market.image ?? market.event?.icon ?? market.event?.image,
-        image: market.image ?? market.icon ?? market.event?.image ?? market.event?.icon,
-        price: firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid, market.outcomes[0]?.price),
-        volume: toNullableNumber(market.volume),
-        liquidity: toNullableNumber(market.liquidity),
-        endDate: market.endDate?.toISOString() ?? null,
-        score: scoreByVolume(market.volume, index),
-        matchedBy: 'market',
-      };
-    });
-
-    const eventResults = events.map((event, index) => {
-      const category = readMarketCategoryKey(event.tags, [event.title, event.slug]);
-      return {
-        type: 'event' as const,
-        id: `event:${event.id}`,
-        marketId: null,
-        eventId: event.id,
-        eventSlug: event.slug,
-        slug: null,
-        title: event.title,
-        subtitle: `${event._count.markets} markets`,
-        category,
-        categoryKey: category,
-        icon: event.icon ?? event.image,
-        image: event.image ?? event.icon,
-        price: null,
-        volume: toNullableNumber(event.volume),
-        liquidity: toNullableNumber(event.liquidity),
-        endDate: event.endDate?.toISOString() ?? null,
-        score: scoreByVolume(event.volume, index),
-        matchedBy: 'event',
-      };
-    });
+    const payload = await this.gammaClient.searchV2({ q, limitPerType: Math.max(6, Math.min(limit, 12)) });
+    const results = formatGammaSearchResults(payload, limit);
 
     return {
-      results: [...marketResults, ...eventResults]
-        .sort((left, right) => right.score - left.score)
-        .slice(0, limit),
+      results,
       generatedAt: new Date().toISOString(),
-      source: 'database',
+      source: 'polymarket_gamma_search_v2',
     };
   }
 
@@ -580,7 +481,11 @@ export class MarketsService {
       }),
     ]);
     if (!nodes.length) {
-      return this.buildDeterministicMarketNetwork(query, limit, total);
+      return {
+        nodes: [],
+        edges: [],
+        ...this.formatNetworkMeta(query, limit, total, 0, 'precomputed'),
+      };
     }
     const graphCandidates = nodes.map((node, index) => ({
       market: node.market,
@@ -946,20 +851,6 @@ export class MarketsService {
       syncedAt: market.syncedAt.toISOString(),
       x: 50 + (index % 5) * 8,
       y: 50 + Math.floor(index / 5) * 8,
-    };
-  }
-
-  private async buildDeterministicMarketNetwork(query: MarketQueryDto, limit: number, total: number) {
-    const selectedMarkets = selectNetworkCandidates(
-      await this.loadActivityNetworkCandidates(query, networkCandidateLimit(limit)),
-      query,
-      limit,
-    );
-
-    return {
-      nodes: selectedMarkets.map((candidate) => this.formatNetworkNode(candidate.market, candidate.category)),
-      edges: buildEventEdges(selectedMarkets.map((candidate) => candidate.market)),
-      ...this.formatNetworkMeta(query, limit, total, selectedMarkets.length, 'deterministic'),
     };
   }
 
@@ -1388,11 +1279,6 @@ function networkCandidateCategory(market: NetworkMarketRecord): string {
   ]);
 }
 
-function scoreByVolume(value: unknown, index: number): number {
-  const volume = toNullableNumber(value) ?? 0;
-  return volume + Math.max(0, 1000 - index);
-}
-
 function normalizeHistoryInterval(value: string | undefined): '1h' | '6h' | '1d' | '1w' | '1m' | 'all' {
   if (value === '1h' || value === '6h' || value === '1d' || value === '1w' || value === '1m' || value === 'all') {
     return value;
@@ -1400,26 +1286,136 @@ function normalizeHistoryInterval(value: string | undefined): '1h' | '6h' | '1d'
   return 'all';
 }
 
-function buildEventEdges(markets: NetworkMarketRecord[]) {
-  const groups = new Map<string, NetworkMarketRecord[]>();
-  for (const market of markets) {
-    if (!market.eventId) continue;
-    const group = groups.get(market.eventId) ?? [];
-    group.push(market);
-    groups.set(market.eventId, group);
+type GammaSearchResult = {
+  type: 'market' | 'event' | 'topic';
+  id: string;
+  marketId?: string | null;
+  eventId?: string | null;
+  eventSlug?: string | null;
+  topic?: string | null;
+  slug?: string | null;
+  title: string;
+  subtitle?: string | null;
+  category?: string | null;
+  categoryKey?: string | null;
+  icon?: string | null;
+  image?: string | null;
+  price?: number | null;
+  volume?: number | null;
+  liquidity?: number | null;
+  endDate?: string | null;
+  score: number;
+  matchedBy: string;
+};
+
+function formatGammaSearchResults(payload: Record<string, unknown>, limit: number): GammaSearchResult[] {
+  const results: GammaSearchResult[] = [];
+  const events = readRecordArray(payload.events);
+  const tags = readRecordArray(payload.tags);
+
+  for (const [eventIndex, event] of events.entries()) {
+    const eventId = readString(event.id);
+    const eventSlug = readString(event.slug);
+    const eventTitle = readString(event.title) ?? 'Polymarket event';
+    const eventImage = readString(event.image) ?? readString(event.icon);
+    const eventEndDate = readString(event.endDate);
+    const markets = readRecordArray(event.markets);
+
+    results.push({
+      type: 'event',
+      id: `event:${eventId ?? eventSlug ?? eventIndex}`,
+      marketId: null,
+      eventId,
+      eventSlug,
+      slug: eventSlug,
+      title: eventTitle,
+      subtitle: `${markets.length} markets`,
+      icon: eventImage,
+      image: eventImage,
+      price: null,
+      volume: toNullableNumber(event.volume),
+      liquidity: toNullableNumber(event.liquidity),
+      endDate: eventEndDate,
+      score: gammaScore(event, eventIndex),
+      matchedBy: 'event',
+    });
+
+    for (const [marketIndex, market] of markets.entries()) {
+      const marketId = readString(market.id);
+      const marketSlug = readString(market.slug);
+      const marketTitle = readString(market.question) ?? readString(market.groupItemTitle) ?? eventTitle;
+      results.push({
+        type: 'market',
+        id: `market:${marketId ?? marketSlug ?? `${eventIndex}:${marketIndex}`}`,
+        marketId,
+        eventId,
+        eventSlug,
+        slug: marketSlug,
+        title: marketTitle,
+        subtitle: readString(market.groupItemTitle) ?? eventTitle,
+        icon: eventImage,
+        image: eventImage,
+        price: firstNumber(market.lastTradePrice, market.bestAsk, readOutcomePrice(market, 0)),
+        volume: toNullableNumber(market.volume),
+        liquidity: toNullableNumber(market.liquidity),
+        endDate: readString(market.endDate) ?? eventEndDate,
+        score: gammaScore(market, eventIndex * 100 + marketIndex),
+        matchedBy: 'market',
+      });
+    }
   }
 
-  return [...groups.entries()].flatMap(([eventId, group]) => {
-    const [root, ...related] = group;
-    if (!root) return [];
-    return related.map((market) => ({
-      id: `event:${eventId}:${root.id}:${market.id}`,
-      source: root.id,
-      target: market.id,
-      relationType: 'event' as const,
-      weight: 0.8,
-    }));
-  });
+  for (const [index, tag] of tags.entries()) {
+    const slug = readString(tag.slug);
+    const label = readString(tag.label) ?? slug ?? 'Topic';
+    results.push({
+      type: 'topic',
+      id: `topic:${readString(tag.id) ?? slug ?? index}`,
+      marketId: null,
+      eventId: null,
+      eventSlug: null,
+      topic: slug ?? label,
+      slug,
+      title: label,
+      subtitle: `${toNullableNumber(tag.event_count) ?? 0} events`,
+      price: null,
+      volume: null,
+      liquidity: null,
+      endDate: null,
+      score: 500 - index,
+      matchedBy: 'topic',
+    });
+  }
+
+  return (['market', 'event', 'topic'] as const).flatMap((type) =>
+    results
+      .filter((result) => result.type === type)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit),
+  );
+}
+
+function gammaScore(value: Record<string, unknown>, index: number): number {
+  return (
+    (toNullableNumber(value.volume) ?? 0)
+    + (toNullableNumber(value.liquidity) ?? 0) * 0.1
+    + Math.max(0, 1000 - index)
+  );
+}
+
+function readOutcomePrice(market: Record<string, unknown>, index: number): number | null {
+  const prices = Array.isArray(market.outcomePrices) ? market.outcomePrices : [];
+  return toNullableNumber(prices[index]);
+}
+
+function readRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
 }
 
 const NETWORK_RELATION_TYPES = ['tag', 'event', 'semantic', 'price_correlation', 'ai'] as const;
