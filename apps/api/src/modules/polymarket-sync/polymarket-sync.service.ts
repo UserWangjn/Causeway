@@ -1,5 +1,5 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
-import { Prisma, SyncRunStatus } from '@prisma/client';
+import { CausewayOrderStatus, Prisma, SyncRunStatus } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
 import {
   decodeOpaqueCursor,
@@ -55,6 +55,12 @@ export class PolymarketSyncService {
       let metadata: Record<string, unknown> = {};
       if (mode === 'full') {
         const result = await this.syncFullDiscovery(syncRun.id, dto.limit, options.abortSignal);
+        fetchedCount = result.fetchedCount;
+        upsertedCount = result.upsertedCount;
+        skippedPayloads = result.skippedPayloads;
+        metadata = result.metadata;
+      } else if (mode === 'hot') {
+        const result = await this.syncHotMarkets(syncRun.id, dto.limit, dto.hotEventLimit, options.abortSignal);
         fetchedCount = result.fetchedCount;
         upsertedCount = result.upsertedCount;
         skippedPayloads = result.skippedPayloads;
@@ -302,6 +308,214 @@ export class PolymarketSyncService {
         partial: !completeDiscovery,
       },
     };
+  }
+
+  private async syncHotMarkets(
+    syncRunId: string,
+    marketLimit: number | undefined,
+    hotEventLimit: number | undefined,
+    abortSignal?: AbortSignal,
+  ): Promise<HotSyncResult> {
+    const syncStartedAt = new Date();
+    const limit = marketLimit ?? 250;
+    const eventLimit = Math.min(hotEventLimit ?? 50, limit);
+    const seenMarketKeys = new Set<string>();
+    const skippedPayloads: SkippedGammaPayload[] = [];
+
+    throwIfSyncAborted(abortSignal);
+    const events = await this.gammaClient.getEvents(
+      {
+        limit: eventLimit,
+        offset: 0,
+        active: true,
+        closed: false,
+        order: 'volume_24hr',
+        ascending: false,
+      },
+      { signal: abortSignal },
+    );
+    throwIfSyncAborted(abortSignal);
+
+    const eventPayloadCandidates = flattenEventMarketPayloads(events);
+    const eventCandidateKeys = new Set(eventPayloadCandidates.map(getMarketPayloadKey).filter((key): key is string => Boolean(key)));
+    const localCandidateLimit = Math.min(limit, Math.max(25, Math.ceil(limit * 0.4)));
+    const localCandidates = await this.loadHotMarketCandidates(localCandidateLimit);
+    const localCandidateKeys = new Set(localCandidates.map((candidate) => `externalMarketId:${candidate.externalMarketId}`));
+    const localEventIdByExternalMarketId = new Map<string, string | null>();
+    const localLookupCandidates = localCandidates.filter((candidate) => !eventCandidateKeys.has(`externalMarketId:${candidate.externalMarketId}`));
+    const localPayloadsByPriority = new Array<Record<string, unknown> | null>(localLookupCandidates.length).fill(null);
+
+    await mapWithConcurrency(localLookupCandidates, Math.min(4, this.marketUpsertConcurrency), async (candidate, index) => {
+      throwIfSyncAborted(abortSignal);
+      localEventIdByExternalMarketId.set(candidate.externalMarketId, candidate.eventId);
+      try {
+        const payload = await this.gammaClient.getMarketById(candidate.externalMarketId, { signal: abortSignal });
+        localPayloadsByPriority[index] = payload;
+      } catch (error) {
+        throwIfSyncAborted(abortSignal);
+        skippedPayloads.push({
+          index,
+          reason: `gamma_lookup_failed:${error instanceof Error ? error.message : String(error)}`,
+          externalMarketId: candidate.externalMarketId,
+          slug: candidate.slug,
+        });
+      }
+    });
+
+    const localEventPayloads = eventPayloadCandidates.filter((payload) => {
+      const key = getMarketPayloadKey(payload);
+      return key ? localCandidateKeys.has(key) : false;
+    });
+    const localPayloads = localPayloadsByPriority.filter((payload): payload is Record<string, unknown> => Boolean(payload));
+    const payloads: Record<string, unknown>[] = [];
+    payloads.push(...takeNewMarketPayloads(localEventPayloads, seenMarketKeys, limit));
+    payloads.push(...takeNewMarketPayloads(localPayloads, seenMarketKeys, Math.max(0, limit - payloads.length)));
+    payloads.push(...takeNewMarketPayloads(eventPayloadCandidates, seenMarketKeys, Math.max(0, limit - payloads.length)));
+    const normalizedResult = this.normalizePayloads(payloads);
+    skippedPayloads.push(...normalizedResult.skippedPayloads);
+
+    const eventIdByExternalId = await this.upsertEventsForMarkets(normalizedResult.normalizedMarkets, syncStartedAt, abortSignal);
+    await mapWithConcurrency(
+      normalizedResult.normalizedMarkets,
+      this.marketUpsertConcurrency,
+      async (market) => {
+        throwIfSyncAborted(abortSignal);
+        const fallbackEventId = market.externalMarketId ? localEventIdByExternalMarketId.get(market.externalMarketId) ?? null : null;
+        await this.upsertMarket(market, {
+          abortSignal,
+          seenAt: syncStartedAt,
+          eventId: market.event ? eventIdByExternalId.get(market.event.externalEventId) ?? null : fallbackEventId,
+          skipEventUpsert: true,
+        });
+      },
+    );
+
+    await this.prisma.syncRun.update({
+      where: { id: syncRunId },
+      data: {
+        fetchedCount: payloads.length,
+        upsertedCount: normalizedResult.normalizedMarkets.length,
+        cursor: String(payloads.length),
+        metadata: toJson({
+          mode: 'hot',
+          source: 'events_and_local_hotset',
+          eventLimit,
+          eventCount: events.length,
+          eventMarketCount: eventPayloadCandidates.length,
+          localCandidateCount: localCandidates.length,
+          localLookupCount: localLookupCandidates.length,
+          localFetchedCount: localPayloads.length,
+          skippedCount: skippedPayloads.length,
+          skippedPayloads: skippedPayloads.slice(0, 50),
+        }),
+      },
+    });
+
+    return {
+      fetchedCount: payloads.length,
+      upsertedCount: normalizedResult.normalizedMarkets.length,
+      skippedPayloads,
+      metadata: {
+        source: 'events_and_local_hotset',
+        eventLimit,
+        eventCount: events.length,
+        eventMarketCount: eventPayloadCandidates.length,
+        localCandidateCount: localCandidates.length,
+        localLookupCount: localLookupCandidates.length,
+        localFetchedCount: localPayloads.length,
+      },
+    };
+  }
+
+  private async loadHotMarketCandidates(limit: number): Promise<HotMarketCandidate[]> {
+    if (limit <= 0) return [];
+
+    const orderCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const scriptCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const openOrderStatuses = [CausewayOrderStatus.submitted, CausewayOrderStatus.partially_filled] satisfies CausewayOrderStatus[];
+    const hotMarketWhere = {
+      active: true,
+      closed: false,
+      archived: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      staleDetectedAt: null,
+      externalMarketId: {
+        not: null,
+      },
+    } satisfies Prisma.PolymarketMarketWhereInput;
+    const marketSelect = {
+      externalMarketId: true,
+      slug: true,
+      eventId: true,
+    } satisfies Prisma.PolymarketMarketSelect;
+    const [openOrders, recentOrders, recentScriptMarkets, topLocalMarkets] = await Promise.all([
+      this.prisma.causewayOrder.findMany({
+        where: {
+          status: {
+            in: openOrderStatuses,
+          },
+          market: hotMarketWhere,
+        },
+        orderBy: [{ updatedAt: 'desc' }],
+        take: limit,
+        select: {
+          market: {
+            select: marketSelect,
+          },
+        },
+      }),
+      this.prisma.causewayOrder.findMany({
+        where: {
+          createdAt: { gte: orderCutoff },
+          market: hotMarketWhere,
+        },
+        orderBy: [{ updatedAt: 'desc' }],
+        take: limit,
+        select: {
+          market: {
+            select: marketSelect,
+          },
+        },
+      }),
+      this.prisma.scriptMarket.findMany({
+        where: {
+          createdAt: { gte: scriptCutoff },
+          market: hotMarketWhere,
+        },
+        orderBy: [{ createdAt: 'desc' }],
+        take: limit,
+        select: {
+          market: {
+            select: marketSelect,
+          },
+        },
+      }),
+      this.prisma.polymarketMarket.findMany({
+        where: hotMarketWhere,
+        orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+        take: limit,
+        select: marketSelect,
+      }),
+    ]);
+
+    const candidates: HotMarketCandidate[] = [];
+    const seen = new Set<string>();
+    const appendCandidate = (market: { externalMarketId: string | null; slug: string; eventId: string | null }) => {
+      if (!market.externalMarketId || seen.has(market.externalMarketId) || candidates.length >= limit) return;
+      seen.add(market.externalMarketId);
+      candidates.push({
+        externalMarketId: market.externalMarketId,
+        slug: market.slug,
+        eventId: market.eventId,
+      });
+    };
+
+    openOrders.forEach((row) => appendCandidate(row.market));
+    recentOrders.forEach((row) => appendCandidate(row.market));
+    recentScriptMarkets.forEach((row) => appendCandidate(row.market));
+    topLocalMarkets.forEach(appendCandidate);
+    return candidates;
   }
 
   private async upsertEventsForMarkets(
@@ -653,6 +867,14 @@ type FullDiscoveryResult = {
   upsertedCount: number;
   skippedPayloads: SkippedGammaPayload[];
   metadata: Record<string, unknown>;
+};
+
+type HotSyncResult = FullDiscoveryResult;
+
+type HotMarketCandidate = {
+  externalMarketId: string;
+  slug: string;
+  eventId: string | null;
 };
 
 type UpsertMarketOptions = {

@@ -16,7 +16,7 @@ export class GammaClient {
   }
 
   async getMarkets(
-    params: { limit: number; offset?: number; active?: boolean; closed?: boolean },
+    params: { limit: number; offset?: number; active?: boolean; closed?: boolean; order?: string; ascending?: boolean },
     options: { signal?: AbortSignal } = {},
   ) {
     const url = new URL('/markets', this.baseUrl);
@@ -24,12 +24,20 @@ export class GammaClient {
     url.searchParams.set('offset', String(params.offset ?? 0));
     if (params.active != null) url.searchParams.set('active', String(params.active));
     if (params.closed != null) url.searchParams.set('closed', String(params.closed));
+    if (params.order) url.searchParams.set('order', params.order);
+    if (params.ascending != null) url.searchParams.set('ascending', String(params.ascending));
 
     return this.getJsonArray(url, options);
   }
 
+  async getMarketById(marketId: string, options: { signal?: AbortSignal } = {}): Promise<GammaMarketPayload> {
+    const normalizedMarketId = marketId.trim();
+    const url = new URL(`/markets/${encodeURIComponent(normalizedMarketId)}`, this.baseUrl);
+    return this.getJsonRecord(url, options);
+  }
+
   async getEvents(
-    params: { limit: number; offset?: number; active?: boolean; closed?: boolean },
+    params: { limit: number; offset?: number; active?: boolean; closed?: boolean; order?: string; ascending?: boolean },
     options: { signal?: AbortSignal } = {},
   ): Promise<GammaEventPayload[]> {
     const url = new URL('/events', this.baseUrl);
@@ -37,11 +45,31 @@ export class GammaClient {
     url.searchParams.set('offset', String(params.offset ?? 0));
     if (params.active != null) url.searchParams.set('active', String(params.active));
     if (params.closed != null) url.searchParams.set('closed', String(params.closed));
+    if (params.order) url.searchParams.set('order', params.order);
+    if (params.ascending != null) url.searchParams.set('ascending', String(params.ascending));
 
     return this.getJsonArray(url, options);
   }
 
+  private async getJsonRecord<T extends Record<string, unknown>>(url: URL, options: { signal?: AbortSignal }): Promise<T> {
+    return this.getJson(url, options, (json) => {
+      if (!isRecord(json)) {
+        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Gamma API returned a non-object body');
+      }
+      return json as T;
+    });
+  }
+
   private async getJsonArray<T extends Record<string, unknown>>(url: URL, options: { signal?: AbortSignal }): Promise<T[]> {
+    return this.getJson(url, options, (json) => {
+      if (!Array.isArray(json)) {
+        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Gamma API returned a non-array body');
+      }
+      return json.filter(isRecord) as T[];
+    });
+  }
+
+  private async getJson<T>(url: URL, options: { signal?: AbortSignal }, decode: (json: unknown) => T): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.retries; attempt += 1) {
       throwIfAborted(options.signal);
@@ -65,10 +93,7 @@ export class GammaClient {
         if (response.ok) {
           const json: unknown = await response.json();
           throwIfAborted(options.signal);
-          if (!Array.isArray(json)) {
-            throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Gamma API returned a non-array body');
-          }
-          return json.filter(isRecord) as T[];
+          return decode(json);
         }
 
         const retryable = response.status === 429 || response.status >= 500;
@@ -101,7 +126,7 @@ export class GammaClient {
   }
 }
 
-function isRecord(value: unknown): value is GammaMarketPayload {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 

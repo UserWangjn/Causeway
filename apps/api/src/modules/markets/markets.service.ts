@@ -1,7 +1,12 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
-import { marketCategoryLabel, readMarketCategoryKey } from '../../common/markets/market-category.util';
+import {
+  MARKET_CATEGORY_KEYS,
+  marketCategoryLabel,
+  normalizeMarketCategoryKey,
+  readMarketCategoryKey,
+} from '../../common/markets/market-category.util';
 import {
   decodeOpaqueCursor,
   encodeOpaqueCursor,
@@ -81,10 +86,15 @@ const NETWORK_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()(
   question: true,
   icon: true,
   image: true,
+  acceptingOrders: true,
+  enableOrderBook: true,
   bestBid: true,
   bestAsk: true,
   lastTradePrice: true,
   volume: true,
+  volume24hr: true,
+  liquidity: true,
+  syncedAt: true,
   event: {
     select: {
       slug: true,
@@ -147,6 +157,26 @@ type MarketDetailRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof MAR
 type NetworkMarketRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof NETWORK_MARKET_SELECT }>;
 type ExplorerMarketRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof EXPLORER_MARKET_SELECT }>;
 type EventDetailRecord = Prisma.PolymarketEventGetPayload<{ select: typeof EVENT_DETAIL_SELECT }>;
+type NetworkTopologySource = 'precomputed' | 'deterministic';
+type NetworkMarketCandidate = {
+  market: NetworkMarketRecord;
+  category: string | null;
+  graphScore: number;
+  rank: number;
+};
+type MarketCategoryCountRow = { category: string | null; count: bigint | number | string };
+
+const NETWORK_CANDIDATE_MIN = 80;
+const NETWORK_CANDIDATE_MAX = 400;
+const NETWORK_CANDIDATE_MULTIPLIER = 8;
+
+const HOT_MARKET_ACTIVITY_WHERE = Prisma.validator<Prisma.PolymarketMarketWhereInput>()({
+  OR: [
+    { volume24hr: { gt: 0 } },
+    { volume: { gt: 0 } },
+    { liquidity: { gt: 0 } },
+  ],
+});
 
 @Injectable()
 export class MarketsService {
@@ -177,37 +207,20 @@ export class MarketsService {
   }
 
   async getMarketCategories() {
-    const markets = await this.prisma.polymarketMarket.findMany({
-      where: {
-        active: true,
-        closed: false,
-        archived: false,
-        staleDetectedAt: null,
-      },
-      select: {
-        question: true,
-        slug: true,
-        event: {
-          select: {
-            slug: true,
-            title: true,
-            tags: true,
-          },
+    const baseWhere = this.baseOpenMarketWhere();
+    const [totalCount, hotCount, categoryCounts] = await Promise.all([
+      this.prisma.polymarketMarket.count({
+        where: baseWhere,
+      }),
+      this.prisma.polymarketMarket.count({
+        where: {
+          AND: [baseWhere, HOT_MARKET_ACTIVITY_WHERE],
         },
-      },
-    });
-    const counts = new Map<string, number>();
-    for (const market of markets) {
-      const category = readMarketCategoryKey(market.event?.tags, [
-        market.question,
-        market.slug,
-        market.event?.title,
-        market.event?.slug,
-      ]);
-      counts.set(category, (counts.get(category) ?? 0) + 1);
-    }
+      }),
+      this.countOpenMarketsByCategory(),
+    ]);
 
-    const categoryItems = [...counts.entries()]
+    const categoryItems = [...categoryCounts.entries()]
       .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
       .slice(0, 12)
       .map(([category, count]) => ({
@@ -218,13 +231,50 @@ export class MarketsService {
 
     return {
       categories: [
-        { key: 'all', label: 'All', count: markets.length },
-        { key: 'hot', label: 'Hot', count: markets.length },
+        { key: 'all', label: 'All', count: totalCount },
+        { key: 'hot', label: 'Hot', count: hotCount },
         ...categoryItems,
       ],
       generatedAt: new Date().toISOString(),
       source: 'database',
     };
+  }
+
+  private async countOpenMarketsByCategory(): Promise<Map<string, number>> {
+    const rows = await this.prisma.$queryRaw<MarketCategoryCountRow[]>`
+      SELECT category, COUNT(*)::bigint AS count
+      FROM (
+        SELECT COALESCE(
+          (
+            SELECT lower(tag.value)
+            FROM jsonb_array_elements_text(
+              CASE
+                WHEN jsonb_typeof(COALESCE(e."tags"::jsonb, '[]'::jsonb)) = 'array'
+                  THEN COALESCE(e."tags"::jsonb, '[]'::jsonb)
+                ELSE '[]'::jsonb
+              END
+            ) WITH ORDINALITY AS tag(value, ord)
+            WHERE lower(tag.value) IN (${Prisma.join(MARKET_CATEGORY_KEYS)})
+            ORDER BY tag.ord
+            LIMIT 1
+          ),
+          'other'
+        ) AS category
+        FROM "PolymarketMarket" m
+        LEFT JOIN "PolymarketEvent" e ON e."id" = m."eventId"
+        WHERE m."active" = true
+          AND m."closed" = false
+          AND m."archived" = false
+          AND m."staleDetectedAt" IS NULL
+      ) categorized
+      GROUP BY category
+    `;
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      const category = normalizeMarketCategoryKey(row.category) ?? 'other';
+      counts.set(category, (counts.get(category) ?? 0) + Number(row.count));
+    }
+    return counts;
   }
 
   async searchMarkets(query: MarketSearchQueryDto) {
@@ -502,21 +552,42 @@ export class MarketsService {
 
   async getMarketNetwork(query: MarketQueryDto) {
     const limit = query.limit ?? 100;
-    const nodes = await this.prisma.marketNetworkNode.findMany({
-      where: this.buildNetworkNodeWhere(query),
-      orderBy: { score: 'desc' },
-      take: limit,
-      include: {
-        market: {
-          select: NETWORK_MARKET_SELECT,
+    const marketWhere = this.buildWhere(query);
+    const candidateLimit = networkCandidateLimit(limit);
+    const [total, nodes] = await Promise.all([
+      this.prisma.polymarketMarket.count({
+        where: marketWhere,
+      }),
+      this.prisma.marketNetworkNode.findMany({
+        where: this.buildNetworkNodeWhere(query),
+        orderBy: { score: 'desc' },
+        take: candidateLimit,
+        include: {
+          market: {
+            select: NETWORK_MARKET_SELECT,
+          },
         },
-      },
-    });
+      }),
+    ]);
     if (!nodes.length) {
-      return this.buildDeterministicMarketNetwork(query, limit);
+      return this.buildDeterministicMarketNetwork(query, limit, total);
     }
+    const graphCandidates = nodes.map((node, index) => ({
+      market: node.market,
+      category: node.category,
+      graphScore: toNullableNumber(node.score) ?? 0,
+      rank: index,
+    }));
+    const selectedNodes = selectNetworkCandidates(
+      mergeNetworkCandidates(
+        graphCandidates,
+        await this.loadActivityNetworkCandidates(query, candidateLimit, nodes.length),
+      ),
+      query,
+      limit,
+    );
 
-    const nodeMarketIds = nodes.map((node) => node.marketId);
+    const nodeMarketIds = selectedNodes.map((node) => node.market.id);
     const edges = nodeMarketIds.length
       ? await this.prisma.marketNetworkEdge.findMany({
           where: {
@@ -529,7 +600,7 @@ export class MarketsService {
       : [];
 
     return {
-      nodes: nodes.map((node) => this.formatNetworkNode(node.market, node.category)),
+      nodes: selectedNodes.map((node) => this.formatNetworkNode(node.market, node.category)),
       edges: edges.map((edge) => ({
         id: edge.id,
         source: edge.sourceMarketId,
@@ -537,6 +608,16 @@ export class MarketsService {
         relationType: formatNetworkRelationType(edge.relationType),
         weight: toNullableNumber(edge.weight) ?? 0,
       })),
+      ...this.formatNetworkMeta(query, limit, total, selectedNodes.length, 'precomputed'),
+    };
+  }
+
+  private baseOpenMarketWhere(): Prisma.PolymarketMarketWhereInput {
+    return {
+      active: true,
+      closed: false,
+      archived: false,
+      staleDetectedAt: null,
     };
   }
 
@@ -544,27 +625,38 @@ export class MarketsService {
     const includeCategory = options.includeCategory ?? true;
     const search = trimToUndefined(query.q);
     const category = normalizeCategoryFilter(query.category);
+    const hot = isHotCategory(query.category);
     const closed = parseBoolean(query.closed);
     const active = parseBoolean(query.active);
+    const filters: Prisma.PolymarketMarketWhereInput[] = [];
+    if (search) {
+      filters.push({
+        OR: [
+          { question: { contains: search, mode: 'insensitive' } },
+          { slug: { contains: search, mode: 'insensitive' } },
+          { description: { contains: search, mode: 'insensitive' } },
+        ],
+      });
+    }
+    if (includeCategory && category) {
+      filters.push({
+        event: {
+          tags: {
+            array_contains: [category],
+          },
+        },
+      });
+    }
+    if (hot) {
+      filters.push(HOT_MARKET_ACTIVITY_WHERE);
+    }
+
     return {
       active: active ?? (closed === true ? undefined : true),
       closed: closed ?? false,
       archived: false,
       staleDetectedAt: null,
-      OR: search
-        ? [
-            { question: { contains: search, mode: 'insensitive' } },
-            { slug: { contains: search, mode: 'insensitive' } },
-            { description: { contains: search, mode: 'insensitive' } },
-          ]
-        : undefined,
-      event: includeCategory && category
-        ? {
-            tags: {
-              array_contains: [category],
-            },
-          }
-        : undefined,
+      AND: filters.length ? filters : undefined,
     };
   }
 
@@ -608,6 +700,62 @@ export class MarketsService {
     if (sort === 'volume') return [{ volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }];
     if (sort === 'volume24hr') return [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }];
     return [{ syncedAt: 'desc' }, { id: 'asc' }];
+  }
+
+  private buildNetworkOrderBy(query: MarketQueryDto): Prisma.PolymarketMarketOrderByWithRelationInput[] {
+    if (isHotCategory(query.category)) {
+      return [
+        { volume24hr: { sort: 'desc', nulls: 'last' } },
+        { volume: { sort: 'desc', nulls: 'last' } },
+        { liquidity: { sort: 'desc', nulls: 'last' } },
+        { id: 'asc' },
+      ];
+    }
+    return [
+      { volume24hr: { sort: 'desc', nulls: 'last' } },
+      { volume: { sort: 'desc', nulls: 'last' } },
+      { liquidity: { sort: 'desc', nulls: 'last' } },
+      { syncedAt: 'desc' },
+      { id: 'asc' },
+    ];
+  }
+
+  private async loadActivityNetworkCandidates(
+    query: MarketQueryDto,
+    candidateLimit: number,
+    rankOffset = 0,
+  ): Promise<NetworkMarketCandidate[]> {
+    const markets = await this.prisma.polymarketMarket.findMany({
+      where: this.buildWhere(query),
+      orderBy: this.buildNetworkOrderBy(query),
+      take: candidateLimit,
+      select: NETWORK_MARKET_SELECT,
+    });
+    return markets.map((market, index) => ({
+      market,
+      category: null,
+      graphScore: 0,
+      rank: rankOffset + index,
+    }));
+  }
+
+  private formatNetworkMeta(
+    query: MarketQueryDto,
+    limit: number,
+    total: number,
+    returned: number,
+    topologySource: NetworkTopologySource,
+  ) {
+    return {
+      total,
+      returned,
+      limit,
+      hasMore: total > returned,
+      category: trimToUndefined(query.category) ?? 'all',
+      source: 'database',
+      topologySource,
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   private async formatMarketDetail(
@@ -755,17 +903,17 @@ export class MarketsService {
     };
   }
 
-  private async buildDeterministicMarketNetwork(query: MarketQueryDto, limit: number) {
-    const markets = await this.prisma.polymarketMarket.findMany({
-      where: this.buildWhere(query),
-      orderBy: [{ volume: 'desc' }, { id: 'asc' }],
-      take: limit,
-      select: NETWORK_MARKET_SELECT,
-    });
+  private async buildDeterministicMarketNetwork(query: MarketQueryDto, limit: number, total: number) {
+    const selectedMarkets = selectNetworkCandidates(
+      await this.loadActivityNetworkCandidates(query, networkCandidateLimit(limit)),
+      query,
+      limit,
+    );
 
     return {
-      nodes: markets.map((market) => this.formatNetworkNode(market, null)),
-      edges: buildEventEdges(markets),
+      nodes: selectedMarkets.map((candidate) => this.formatNetworkNode(candidate.market, candidate.category)),
+      edges: buildEventEdges(selectedMarkets.map((candidate) => candidate.market)),
+      ...this.formatNetworkMeta(query, limit, total, selectedMarkets.length, 'deterministic'),
     };
   }
 
@@ -777,6 +925,8 @@ export class MarketsService {
       icon: market.icon ?? market.image,
       price: firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid),
       volume: toNullableNumber(market.volume),
+      volume24hr: toNullableNumber(market.volume24hr),
+      liquidity: toNullableNumber(market.liquidity),
       category: category ?? readMarketCategoryKey(market.event?.tags, [
         market.question,
         market.slug,
@@ -962,6 +1112,10 @@ function normalizeCategoryFilter(value: string | undefined): string | undefined 
   return category;
 }
 
+function isHotCategory(value: string | undefined): boolean {
+  return trimToUndefined(value) === 'hot';
+}
+
 function firstNumber(...values: unknown[]): number | null {
   for (const value of values) {
     const parsed = toNullableNumber(value);
@@ -978,6 +1132,167 @@ function stringTags(value: unknown): string[] {
 function marketCategoryTagsForResponse(value: unknown, category: string): string[] {
   const tags = stringTags(value);
   return tags.includes(category) ? tags : [category, ...tags];
+}
+
+function networkCandidateLimit(limit: number): number {
+  return Math.min(
+    NETWORK_CANDIDATE_MAX,
+    Math.max(NETWORK_CANDIDATE_MIN, limit * NETWORK_CANDIDATE_MULTIPLIER),
+  );
+}
+
+function selectNetworkCandidates(
+  candidates: NetworkMarketCandidate[],
+  query: MarketQueryDto,
+  limit: number,
+): NetworkMarketCandidate[] {
+  if (candidates.length <= limit) return candidates;
+
+  const rankedCandidates = candidates
+    .map((candidate) => ({
+      ...candidate,
+      category: candidate.category ?? networkCandidateCategory(candidate.market),
+      score: scoreNetworkCandidate(candidate),
+    }))
+    .sort((left, right) => (
+      right.score - left.score
+      || networkMarketSyncedAt(right.market) - networkMarketSyncedAt(left.market)
+      || left.rank - right.rank
+      || left.market.id.localeCompare(right.market.id)
+    ));
+  const selected: typeof rankedCandidates = [];
+  const selectedIds = new Set<string>();
+  const eventCounts = new Map<string, number>();
+  const categoryCounts = new Map<string, number>();
+  const focusedSearch = Boolean(trimToUndefined(query.q));
+  const categoryFilter = normalizeCategoryFilter(query.category);
+  const diversifyEvents = !focusedSearch;
+  const diversifyCategories = !focusedSearch && !categoryFilter;
+  const maxPerEvent = Math.max(2, Math.ceil(limit * 0.12));
+  const maxPerCategory = Math.max(3, Math.ceil(limit * 0.36));
+
+  for (const candidate of rankedCandidates) {
+    if (selected.length >= limit) break;
+    if (canAddNetworkCandidate(candidate, {
+      diversifyEvents,
+      diversifyCategories,
+      eventCounts,
+      categoryCounts,
+      maxPerEvent,
+      maxPerCategory,
+    })) {
+      selected.push(candidate);
+      selectedIds.add(candidate.market.id);
+      incrementNetworkCandidateCounts(candidate, eventCounts, categoryCounts);
+    }
+  }
+
+  for (const candidate of rankedCandidates) {
+    if (selected.length >= limit) break;
+    if (selectedIds.has(candidate.market.id)) continue;
+    selected.push(candidate);
+    selectedIds.add(candidate.market.id);
+  }
+
+  return selected;
+}
+
+function mergeNetworkCandidates(...candidateGroups: NetworkMarketCandidate[][]): NetworkMarketCandidate[] {
+  const merged = new Map<string, NetworkMarketCandidate>();
+  for (const candidates of candidateGroups) {
+    for (const candidate of candidates) {
+      const existing = merged.get(candidate.market.id);
+      if (!existing) {
+        merged.set(candidate.market.id, candidate);
+        continue;
+      }
+      merged.set(candidate.market.id, {
+        market: existing.market,
+        category: existing.category ?? candidate.category,
+        graphScore: Math.max(existing.graphScore, candidate.graphScore),
+        rank: Math.min(existing.rank, candidate.rank),
+      });
+    }
+  }
+  return [...merged.values()];
+}
+
+function canAddNetworkCandidate(
+  candidate: NetworkMarketCandidate,
+  options: {
+    diversifyEvents: boolean;
+    diversifyCategories: boolean;
+    eventCounts: Map<string, number>;
+    categoryCounts: Map<string, number>;
+    maxPerEvent: number;
+    maxPerCategory: number;
+  },
+): boolean {
+  if (options.diversifyEvents && candidate.market.eventId) {
+    if ((options.eventCounts.get(candidate.market.eventId) ?? 0) >= options.maxPerEvent) return false;
+  }
+  if (options.diversifyCategories && candidate.category) {
+    if ((options.categoryCounts.get(candidate.category) ?? 0) >= options.maxPerCategory) return false;
+  }
+  return true;
+}
+
+function incrementNetworkCandidateCounts(
+  candidate: NetworkMarketCandidate,
+  eventCounts: Map<string, number>,
+  categoryCounts: Map<string, number>,
+) {
+  if (candidate.market.eventId) {
+    eventCounts.set(candidate.market.eventId, (eventCounts.get(candidate.market.eventId) ?? 0) + 1);
+  }
+  if (candidate.category) {
+    categoryCounts.set(candidate.category, (categoryCounts.get(candidate.category) ?? 0) + 1);
+  }
+}
+
+function scoreNetworkCandidate(candidate: NetworkMarketCandidate): number {
+  const market = candidate.market;
+  const volume24hr = positiveNumber(market.volume24hr);
+  const volume = positiveNumber(market.volume);
+  const liquidity = positiveNumber(market.liquidity);
+  const price = firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid);
+  const tradingSignal = market.acceptingOrders && market.enableOrderBook
+    ? 0.42
+    : market.acceptingOrders || market.enableOrderBook
+      ? 0.16
+      : -0.18;
+
+  return (
+    Math.log1p(volume24hr) * 1.15
+    + Math.log1p(liquidity) * 0.55
+    + Math.log1p(volume) * 0.35
+    + Math.log1p(Math.max(candidate.graphScore, 0)) * 0.2
+    + networkPriceSignal(price) * 0.32
+    + tradingSignal
+  );
+}
+
+function networkPriceSignal(price: number | null): number {
+  if (price == null) return 0.25;
+  if (price <= 0 || price >= 1) return 0;
+  return Math.max(0, 1 - Math.abs(price - 0.5) * 2);
+}
+
+function positiveNumber(value: unknown): number {
+  return Math.max(0, toNullableNumber(value) ?? 0);
+}
+
+function networkMarketSyncedAt(market: NetworkMarketRecord): number {
+  return market.syncedAt instanceof Date ? market.syncedAt.getTime() : 0;
+}
+
+function networkCandidateCategory(market: NetworkMarketRecord): string {
+  return readMarketCategoryKey(market.event?.tags, [
+    market.question,
+    market.slug,
+    market.event?.title,
+    market.event?.slug,
+  ]);
 }
 
 function scoreByVolume(value: unknown, index: number): number {

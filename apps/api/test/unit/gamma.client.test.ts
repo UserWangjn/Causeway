@@ -35,6 +35,38 @@ describe('GammaClient', () => {
     expect(result).toEqual([{ id: 'market_1' }]);
   });
 
+  it('fetches one market by Gamma id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ id: 'market_1' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new GammaClient(configService({ retries: 0 }));
+
+    await expect(client.getMarketById('market_1')).resolves.toEqual({ id: 'market_1' });
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.origin).toBe('https://gamma-api.polymarket.com');
+    expect(requestedUrl.pathname).toBe('/markets/market_1');
+  });
+
+  it('fetches ordered events for hot market discovery', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue([{ id: 'event_1' }]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new GammaClient(configService({ retries: 0 }));
+
+    await client.getEvents({ limit: 25, active: true, closed: false, order: 'volume_24hr', ascending: false });
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.pathname).toBe('/events');
+    expect(requestedUrl.searchParams.get('limit')).toBe('25');
+    expect(requestedUrl.searchParams.get('active')).toBe('true');
+    expect(requestedUrl.searchParams.get('closed')).toBe('false');
+    expect(requestedUrl.searchParams.get('order')).toBe('volume_24hr');
+    expect(requestedUrl.searchParams.get('ascending')).toBe('false');
+  });
+
   it('retries retryable 429 responses before succeeding', async () => {
     vi.useFakeTimers();
     const fetchMock = vi

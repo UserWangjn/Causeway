@@ -48,6 +48,10 @@ export const configuration = () => ({
       limit: Number(process.env.POLYMARKET_MARKET_SYNC_LIMIT ?? 1000),
       lockTtlMs: Number(process.env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS ?? 900_000),
       runOnStartup: process.env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP === 'true',
+      hotEnabled: process.env.POLYMARKET_HOT_MARKET_SYNC_ENABLED !== 'false',
+      hotIntervalMs: Number(process.env.POLYMARKET_HOT_MARKET_SYNC_INTERVAL_MS ?? 300_000),
+      hotLimit: Number(process.env.POLYMARKET_HOT_MARKET_SYNC_LIMIT ?? 250),
+      hotEventLimit: Number(process.env.POLYMARKET_HOT_MARKET_SYNC_EVENT_LIMIT ?? 50),
     },
   },
   ai: {

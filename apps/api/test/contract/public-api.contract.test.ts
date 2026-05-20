@@ -76,6 +76,29 @@ const EXPLORER_MARKET_NODE_KEYS = [
   'x',
   'y',
 ] as const;
+const MARKET_NETWORK_KEYS = [
+  'nodes',
+  'edges',
+  'total',
+  'returned',
+  'limit',
+  'hasMore',
+  'category',
+  'source',
+  'topologySource',
+  'generatedAt',
+] as const;
+const MARKET_NETWORK_NODE_KEYS = [
+  'id',
+  'marketId',
+  'title',
+  'icon',
+  'price',
+  'volume',
+  'volume24hr',
+  'liquidity',
+  'category',
+] as const;
 
 describe('documented public API contracts', () => {
   let app: INestApplication;
@@ -135,16 +158,16 @@ describe('documented public API contracts', () => {
     const networkData = apiData<{ nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }>(
       await request(httpServer).get('/api/v1/market-network').query({ active: 'true', limit: 10 }).expect(200),
     );
-    expectKeys(networkData, ['nodes', 'edges']);
+    expectKeys(networkData, MARKET_NETWORK_KEYS);
     expect(networkData.nodes.length).toBeGreaterThan(0);
-    expectKeys(networkData.nodes[0], ['id', 'marketId', 'title', 'icon', 'price', 'volume', 'category']);
+    expectKeys(networkData.nodes[0], MARKET_NETWORK_NODE_KEYS);
     expectKeys(networkData.edges[0], ['id', 'source', 'target', 'relationType', 'weight']);
 
     const standardNetworkData = apiData<{ nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }>(
       await request(httpServer).get('/api/v1/markets/network').query({ active: 'true', limit: 10 }).expect(200),
     );
-    expectKeys(standardNetworkData, ['nodes', 'edges']);
-    expectKeys(standardNetworkData.nodes[0], ['id', 'marketId', 'title', 'icon', 'price', 'volume', 'category']);
+    expectKeys(standardNetworkData, MARKET_NETWORK_KEYS);
+    expectKeys(standardNetworkData.nodes[0], MARKET_NETWORK_NODE_KEYS);
   });
 
   it('keeps frontend market explorer helper contracts stable', async () => {
@@ -290,12 +313,24 @@ describe('documented public API contracts', () => {
       'direction',
       'price',
     ]);
-    expectKeys(readRecordArray(scriptData, 'markets')[0], ['scriptMarketId', 'marketId', 'title', 'layer', 'confidence', 'outcomes']);
+    expectKeys(readRecordArray(scriptData, 'markets')[0], [
+      'scriptMarketId',
+      'marketId',
+      'title',
+      'layer',
+      'confidence',
+      'orderMinSize',
+      'tickSize',
+      'bestAsk',
+      'lastTradePrice',
+      'outcomes',
+    ]);
     expectKeys(readRecordArray(readRecordArray(scriptData, 'markets')[0], 'outcomes')[0], [
       'selectionId',
       'outcomeId',
       'label',
       'tokenId',
+      'price',
       'aiAction',
       'userAction',
       'side',

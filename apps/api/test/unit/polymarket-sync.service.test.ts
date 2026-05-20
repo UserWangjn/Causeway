@@ -307,6 +307,296 @@ describe('PolymarketSyncService', () => {
     });
   });
 
+  it('refreshes hot event markets and local user-relevant markets without stale cleanup', async () => {
+    const getEvents = vi.fn().mockResolvedValueOnce([gammaEvent(1, [gammaMarket(1), gammaMarket(2)])]);
+    const getMarketById = vi.fn().mockResolvedValueOnce(gammaMarket(3));
+    const syncRunCreate = vi.fn().mockResolvedValue({ id: 'sync_run_1' });
+    const syncRunUpdate = vi.fn<(input: SyncRunUpdateInput) => Promise<SyncRunUpdateResult>>().mockResolvedValue({
+      id: 'sync_run_1',
+      status: 'completed',
+      fetchedCount: 3,
+      upsertedCount: 3,
+    });
+    const eventUpsert = vi.fn().mockResolvedValue({ id: 'event_1' });
+    const eventFindMany = vi.fn().mockResolvedValue([{ id: 'event_1', externalEventId: 'event_1' }]);
+    const marketUpsert = vi.fn().mockImplementation((input: { create: { slug: string } }) => ({ id: input.create.slug }));
+    const outcomeUpsert = vi.fn();
+    const tx = {
+      polymarketMarket: {
+        upsert: marketUpsert,
+      },
+      polymarketOutcome: {
+        upsert: outcomeUpsert,
+      },
+    };
+    const service = new PolymarketSyncService(
+      { getEvents, getMarketById } as unknown as GammaClient,
+      {
+        syncRun: {
+          create: syncRunCreate,
+          update: syncRunUpdate,
+        },
+        polymarketEvent: {
+          upsert: eventUpsert,
+          findMany: eventFindMany,
+        },
+        causewayOrder: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              market: {
+                externalMarketId: 'external_market_3',
+                slug: 'market-3',
+                eventId: 'event_db_3',
+              },
+            },
+          ]),
+        },
+        scriptMarket: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        polymarketMarket: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        $transaction: vi.fn((callback: TransactionCallback) => callback(tx)),
+      } as unknown as PrismaService,
+    );
+
+    const result = await service.syncPolymarket({ scope: 'markets', mode: 'hot', limit: 3, hotEventLimit: 1 });
+
+    expect(getEvents).toHaveBeenCalledWith(
+      {
+        limit: 1,
+        offset: 0,
+        active: true,
+        closed: false,
+        order: 'volume_24hr',
+        ascending: false,
+      },
+      { signal: undefined },
+    );
+    expect(getMarketById).toHaveBeenCalledWith('external_market_3', { signal: undefined });
+    expect(marketUpsert).toHaveBeenCalledTimes(3);
+    expect(marketUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { externalMarketId: 'external_market_3' },
+      update: expect.objectContaining({
+        eventId: 'event_db_3',
+        slug: 'market-3',
+      }) as object,
+    }));
+    expect(result).toMatchObject({
+      runId: 'sync_run_1',
+      scope: 'markets',
+      mode: 'hot',
+      status: 'completed',
+      fetchedCount: 3,
+      upsertedCount: 3,
+      skippedCount: 0,
+    });
+    expect(syncRunUpdate.mock.calls.at(-1)?.[0].data.metadata).toMatchObject({
+      mode: 'hot',
+      source: 'events_and_local_hotset',
+      eventLimit: 1,
+    });
+  });
+
+  it('reserves hot sync capacity for local user-relevant markets when event markets fill the limit', async () => {
+    const getEvents = vi.fn().mockResolvedValueOnce([gammaEvent(1, [gammaMarket(1), gammaMarket(2)])]);
+    const getMarketById = vi.fn().mockResolvedValueOnce(gammaMarket(3));
+    const syncRunCreate = vi.fn().mockResolvedValue({ id: 'sync_run_1' });
+    const syncRunUpdate = vi.fn<(input: SyncRunUpdateInput) => Promise<SyncRunUpdateResult>>().mockResolvedValue({
+      id: 'sync_run_1',
+      status: 'completed',
+      fetchedCount: 2,
+      upsertedCount: 2,
+    });
+    const eventUpsert = vi.fn().mockResolvedValue({ id: 'event_1' });
+    const eventFindMany = vi.fn().mockResolvedValue([{ id: 'event_1', externalEventId: 'event_1' }]);
+    const marketUpsert = vi.fn().mockImplementation((input: { create: { slug: string } }) => ({ id: input.create.slug }));
+    const tx = {
+      polymarketMarket: {
+        upsert: marketUpsert,
+      },
+      polymarketOutcome: {
+        upsert: vi.fn(),
+      },
+    };
+    const service = new PolymarketSyncService(
+      { getEvents, getMarketById } as unknown as GammaClient,
+      {
+        syncRun: {
+          create: syncRunCreate,
+          update: syncRunUpdate,
+        },
+        polymarketEvent: {
+          upsert: eventUpsert,
+          findMany: eventFindMany,
+        },
+        causewayOrder: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              market: {
+                externalMarketId: 'external_market_3',
+                slug: 'market-3',
+                eventId: 'event_db_3',
+              },
+            },
+          ]),
+        },
+        scriptMarket: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        polymarketMarket: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        $transaction: vi.fn((callback: TransactionCallback) => callback(tx)),
+      } as unknown as PrismaService,
+    );
+
+    const result = await service.syncPolymarket({ scope: 'markets', mode: 'hot', limit: 2, hotEventLimit: 1 });
+
+    expect(getMarketById).toHaveBeenCalledWith('external_market_3', { signal: undefined });
+    expect(marketUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { externalMarketId: 'external_market_3' },
+      update: expect.objectContaining({
+        eventId: 'event_db_3',
+      }) as object,
+    }));
+    expect(result).toMatchObject({
+      fetchedCount: 2,
+      upsertedCount: 2,
+      skippedCount: 0,
+    });
+  });
+
+  it('preserves local hot candidate priority even when Gamma lookups resolve out of order', async () => {
+    const getEvents = vi.fn().mockResolvedValueOnce([gammaEvent(1, [gammaMarket(1), gammaMarket(2)])]);
+    const getMarketById = vi.fn(async (marketId: string) => {
+      if (marketId === 'external_market_3') {
+        await Promise.resolve();
+        return gammaMarket(3);
+      }
+      return gammaMarket(4);
+    });
+    const syncRunCreate = vi.fn().mockResolvedValue({ id: 'sync_run_1' });
+    const syncRunUpdate = vi.fn<(input: SyncRunUpdateInput) => Promise<SyncRunUpdateResult>>().mockResolvedValue({
+      id: 'sync_run_1',
+      status: 'completed',
+      fetchedCount: 2,
+      upsertedCount: 2,
+    });
+    const marketUpsert = vi.fn().mockImplementation((input: { create: { slug: string } }) => ({ id: input.create.slug }));
+    const causewayOrderFindMany = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { market: { externalMarketId: 'external_market_3', slug: 'market-3', eventId: 'event_db_3' } },
+        { market: { externalMarketId: 'external_market_4', slug: 'market-4', eventId: 'event_db_4' } },
+      ])
+      .mockResolvedValueOnce([]);
+    const tx = {
+      polymarketMarket: {
+        upsert: marketUpsert,
+      },
+      polymarketOutcome: {
+        upsert: vi.fn(),
+      },
+    };
+    const service = new PolymarketSyncService(
+      { getEvents, getMarketById } as unknown as GammaClient,
+      {
+        syncRun: {
+          create: syncRunCreate,
+          update: syncRunUpdate,
+        },
+        polymarketEvent: {
+          upsert: vi.fn(),
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        causewayOrder: {
+          findMany: causewayOrderFindMany,
+        },
+        scriptMarket: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        polymarketMarket: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        $transaction: vi.fn((callback: TransactionCallback) => callback(tx)),
+      } as unknown as PrismaService,
+    );
+
+    await service.syncPolymarket({ scope: 'markets', mode: 'hot', limit: 2, hotEventLimit: 1 });
+
+    expect(causewayOrderFindMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: expect.objectContaining({
+        status: {
+          in: ['submitted', 'partially_filled'],
+        },
+      }) as object,
+    }));
+    const upsertedExternalMarketIds = marketUpsert.mock.calls.map(([input]) =>
+      (input as { where: { externalMarketId: string } }).where.externalMarketId,
+    );
+    expect(upsertedExternalMarketIds).toEqual([
+      'external_market_3',
+      'external_market_4',
+    ]);
+  });
+
+  it('rethrows aborts during hot local lookups instead of recording them as skipped payloads', async () => {
+    const abortController = new AbortController();
+    const getEvents = vi.fn().mockResolvedValueOnce([]);
+    const getMarketById = vi.fn().mockImplementation(() => {
+      abortController.abort(new Error('Polymarket market sync lock ownership was lost'));
+      return Promise.reject(new Error('request aborted'));
+    });
+    const syncRunCreate = vi.fn().mockResolvedValue({ id: 'sync_run_1' });
+    const syncRunUpdate = vi.fn<(input: SyncRunUpdateInput) => Promise<SyncRunUpdateResult>>().mockResolvedValue({
+      id: 'sync_run_1',
+      status: 'failed',
+      fetchedCount: 0,
+      upsertedCount: 0,
+    });
+    const service = new PolymarketSyncService(
+      { getEvents, getMarketById } as unknown as GammaClient,
+      {
+        syncRun: {
+          create: syncRunCreate,
+          update: syncRunUpdate,
+        },
+        causewayOrder: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              market: {
+                externalMarketId: 'external_market_3',
+                slug: 'market-3',
+                eventId: 'event_db_3',
+              },
+            },
+          ]),
+        },
+        scriptMarket: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+        polymarketMarket: {
+          findMany: vi.fn().mockResolvedValue([]),
+        },
+      } as unknown as PrismaService,
+    );
+
+    await expect(
+      service.syncPolymarket(
+        { scope: 'markets', mode: 'hot', limit: 1, hotEventLimit: 1 },
+        { abortSignal: abortController.signal },
+      ),
+    ).rejects.toThrow('Polymarket market sync lock ownership was lost');
+    expect(syncRunUpdate).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'failed',
+        error: 'Polymarket market sync lock ownership was lost',
+      }) as object,
+    }));
+  });
+
   it('lists sync runs with filters and an opaque pagination cursor', async () => {
     const syncRunFindMany = vi.fn().mockResolvedValue([
       syncRunRecord('run_1', '2026-05-18T00:00:00.000Z'),

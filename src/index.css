@@ -864,6 +864,41 @@ button {
   background: #eef4ff;
 }
 
+.chip-count {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chip.active .chip-count {
+  color: var(--blue);
+}
+
+.network-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 12px;
+  color: #52637c;
+  font-size: 13px;
+}
+
+.network-summary strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.network-summary span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+}
+
 .network-stage {
   position: relative;
   min-height: 590px;

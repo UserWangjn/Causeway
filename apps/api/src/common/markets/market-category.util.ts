@@ -7,6 +7,16 @@ export type MarketCategoryKey =
   | 'entertainment'
   | 'other';
 
+export const MARKET_CATEGORY_KEYS = [
+  'politics',
+  'sports',
+  'crypto',
+  'macro',
+  'tech',
+  'entertainment',
+  'other',
+] as const satisfies readonly MarketCategoryKey[];
+
 const CATEGORY_LABELS: Record<MarketCategoryKey, string> = {
   politics: 'Politics',
   sports: 'Sports',

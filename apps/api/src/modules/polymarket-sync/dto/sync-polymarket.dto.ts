@@ -7,7 +7,7 @@ export class SyncPolymarketDto {
   scope?: string;
 
   @IsOptional()
-  @IsIn(['full', 'incremental'])
+  @IsIn(['full', 'incremental', 'hot'])
   mode?: string;
 
   @IsOptional()
@@ -16,4 +16,11 @@ export class SyncPolymarketDto {
   @Min(1)
   @Max(100000)
   limit?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  hotEventLimit?: number;
 }

@@ -2,9 +2,11 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiException } from '../../src/common/errors/api.exception';
 import type { PrismaService } from '../../src/database/prisma.service';
 import type { PolymarketSyncService } from '../../src/modules/polymarket-sync/polymarket-sync.service';
 import {
+  POLYMARKET_HOT_MARKET_SYNC_INTERVAL,
   POLYMARKET_MARKET_SYNC_INTERVAL,
   PolymarketSyncScheduler,
 } from '../../src/modules/polymarket-sync/polymarket-sync.scheduler';
@@ -41,9 +43,11 @@ describe('PolymarketSyncScheduler', () => {
 
     await scheduler.onModuleInit();
     expect(registry.doesExist('interval', POLYMARKET_MARKET_SYNC_INTERVAL)).toBe(true);
+    expect(registry.doesExist('interval', POLYMARKET_HOT_MARKET_SYNC_INTERVAL)).toBe(true);
 
     scheduler.onModuleDestroy();
     expect(registry.doesExist('interval', POLYMARKET_MARKET_SYNC_INTERVAL)).toBe(false);
+    expect(registry.doesExist('interval', POLYMARKET_HOT_MARKET_SYNC_INTERVAL)).toBe(false);
   });
 
   it('marks interrupted market sync runs as failed during scheduler startup', async () => {
@@ -136,6 +140,120 @@ describe('PolymarketSyncScheduler', () => {
       trigger: 'test',
       runId: 'sync_run_1',
     });
+  });
+
+  it('runs hot market sync with its own cadence and limits', async () => {
+    const { scheduler, syncPolymarket } = createScheduler({
+      'polymarket.marketSync.hotLimit': 300,
+      'polymarket.marketSync.hotEventLimit': 40,
+    });
+
+    const result = await scheduler.runHotOnce('hot_test');
+
+    expect(syncPolymarket).toHaveBeenCalledWith(
+      {
+        scope: 'markets',
+        mode: 'hot',
+        limit: 300,
+        hotEventLimit: 40,
+      },
+      {
+        abortSignal: expect.any(AbortSignal) as AbortSignal,
+      },
+    );
+    expect(result).toEqual({
+      status: 'completed',
+      trigger: 'hot_test',
+      runId: 'sync_run_1',
+    });
+  });
+
+  it('runs a manual market sync through the shared distributed lock and returns the sync result', async () => {
+    const syncResult = {
+      runId: 'sync_run_manual',
+      scope: 'markets',
+      mode: 'hot',
+      status: 'completed',
+      fetchedCount: 5,
+      upsertedCount: 5,
+      skippedCount: 0,
+    };
+    const syncPolymarket = vi.fn().mockResolvedValue(syncResult);
+    const { scheduler, syncPolymarket: syncMock } = createScheduler(
+      {},
+      {
+        syncPolymarket,
+      },
+    );
+
+    await expect(scheduler.runManual({ scope: 'markets', mode: 'hot', limit: 5, hotEventLimit: 2 })).resolves.toBe(syncResult);
+    expect(syncMock).toHaveBeenCalledWith(
+      {
+        scope: 'markets',
+        mode: 'hot',
+        limit: 5,
+        hotEventLimit: 2,
+      },
+      {
+        abortSignal: expect.any(AbortSignal) as AbortSignal,
+      },
+    );
+  });
+
+  it('rejects a manual market sync when the shared distributed lock is unavailable', async () => {
+    const { scheduler, syncPolymarket } = createScheduler(
+      {},
+      {},
+      {
+        schedulerLock: {
+          upsert: vi.fn().mockResolvedValue({}),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      },
+    );
+
+    await expect(scheduler.runManual({ scope: 'markets', mode: 'full' })).rejects.toBeInstanceOf(ApiException);
+    expect(syncPolymarket).not.toHaveBeenCalled();
+  });
+
+  it('rejects overlapping manual market syncs in the same process', async () => {
+    let resolveSync: ((value: { runId: string }) => void) | undefined;
+    const pendingSync = new Promise<{ runId: string }>((resolve) => {
+      resolveSync = resolve;
+    });
+    const { scheduler } = createScheduler(
+      {},
+      {
+        syncPolymarket: vi.fn().mockReturnValue(pendingSync),
+      },
+    );
+
+    const firstRun = scheduler.runManual({ scope: 'markets', mode: 'incremental', limit: 1 });
+    await flushPromises();
+    await expect(scheduler.runManual({ scope: 'markets', mode: 'hot', limit: 1 })).rejects.toBeInstanceOf(ApiException);
+
+    resolveSync?.({ runId: 'sync_run_1' });
+    await expect(firstRun).resolves.toEqual({ runId: 'sync_run_1' });
+  });
+
+  it('does not recover running sync runs while another instance holds an active lock', async () => {
+    const { scheduler, syncRunUpdateMany } = createScheduler(
+      {
+        'polymarket.marketSync.enabled': true,
+        'polymarket.marketSync.intervalMs': 60_000,
+        'polymarket.marketSync.runOnStartup': false,
+      },
+      {},
+      {
+        schedulerLock: {
+          findUnique: vi.fn().mockResolvedValue({ lockedUntil: new Date(Date.now() + 60_000) }),
+        },
+      },
+    );
+
+    await scheduler.onModuleInit();
+
+    expect(syncRunUpdateMany).not.toHaveBeenCalled();
   });
 
   it('renews the distributed lock while a sync is running', async () => {
@@ -370,6 +488,7 @@ function createScheduler(
     ),
   } as unknown as ConfigService;
   const schedulerLock = {
+    findUnique: vi.fn().mockResolvedValue(null),
     upsert: vi.fn().mockResolvedValue({}),
     updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     ...prismaOverrides.schedulerLock,
@@ -402,6 +521,7 @@ function createScheduler(
 }
 
 type SchedulerLockMock = {
+  findUnique: ReturnType<typeof vi.fn>;
   upsert: ReturnType<typeof vi.fn>;
   updateMany: ReturnType<typeof vi.fn>;
 };

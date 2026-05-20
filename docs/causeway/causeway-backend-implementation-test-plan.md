@@ -278,6 +278,7 @@ npm audit --omit=dev
 - timeout/retry。
 - Event/Market/Outcome 标准化。
 - 按稳定 external id upsert。
+- 全量 active/open event discovery 和高频 hot market refresh 两种调度路径。
 - SyncRun 进度和失败记录。
 - fixture-based sync tests。
 
@@ -292,6 +293,7 @@ npm audit --omit=dev
 退出门槛：
 
 - 本地可同步至少 1000 个 active markets。
+- 生产调度默认支持 6 小时全量发现、5 分钟热刷新；热刷新覆盖热门 event markets 和用户相关 markets，且不触发 stale cleanup。
 - market/outcome API 只读取本地数据库。
 - 当前 integration tests 已覆盖 mocked Gamma payload 到真实测试库的 market/outcome 幂等 upsert、outcome index 对齐，以及失败 `SyncRun` 落库。
 

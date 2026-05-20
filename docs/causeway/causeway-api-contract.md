@@ -292,6 +292,8 @@ type MarketNetwork = {
     icon: string | null;
     price: number | null;
     volume: number | null;
+    volume24hr: number | null;
+    liquidity: number | null;
     category: string | null;
   }[];
   edges: {
@@ -301,8 +303,18 @@ type MarketNetwork = {
     relationType: "tag" | "event" | "semantic" | "price_correlation" | "ai";
     weight: number;
   }[];
+  total: number;
+  returned: number;
+  limit: number;
+  hasMore: boolean;
+  category: string;
+  source: "database";
+  topologySource: "precomputed" | "deterministic";
+  generatedAt: string;
 };
 ```
+
+`nodes` 是用于前端图谱渲染的有限样本，不代表当前分类下的全量市场。全量市场数量必须读取 `total`；当前返回节点数读取 `returned`。`category=hot` 表示开放且未过期、并且 `volume24hr`、`volume` 或 `liquidity` 任一指标大于 0 的活跃市场子集。后端会先用索引友好的成交量和流动性排序读取有限候选池，再按 24h 成交量、流动性、总成交量、可下单状态、价格可判断空间、预计算图谱分数综合重排，并限制同一事件和同一分类过度集中。后端同步 Polymarket 数据时会把事件标签归一化为稳定分类键，因此 `/markets/categories` 不需要在请求时扫描全部市场文本。
 
 ### `GET /markets/categories`
 
@@ -976,6 +988,26 @@ type PortfolioTrade = {
   "scope": "markets",
   "mode": "incremental"
 }
+```
+
+`mode` 支持：
+
+- `full`：全量 event discovery，用于发现所有活跃市场，并在完整跑完后执行 stale cleanup。
+- `incremental`：按 Gamma markets 分页刷新一批活跃市场。
+- `hot`：高频热市场刷新。它会拉 Polymarket 热门 event 的 markets，并精准刷新本地近期订单、近期脚本和高成交 market；不会执行 stale cleanup。热刷新必须为用户相关市场保留容量，不能被热门 event 批量 markets 完全挤掉。
+
+手动触发必须与后台调度共用同一个 in-process running guard、分布式锁和 heartbeat；如果已有同步运行，返回 `409 POLYMARKET_SYNC_ALREADY_RUNNING` 或 `409 POLYMARKET_SYNC_LOCK_UNAVAILABLE`，不得绕过调度器直接并发写入。
+
+推荐生产调度：
+
+```text
+POLYMARKET_MARKET_SYNC_MODE=full
+POLYMARKET_MARKET_SYNC_INTERVAL_MS=21600000
+POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP=true
+POLYMARKET_HOT_MARKET_SYNC_ENABLED=true
+POLYMARKET_HOT_MARKET_SYNC_INTERVAL_MS=300000
+POLYMARKET_HOT_MARKET_SYNC_LIMIT=250
+POLYMARKET_HOT_MARKET_SYNC_EVENT_LIMIT=50
 ```
 
 ### `GET /internal/sync/runs`

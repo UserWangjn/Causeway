@@ -26,6 +26,10 @@ describe('validateEnv', () => {
     expect(env.POLYMARKET_MARKET_SYNC_LIMIT).toBe(1000);
     expect(env.POLYMARKET_MARKET_SYNC_LOCK_TTL_MS).toBe(900_000);
     expect(env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP).toBe('false');
+    expect(env.POLYMARKET_HOT_MARKET_SYNC_ENABLED).toBe('true');
+    expect(env.POLYMARKET_HOT_MARKET_SYNC_INTERVAL_MS).toBe(300_000);
+    expect(env.POLYMARKET_HOT_MARKET_SYNC_LIMIT).toBe(250);
+    expect(env.POLYMARKET_HOT_MARKET_SYNC_EVENT_LIMIT).toBe(50);
     expect(env.POLYMARKET_CLOB_SIGNATURE_TYPE).toBe(2);
     expect(env.POLYMARKET_RELAYER_BASE_URL).toBe('https://relayer-v2.polymarket.com');
     expect(env.OUTBOUND_PROXY_URL).toBeUndefined();

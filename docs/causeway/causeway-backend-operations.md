@@ -73,6 +73,8 @@ API 推演接口使用同一组 AI provider 配置。`AI_BASE_URL` 必须是纯 
 
 Portfolio position sync 默认通过 Polymarket Data API 拉取公开 positions。需要保持本地只读或外部 Data API 不可用时，将 `POLYMARKET_DATA_API_ENABLED=false`；此时持仓同步返回 `503 CAPABILITY_UNAVAILABLE`。Data API 上游错误响应只允许暴露脱敏后的 endpoint，不记录或返回钱包地址 query 参数。
 
+Polymarket market sync 生产推荐拆成两条节奏：`POLYMARKET_MARKET_SYNC_MODE=full` 每 6 小时执行一次完整 active/open event discovery，并在完整跑完后把未再次出现的 market/event 标记为 stale；`POLYMARKET_HOT_MARKET_SYNC_ENABLED=true` 每 5 分钟刷新热门 event markets、近期订单市场、近期脚本市场和本地高成交市场。热刷新不会执行 stale cleanup，并会为用户相关市场保留刷新容量，避免被热门 event 批量 markets 挤掉。
+
 `smoke:api:polymarket` 会读取真实 Gamma market，并使用一个 CLOB token id 检查只读 order book。可以通过 `SMOKE_CLOB_TOKEN_ID` 指定固定 token。默认不设置 `SMOKE_*_ENABLED` 时，所有 smoke 命令只返回 skipped，不访问外部服务。`smoke:api:real-orders` 只做配置 preflight；即使设置 `SMOKE_REAL_ORDERS_ENABLED=true` 和 `SMOKE_REAL_ORDERS_ACKNOWLEDGE_RISK=true`，也不会提交真实订单。
 
 ## 5. 生产部署流程

@@ -655,6 +655,8 @@ type BackendMarketNetwork = {
     icon: string | null
     price: number | null
     volume: number | null
+    volume24hr?: number | null
+    liquidity?: number | null
     category: string | null
   }>
   edges: Array<{
@@ -664,6 +666,23 @@ type BackendMarketNetwork = {
     relationType: ApiMarketEdge['relationType']
     weight: number
   }>
+  total?: number
+  returned?: number
+  limit?: number
+  hasMore?: boolean
+  category?: string
+  source?: string
+  topologySource?: string
+  generatedAt?: string
+}
+
+type NetworkSummary = {
+  total: number
+  returned: number
+  limit: number
+  hasMore: boolean
+  category: string
+  topologySource: string
 }
 
 const API_PREFIX = '/api/v1'
@@ -698,8 +717,8 @@ function backendNetworkToApiNode(node: BackendMarketNetwork['nodes'][number], in
     image: node.icon,
     price: node.price,
     volume: node.volume,
-    volume24hr: null,
-    liquidity: null,
+    volume24hr: node.volume24hr ?? null,
+    liquidity: node.liquidity ?? null,
     endDate: null,
     description: null,
     rules: null,
@@ -1518,6 +1537,13 @@ function formatCompactMoney(value: number | null | undefined) {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`
   return `$${value.toFixed(0)}`
+}
+
+function formatCompactCount(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '0'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
+  return String(Math.max(0, Math.round(value)))
 }
 
 function formatDate(value: string | null | undefined) {
@@ -2474,8 +2500,20 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
   const [searchLoading, setSearchLoading] = useState(false)
   const [networkMarkets, setNetworkMarkets] = useState<Market[]>(markets)
   const [networkEdges, setNetworkEdges] = useState<ApiMarketEdge[]>([])
+  const [networkSummary, setNetworkSummary] = useState<NetworkSummary>({
+    total: markets.length,
+    returned: markets.length,
+    limit: 25,
+    hasMore: false,
+    category: 'all',
+    topologySource: 'local',
+  })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const activeCategoryLabel = useMemo(
+    () => categories.find((category) => category.key === activeCategory)?.label || activeCategory,
+    [activeCategory, categories],
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -2562,6 +2600,14 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
           setNetworkMarkets(nodes)
           setNetworkEdges(payload.edges)
         }
+        setNetworkSummary({
+          total: data.total ?? nodes.length,
+          returned: data.returned ?? nodes.length,
+          limit: data.limit ?? 25,
+          hasMore: data.hasMore ?? false,
+          category: data.category ?? activeCategory,
+          topologySource: data.topologySource ?? data.source ?? 'database',
+        })
         setError(null)
       })
       .catch((fetchError: Error) => {
@@ -2646,6 +2692,11 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
           setActiveCategory(category)
         }}
       />
+      <div className="network-summary">
+        <strong>{activeCategoryLabel}</strong>
+        <span>{formatCompactCount(networkSummary.returned)} / {formatCompactCount(networkSummary.total)} markets</span>
+        {networkSummary.hasMore ? <span>limit {formatCompactCount(networkSummary.limit)}</span> : null}
+      </div>
       <div className="network-stage">
         <NetworkMap edges={networkEdges} loading={loading} markets={networkMarkets} onConfirmMarket={onConfirmMarket} />
         {error ? <div className="network-error">后端数据暂不可用，正在显示本地示例图谱：{error}</div> : null}
@@ -4357,6 +4408,7 @@ function CategoryChips({
         >
           {category.key === 'hot' ? <Flame size={15} /> : null}
           {category.label}
+          <span className="chip-count">{formatCompactCount(category.count)}</span>
         </button>
       ))}
     </div>
