@@ -91,6 +91,8 @@ type Market = {
   tone: 'blue' | 'green' | 'orange' | 'red' | 'purple' | 'cyan'
 }
 
+type MarketOutcome = NonNullable<Market['outcomes']>[number]
+
 type ApiMarketNode = {
   id: string
   slug?: string | null
@@ -1202,8 +1204,10 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
   if (!token) {
     throw new Error('需要先完成钱包登录，前端拿到 Bearer Token 后才能启动正式 AI 推演。')
   }
-  const rootOutcome = market.outcomes?.find((outcome) => outcome.outcomeId)
-  if (!rootOutcome?.outcomeId) {
+  const inferenceMarket = await loadMarketForInference(market, signal)
+  const rootOutcome = marketInferenceOutcome(inferenceMarket)
+  const rootOutcomeId = rootOutcome?.outcomeId
+  if (!rootOutcomeId) {
     throw new Error('当前市场缺少 outcomeId，请等待市场详情加载完成后再启动推演。')
   }
 
@@ -1212,8 +1216,8 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
     signal,
     headers: authHeaders(token),
     body: JSON.stringify({
-      rootMarketId: market.id,
-      rootOutcomeId: rootOutcome.outcomeId,
+      rootMarketId: inferenceMarket.id,
+      rootOutcomeId,
       depth: settings.depth,
       maxMarketsPerLayer: settings.depth >= 3 ? 8 : 6,
       confidenceThreshold: settings.confidenceThreshold,
@@ -1254,7 +1258,20 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
     headers: { Authorization: `Bearer ${token}` },
   }).then((response) => readApiData<BackendScript>(response))
 
-  return scriptToInferenceResult(script, status, market, settings)
+  return scriptToInferenceResult(script, status, inferenceMarket, settings)
+}
+
+async function loadMarketForInference(market: Market, signal: AbortSignal): Promise<Market> {
+  if (marketInferenceOutcome(market)) return market
+
+  const params = new URLSearchParams({ marketId: market.id })
+  const detail = await fetch(`${API_PREFIX}/events/detail?${params.toString()}`, { signal })
+    .then((response) => readApiData<EventDetailResponse['data']>(response))
+  const selectedMarket = detail.selectedMarket ? apiNodeToMarket(detail.selectedMarket, 0) : null
+  if (selectedMarket && marketInferenceOutcome(selectedMarket)) return selectedMarket
+
+  const relatedMarket = detail.markets.map(apiNodeToMarket).find((item) => item.id === market.id && marketInferenceOutcome(item))
+  return relatedMarket ?? market
 }
 
 function scriptToInferenceResult(script: BackendScript, run: BackendInferenceStatus, market: Market, settings: InferenceSettingsState): InferenceResult {
@@ -1610,6 +1627,10 @@ function marketRuleCopy(market: Market) {
 
 function marketDescriptionCopy(market: Market) {
   return market.description?.trim() || market.rules?.trim() || '该市场来自 Polymarket，当前没有额外描述。'
+}
+
+function marketInferenceOutcome(market: Market): MarketOutcome | null {
+  return market.outcomes?.find((outcome) => Boolean(outcome.outcomeId)) ?? null
 }
 
 function marketChangeText(market: Market) {
@@ -2759,6 +2780,8 @@ function MarketDetail({
   const ruleCopy = marketRuleCopy(displayMarket)
   const descriptionCopy = marketDescriptionCopy(displayMarket)
   const primaryMarket = [...detailMarkets].sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))[0] || market
+  const inferenceMarket = marketInferenceOutcome(displayMarket) ? displayMarket : primaryMarket
+  const inferenceReady = Boolean(marketInferenceOutcome(inferenceMarket))
   return (
     <section className="page market-detail-page">
       <BackButton onClick={onBack} />
@@ -2840,8 +2863,8 @@ function MarketDetail({
           </Card>
         </aside>
       </div>
-      <button className="primary-action" type="button" onClick={() => onInfer(primaryMarket)}>
-        <BrainCircuit size={20} /> 设定作为推演节点
+      <button className="primary-action" type="button" onClick={() => onInfer(inferenceMarket)} disabled={!inferenceReady}>
+        <BrainCircuit size={20} /> {inferenceReady ? '设定作为推演节点' : '正在加载推演数据'}
       </button>
     </section>
   )
@@ -2923,6 +2946,7 @@ function InferenceSettings({
     })
   }, [updateSettings])
   const estimate = estimateInference(settings)
+  const canStartInference = Boolean(marketInferenceOutcome(market))
   const scopeOptions: Array<[InferenceScope, string, string]> = [
     ['news', '相关新闻', '新闻报道和媒体'],
     ['markets', '相关市场', 'Polymarket 市场'],
@@ -3045,17 +3069,24 @@ function InferenceSettings({
               AI 推演需要先用钱包签名登录，后端会用 Bearer Token 保护你的脚本、订单和组合数据。
             </div>
           ) : null}
+          {!canStartInference ? (
+            <div className="soft-note auth-note">
+              <Info size={18} />
+              市场详情还在加载 outcome 数据，请返回详情页等待按钮变为可用后再启动推演。
+            </div>
+          ) : null}
           <button
             className="primary-action inside"
             type="button"
             onClick={() => {
+              if (!canStartInference) return
               if (!auth.isAuthenticated) {
                 void auth.signIn()
                 return
               }
               onStart(settings)
             }}
-            disabled={auth.isSigningIn}
+            disabled={auth.isSigningIn || !canStartInference}
           >
             <Play size={18} /> 启动 AI 推演
           </button>
