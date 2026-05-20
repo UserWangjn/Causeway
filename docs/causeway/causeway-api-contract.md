@@ -294,6 +294,8 @@ type MarketNetwork = {
     id: string;
     marketId: string;
     title: string;
+    description: string | null;
+    rules: string | null;
     icon: string | null;
     price: number | null;
     volume: number | null;
@@ -319,7 +321,7 @@ type MarketNetwork = {
 };
 ```
 
-`nodes` 是用于前端图谱渲染的有限样本，不代表当前分类下的全量市场。全量市场数量必须读取 `total`；当前返回节点数读取 `returned`。`category=hot` 表示开放且未过期、并且 `volume24hr`、`volume` 或 `liquidity` 任一指标大于 0 的活跃市场子集。`category=new` 表示最近 14 天首次发现的开放市场，并按 `discoveredAt` 优先排序。后端会先用索引友好的成交量、流动性或发现时间排序读取有限候选池，再按 24h 成交量、流动性、总成交量、可下单状态、价格可判断空间、预计算图谱分数综合重排，并限制同一事件和同一分类过度集中。后端同步 Polymarket 数据时会把事件标签归一化为稳定分类键，因此 `/markets/categories` 不需要在请求时扫描全部市场文本。
+`nodes` 是用于前端图谱渲染的有限样本，不代表当前分类下的全量市场。全量市场数量必须读取 `total`；当前返回节点数读取 `returned`。`description/rules` 是用于首页 hover 卡片的摘要字段，后端会压缩空白并限制单字段长度，完整规则仍应读取 `GET /events/detail` 或 `GET /markets/:marketId`。`category=hot` 表示开放且未过期、并且 `volume24hr`、`volume` 或 `liquidity` 任一指标大于 0 的活跃市场子集。`category=new` 表示最近 14 天首次发现的开放市场，并按 `discoveredAt` 优先排序。后端会先用索引友好的成交量、流动性或发现时间排序读取有限候选池，再按 24h 成交量、流动性、总成交量、可下单状态、价格可判断空间、预计算图谱分数综合重排，并限制同一事件和同一分类过度集中。后端同步 Polymarket 数据时会把事件标签归一化为稳定分类键，因此 `/markets/categories` 不需要在请求时扫描全部市场文本。
 
 ### `GET /markets/categories`
 

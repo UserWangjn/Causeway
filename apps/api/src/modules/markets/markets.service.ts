@@ -84,6 +84,8 @@ const NETWORK_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()(
   eventId: true,
   slug: true,
   question: true,
+  description: true,
+  rules: true,
   icon: true,
   image: true,
   acceptingOrders: true,
@@ -170,6 +172,7 @@ type MarketCategoryCountRow = { category: string | null; count: bigint | number 
 const NETWORK_CANDIDATE_MIN = 80;
 const NETWORK_CANDIDATE_MAX = 400;
 const NETWORK_CANDIDATE_MULTIPLIER = 8;
+const NETWORK_NODE_TEXT_MAX_LENGTH = 1200;
 const NEW_MARKET_WINDOW_DAYS = 14;
 
 const HOT_MARKET_ACTIVITY_WHERE = Prisma.validator<Prisma.PolymarketMarketWhereInput>()({
@@ -961,10 +964,14 @@ export class MarketsService {
   }
 
   private formatNetworkNode(market: NetworkMarketRecord, category: string | null) {
+    const description = firstNonBlankText(market.description);
+    const rules = firstNonBlankText(market.rules, description);
     return {
       id: market.id,
       marketId: market.id,
       title: market.question,
+      description: compactNetworkText(description),
+      rules: compactNetworkText(rules),
       icon: market.icon ?? market.image,
       price: firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid),
       volume: toNullableNumber(market.volume),
@@ -1155,6 +1162,13 @@ function firstNonBlankText(...values: Array<string | null | undefined>): string 
     if (trimmed) return trimmed;
   }
   return null;
+}
+
+function compactNetworkText(value: string | null): string | null {
+  const normalized = value?.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  if (normalized.length <= NETWORK_NODE_TEXT_MAX_LENGTH) return normalized;
+  return `${normalized.slice(0, NETWORK_NODE_TEXT_MAX_LENGTH - 3).trimEnd()}...`;
 }
 
 function normalizeCategoryFilter(value: string | undefined): string | undefined {

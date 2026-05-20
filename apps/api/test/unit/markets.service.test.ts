@@ -526,6 +526,8 @@ describe('MarketsService', () => {
         id: 'market_1',
         marketId: 'market_1',
         title: 'First market',
+        description: 'First market description',
+        rules: 'First market rules',
         icon: null,
         price: 0.55,
         volume: 100,
@@ -537,6 +539,8 @@ describe('MarketsService', () => {
         id: 'market_2',
         marketId: 'market_2',
         title: 'Second market',
+        description: 'Second market description',
+        rules: 'Second market rules',
         icon: null,
         price: 0.35,
         volume: 100,
@@ -548,6 +552,8 @@ describe('MarketsService', () => {
         id: 'market_3',
         marketId: 'market_3',
         title: 'Third market',
+        description: 'Third market description',
+        rules: 'Third market rules',
         icon: null,
         price: 0.15,
         volume: 100,
@@ -574,6 +580,36 @@ describe('MarketsService', () => {
       source: 'database',
       topologySource: 'deterministic',
     });
+  });
+
+  it('returns bounded network node copy for market hover cards', async () => {
+    const longRules = `${'Resolution rules '.repeat(120)}Final sentence.`;
+    const networkNodeFindMany = vi.fn().mockResolvedValue([]);
+    const marketCount = vi.fn().mockResolvedValue(1);
+    const marketFindMany = vi.fn().mockResolvedValue([
+      networkMarket('market_1', 'event_1', 'First market', '0.55', ['politics'], {
+        description: 'Short market description.',
+        rules: longRules,
+      }),
+    ]);
+    const service = createService({
+      marketNetworkNode: {
+        findMany: networkNodeFindMany,
+      },
+      polymarketMarket: {
+        count: marketCount,
+        findMany: marketFindMany,
+      },
+    });
+
+    const result = await service.getMarketNetwork({ limit: 10 });
+
+    expect(result.nodes[0]).toMatchObject({
+      id: 'market_1',
+      description: 'Short market description.',
+    });
+    expect(result.nodes[0]?.rules).toHaveLength(1200);
+    expect(result.nodes[0]?.rules?.endsWith('...')).toBe(true);
   });
 
   it('treats the hot network category as an activity-ranked market subset', async () => {
@@ -858,13 +894,22 @@ function networkMarket(
   question: string,
   price: string,
   tags: string[],
-  options: { volume?: string; volume24hr?: string; liquidity?: string; discoveredAt?: Date } = {},
+  options: {
+    volume?: string;
+    volume24hr?: string;
+    liquidity?: string;
+    discoveredAt?: Date;
+    description?: string | null;
+    rules?: string | null;
+  } = {},
 ) {
   return {
     id,
     eventId,
     slug: id,
     question,
+    description: options.description ?? `${question} description`,
+    rules: options.rules ?? `${question} rules`,
     icon: null,
     image: null,
     acceptingOrders: true,
