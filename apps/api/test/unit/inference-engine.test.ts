@@ -122,14 +122,22 @@ describe('inference engine helpers', () => {
     );
   });
 
-  it('rejects non-root nodes without an incoming edge', () => {
+  it('repairs non-root nodes without an incoming edge', () => {
     const promptInput = inferencePromptInput();
     const output = validInferenceOutput(promptInput);
     output.edges = [];
 
-    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow(
-      'AI output non-root nodes must have an incoming edge',
-    );
+    const validated = validateAiInferenceOutput(output, promptInput);
+
+    expect(validated.edges).toEqual([
+      expect.objectContaining({
+        sourceClientNodeId: 'root',
+        targetClientNodeId: 'candidate_1',
+        sourceOutcomeId: promptInput.root.selectedOutcome.outcomeId,
+        targetOutcomeId: 'outcome_1',
+      }),
+    ]);
+    expect(validated.warnings).toContain('ai_output_repaired_missing_incoming_edges');
   });
 
   it('normalizes edges that point backward across graph layers', () => {
@@ -204,6 +212,35 @@ describe('inference engine helpers', () => {
     expect(validated.edges).toHaveLength(2);
     expect(validated.edges.some((edge) => edge.reason === 'same layer edge')).toBe(false);
     expect(validated.warnings).toContain('ai_output_dropped_same_layer_edges');
+  });
+
+  it('deduplicates equivalent edges after normalization', () => {
+    const promptInput = inferencePromptInput();
+    const output = validInferenceOutput(promptInput);
+    output.edges.push({
+      sourceClientNodeId: 'candidate_1',
+      targetClientNodeId: 'root',
+      sourceOutcomeId: 'outcome_1',
+      targetOutcomeId: 'root_outcome',
+      relation: 'supports',
+      confidence: 0.7,
+      reason: 'backward duplicate edge',
+    });
+
+    const validated = validateAiInferenceOutput(output, promptInput);
+
+    expect(validated.edges).toHaveLength(1);
+    expect(validated.edges[0]).toEqual(
+      expect.objectContaining({
+        sourceClientNodeId: 'root',
+        targetClientNodeId: 'candidate_1',
+        sourceOutcomeId: 'root_outcome',
+        targetOutcomeId: 'outcome_1',
+        confidence: 0.8,
+      }),
+    );
+    expect(validated.warnings).toContain('ai_output_deduplicated_edges');
+    expect(validated.warnings).toContain('ai_output_reoriented_edges_to_layer_order');
   });
 
   it('validates all provider market references before truncating excess nodes', () => {

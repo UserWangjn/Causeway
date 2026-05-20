@@ -44,6 +44,7 @@ export function buildInferenceAiPrompt(
         'Every non-root node confidence, every edge confidence, and every buy recommendation confidence must be greater than or equal to input.settings.confidenceThreshold.',
         'If confidence is below the threshold for a market, omit that non-root node. If confidence is below the threshold for an outcome, mark it avoid.',
         'Prefer active, open, acceptingOrders markets with enableOrderBook, positive liquidity, and usable bid/ask or last-trade data. Mention data gaps in warnings.',
+        'Every non-root node you output must have at least one incoming edge from an output node with a lower layer.',
         'Edges are UI graph edges, not free-form causal arrows: sourceClientNodeId must be a lower layer node and targetClientNodeId must be a higher layer node.',
         'The root node may be an edge source but must never be an edge target.',
         'If a candidate market is a cause or indicator for the root hypothesis, still orient the UI edge from root to that candidate node and explain the causal direction in reason.',
@@ -63,7 +64,7 @@ export function buildInferenceAiPrompt(
               instructions: [
                 'Return a complete corrected JSON object, not a patch.',
                 'Use only marketId and outcomeId values present in input.',
-                'Remove any non-root node that cannot be connected from a lower layer node.',
+                'Add a valid incoming edge for every non-root node, or remove any non-root node that cannot be connected from a lower layer node.',
                 'Fix every reversed edge by swapping both node ids and outcome ids; never leave an edge targeting the root node.',
                 'Use the previousOutput preview only for diagnosis; the canonical market and outcome IDs are in input.',
               ],

@@ -12,7 +12,7 @@ import type {
 } from './inference.types';
 
 export const MOCK_INFERENCE_MODEL = 'mock-causeway-v1';
-export const INFERENCE_PROMPT_VERSION = 'causeway-b5-v3';
+export const INFERENCE_PROMPT_VERSION = 'causeway-b5-v4';
 export const INFERENCE_OUTPUT_SCHEMA_VERSION = 'causeway-ai-output-v1';
 
 const layerSchema = z.preprocess((value) => {
@@ -257,6 +257,9 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
       throw invalidOutput('AI output node layer exceeds requested depth', { clientNodeId: node.clientNodeId });
     }
     assertConfidence(node.confidence, `node ${node.clientNodeId}`);
+    if (node.clientNodeId !== 'root' && node.layer === 0) {
+      throw invalidOutput('AI output non-root nodes must use layer 1 or higher', { clientNodeId: node.clientNodeId });
+    }
     if (node.clientNodeId !== 'root') {
       assertConfidenceMeetsThreshold(node.confidence, input.settings.confidenceThreshold, `node ${node.clientNodeId}`);
     }
@@ -292,30 +295,13 @@ export function validateAiInferenceOutput(output: unknown, input: InferencePromp
   }
 
   parsedOutput = normalizeEdgesForLayerOrder(parsedOutput, nodeByClientId);
-
-  for (const edge of parsedOutput.edges) {
-    const sourceNode = nodeByClientId.get(edge.sourceClientNodeId);
-    const targetNode = nodeByClientId.get(edge.targetClientNodeId);
-    if (!sourceNode || !targetNode) {
-      throw invalidOutput('AI output edge referenced an unknown node', edge);
-    }
-    if (sourceNode.layer >= targetNode.layer) {
-      throw invalidOutput('AI output edge must point from a lower layer to a higher layer', edge);
-    }
-    if (sourceNode.clientNodeId === 'root' && edge.sourceOutcomeId !== input.root.selectedOutcome.outcomeId) {
-      throw invalidOutput('Root edge must use the selected root outcome', edge);
-    }
-    assertConfidence(edge.confidence, `edge ${edge.sourceClientNodeId}->${edge.targetClientNodeId}`);
-    assertConfidenceMeetsThreshold(
-      edge.confidence,
-      input.settings.confidenceThreshold,
-      `edge ${edge.sourceClientNodeId}->${edge.targetClientNodeId}`,
-    );
-    assertNodeHasOutcome(sourceNode, edge.sourceOutcomeId);
-    assertNodeHasOutcome(targetNode, edge.targetOutcomeId);
-  }
+  parsedOutput = deduplicateEdges(parsedOutput);
+  assertValidEdges(parsedOutput, input);
 
   parsedOutput = limitMarketsPerLayer(parsedOutput, input.settings.maxMarketsPerLayer);
+  parsedOutput = repairMissingIncomingEdges(parsedOutput, input);
+  parsedOutput = deduplicateEdges(parsedOutput);
+  assertValidEdges(parsedOutput, input);
   assertMaxMarketsPerLayer(parsedOutput, input.settings.maxMarketsPerLayer);
   assertConnectedGraph(parsedOutput);
   assertAcyclicGraph(parsedOutput);
@@ -372,6 +358,165 @@ function normalizeEdgesForLayerOrder(
   };
 }
 
+function deduplicateEdges(output: AiInferenceOutput): AiInferenceOutput {
+  let deduplicated = false;
+  const edgeIndexByKey = new Map<string, number>();
+  const edges: AiEdge[] = [];
+
+  for (const edge of output.edges) {
+    const key = edgeIdentityKey(edge);
+    const existingIndex = edgeIndexByKey.get(key);
+    if (existingIndex === undefined) {
+      edgeIndexByKey.set(key, edges.length);
+      edges.push(edge);
+      continue;
+    }
+
+    deduplicated = true;
+    const existing = edges[existingIndex];
+    if (isBetterDuplicateEdge(edge, existing)) {
+      edges[existingIndex] = edge;
+    }
+  }
+
+  if (!deduplicated) return output;
+
+  return appendWarning(
+    {
+      ...output,
+      edges,
+    },
+    'ai_output_deduplicated_edges',
+  );
+}
+
+function edgeIdentityKey(edge: AiEdge): string {
+  return [
+    edge.sourceClientNodeId,
+    edge.targetClientNodeId,
+    edge.sourceOutcomeId,
+    edge.targetOutcomeId,
+  ].join('\u0000');
+}
+
+function isBetterDuplicateEdge(candidate: AiEdge, current: AiEdge): boolean {
+  if (candidate.confidence !== current.confidence) return candidate.confidence > current.confidence;
+  if (candidate.relation !== current.relation) return relationRank(candidate.relation) > relationRank(current.relation);
+  return candidate.reason.length > current.reason.length;
+}
+
+function relationRank(relation: AiEdge['relation']): number {
+  switch (relation) {
+    case 'causes':
+      return 5;
+    case 'supports':
+      return 4;
+    case 'contradicts':
+      return 3;
+    case 'hedges':
+      return 2;
+    case 'correlates':
+      return 1;
+  }
+}
+
+function repairMissingIncomingEdges(output: AiInferenceOutput, input: InferencePromptInput): AiInferenceOutput {
+  const incomingNodeIds = new Set(output.edges.map((edge) => edge.targetClientNodeId));
+  const edges = [...output.edges];
+  let repaired = false;
+
+  const nodesByLayer = [...output.nodes].sort(
+    (left, right) => left.layer - right.layer || right.confidence - left.confidence || left.clientNodeId.localeCompare(right.clientNodeId),
+  );
+
+  for (const node of nodesByLayer) {
+    if (node.clientNodeId === 'root' || incomingNodeIds.has(node.clientNodeId)) continue;
+
+    const sourceNode = selectRepairSourceNode(node, output.nodes, incomingNodeIds);
+    if (!sourceNode) continue;
+
+    edges.push(buildRepairedIncomingEdge(sourceNode, node, input));
+    incomingNodeIds.add(node.clientNodeId);
+    repaired = true;
+  }
+
+  if (!repaired) return output;
+
+  return appendWarning(
+    {
+      ...output,
+      edges,
+    },
+    'ai_output_repaired_missing_incoming_edges',
+  );
+}
+
+function selectRepairSourceNode(
+  targetNode: AiMarketNode,
+  nodes: AiMarketNode[],
+  connectedNodeIds: Set<string>,
+): AiMarketNode | undefined {
+  return nodes
+    .filter((node) => {
+      if (node.clientNodeId === targetNode.clientNodeId) return false;
+      if (node.layer >= targetNode.layer) return false;
+      return node.clientNodeId === 'root' || connectedNodeIds.has(node.clientNodeId);
+    })
+    .sort(
+      (left, right) =>
+        right.layer - left.layer || right.confidence - left.confidence || left.clientNodeId.localeCompare(right.clientNodeId),
+    )[0];
+}
+
+function buildRepairedIncomingEdge(
+  sourceNode: AiMarketNode,
+  targetNode: AiMarketNode,
+  input: InferencePromptInput,
+): AiEdge {
+  const sourceOutcome = pickEdgeOutcome(sourceNode, input);
+  const targetOutcome = pickEdgeOutcome(targetNode, input);
+  const sourceConfidence = sourceNode.clientNodeId === 'root' ? 1 : sourceNode.confidence;
+
+  return {
+    sourceClientNodeId: sourceNode.clientNodeId,
+    targetClientNodeId: targetNode.clientNodeId,
+    sourceOutcomeId: sourceOutcome.outcomeId,
+    targetOutcomeId: targetOutcome.outcomeId,
+    relation: relationFromImpactDirection(targetNode.impactDirection),
+    confidence: roundConfidence(Math.min(sourceConfidence, targetNode.confidence)),
+    reason:
+      'Backend repaired a missing UI graph edge because the AI output selected this node without a valid incoming edge.',
+  };
+}
+
+function pickEdgeOutcome(node: AiMarketNode, input: InferencePromptInput): AiOutcomeRecommendation {
+  if (node.clientNodeId === 'root') {
+    return {
+      outcomeId: input.root.selectedOutcome.outcomeId,
+      outcomeLabel: input.root.selectedOutcome.label,
+      aiAction: 'buy',
+      confidence: 1,
+      reason: 'Selected root outcome.',
+    };
+  }
+
+  return (
+    node.outcomes.find((outcome) => outcome.aiAction === 'buy') ??
+    [...node.outcomes].sort((left, right) => right.confidence - left.confidence || left.outcomeId.localeCompare(right.outcomeId))[0]
+  );
+}
+
+function relationFromImpactDirection(direction: AiMarketNode['impactDirection']): AiEdge['relation'] {
+  switch (direction) {
+    case 'supports':
+      return 'supports';
+    case 'opposes':
+      return 'contradicts';
+    case 'unclear':
+      return 'correlates';
+  }
+}
+
 function appendEdgeNormalizationNote(reason: string): string {
   const note = 'Direction normalized by backend to match UI layer order.';
   return reason.includes(note) ? reason : `${reason} ${note}`;
@@ -379,6 +524,13 @@ function appendEdgeNormalizationNote(reason: string): string {
 
 function uniqueString(value: string, index: number, values: string[]): boolean {
   return values.indexOf(value) === index;
+}
+
+function appendWarning(output: AiInferenceOutput, warning: string): AiInferenceOutput {
+  return {
+    ...output,
+    warnings: [...output.warnings, warning].filter(uniqueString),
+  };
 }
 
 function buildOutcomeRecommendations(
@@ -451,6 +603,32 @@ function parseAiInferenceOutput(output: unknown): AiInferenceOutput {
   }
 
   return parsed.data;
+}
+
+function assertValidEdges(output: AiInferenceOutput, input: InferencePromptInput): void {
+  const nodeByClientId = new Map(output.nodes.map((node) => [node.clientNodeId, node]));
+
+  for (const edge of output.edges) {
+    const sourceNode = nodeByClientId.get(edge.sourceClientNodeId);
+    const targetNode = nodeByClientId.get(edge.targetClientNodeId);
+    if (!sourceNode || !targetNode) {
+      throw invalidOutput('AI output edge referenced an unknown node', edge);
+    }
+    if (sourceNode.layer >= targetNode.layer) {
+      throw invalidOutput('AI output edge must point from a lower layer to a higher layer', edge);
+    }
+    if (sourceNode.clientNodeId === 'root' && edge.sourceOutcomeId !== input.root.selectedOutcome.outcomeId) {
+      throw invalidOutput('Root edge must use the selected root outcome', edge);
+    }
+    assertConfidence(edge.confidence, `edge ${edge.sourceClientNodeId}->${edge.targetClientNodeId}`);
+    assertConfidenceMeetsThreshold(
+      edge.confidence,
+      input.settings.confidenceThreshold,
+      `edge ${edge.sourceClientNodeId}->${edge.targetClientNodeId}`,
+    );
+    assertNodeHasOutcome(sourceNode, edge.sourceOutcomeId);
+    assertNodeHasOutcome(targetNode, edge.targetOutcomeId);
+  }
 }
 
 function assertRootNode(output: AiInferenceOutput, input: InferencePromptInput): void {
