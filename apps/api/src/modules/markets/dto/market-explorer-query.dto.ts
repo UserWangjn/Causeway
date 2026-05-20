@@ -1,11 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator';
 
 export class MarketSearchQueryDto {
   @TrimString()
   @IsString()
   @IsNotEmpty()
+  @MinLength(2)
   @MaxLength(200)
   q!: string;
 

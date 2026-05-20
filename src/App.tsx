@@ -480,11 +480,18 @@ type BackendScript = {
     marketId: string
     title: string
     layer: number
+    impactDirection?: string
     confidence: number | null
+    reason?: string
+    icon?: string | null
+    image?: string | null
     orderMinSize?: number | null
     tickSize?: number | null
     bestAsk?: number | null
     lastTradePrice?: number | null
+    volume?: number | null
+    volume24hr?: number | null
+    liquidity?: number | null
     outcomes: Array<{
       selectionId: string
       outcomeId: string
@@ -997,12 +1004,12 @@ function parseDraftNumber(value: string): number | null {
 }
 
 function formatUsd(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return 'N/A'
+  if (value == null || Number.isNaN(value)) return '待计算'
   return `$${value.toFixed(value >= 100 ? 0 : 2)}`
 }
 
 function formatShares(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return 'N/A'
+  if (value == null || Number.isNaN(value)) return '待计算'
   if (value >= 100) return value.toFixed(0)
   if (value >= 1) return value.toFixed(2)
   return value.toFixed(4)
@@ -1078,23 +1085,23 @@ function scriptOrderChains(script: BackendScript, rootMarketId: string): Inferen
     .filter((scriptMarket) => scriptMarket.marketId !== rootMarketId)
     .map((scriptMarket, index) => {
       const buyOutcomes = scriptMarket.outcomes.filter((outcome) => outcome.aiAction === 'buy' || outcome.userAction === 'buy')
+      const direction = normalizeInferenceDirection(scriptMarket.impactDirection)
       return {
         id: scriptMarket.scriptMarketId || `script_market_${scriptMarket.marketId}_${index}`,
-        title: `链路 ${index + 1}：${trimNodeTitle(scriptMarket.title, 30)}`,
-        summary: buyOutcomes[0]?.reason || 'AI 将该市场纳入可交易因果链，提交前仍需要复核实时盘口。',
+        title: `${inferenceLayerLabel(scriptMarket.layer)}：${trimNodeTitle(scriptMarket.title, 30)}`,
+        summary: scriptMarket.reason || buyOutcomes[0]?.reason || 'AI 将该市场纳入可交易因果链，提交前仍需要复核实时盘口。',
         confidence: scriptMarket.confidence ?? 0.5,
         expectedReturnHint: '已生成可执行 selection，可在下方订单草稿中确认金额、数量和限价。',
         legs: buyOutcomes.map((outcome) => {
-          const lowerLabel = outcome.label.toLowerCase()
-          const direction = lowerLabel.includes('no') ? 'negative' : 'positive'
           return {
             marketId: scriptMarket.marketId,
             marketTitle: scriptMarket.title,
             side: `Buy ${outcome.label}`,
-            probability: outcome.limitPrice == null ? null : outcome.limitPrice * 100,
+            probability: unitPriceToPercent(outcome.limitPrice ?? outcome.price ?? scriptMarket.bestAsk ?? scriptMarket.lastTradePrice),
             direction,
+            impact: inferenceImpactSummary(scriptMarket.impactDirection),
             confidence: outcome.confidence ?? scriptMarket.confidence ?? 0.5,
-            rationale: outcome.reason || 'AI 推荐买入该 outcome。',
+            rationale: outcome.reason || scriptMarket.reason || 'AI 推荐买入该 outcome。',
             orderHint: `Buy ${outcome.label}`,
           }
         }),
@@ -1268,6 +1275,7 @@ async function loadMarketForInference(market: Market, signal: AbortSignal): Prom
 }
 
 function scriptToInferenceResult(script: BackendScript, run: BackendInferenceStatus, market: Market, settings: InferenceSettingsState): InferenceResult {
+  const nodeByNodeId = new Map(script.graph.nodes.map((node) => [node.nodeId, node]))
   const titleByNodeId = new Map(script.graph.nodes.map((node) => [node.nodeId, node.title]))
   const orderCandidates = scriptOrderCandidates(script)
   const relatedMarkets = script.markets
@@ -1276,11 +1284,15 @@ function scriptToInferenceResult(script: BackendScript, run: BackendInferenceSta
       id: item.marketId,
       title: item.title,
       category: 'Polymarket',
-      price: null,
-      volume: 'N/A',
+      price: scriptMarketPricePercent(item),
+      volume: scriptMarketVolumeLabel(item),
+      icon: item.icon,
+      image: item.image,
       confidence: item.confidence ?? 0,
-      relation: item.layer === 0 ? 'root' : `layer_${item.layer}`,
-      reason: item.outcomes[0]?.reason,
+      relation: inferenceLayerLabel(item.layer),
+      direction: normalizeInferenceDirection(item.impactDirection),
+      impact: inferenceImpactSummary(item.impactDirection),
+      reason: item.reason || item.outcomes[0]?.reason,
     }))
 
   return {
@@ -1305,9 +1317,10 @@ function scriptToInferenceResult(script: BackendScript, run: BackendInferenceSta
       target: titleByNodeId.get(edge.targetNodeId) || edge.targetNodeId,
       direction: edge.relation,
       confidence: edge.confidence,
+      impact: inferenceImpactSummary(edge.relation),
       rationale: edge.reason,
-      sourceMarketId: null,
-      targetMarketId: null,
+      sourceMarketId: nodeByNodeId.get(edge.sourceNodeId)?.marketId ?? null,
+      targetMarketId: nodeByNodeId.get(edge.targetNodeId)?.marketId ?? null,
     })),
     scriptChains: scriptOrderChains(script, market.id),
     scenarios: [],
@@ -1533,7 +1546,7 @@ function orderVisibleMarketCategories(categories: ApiMarketCategory[]) {
 }
 
 function formatCompactMoney(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return 'N/A'
+  if (value == null || Number.isNaN(value)) return '暂无数据'
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`
@@ -1566,22 +1579,73 @@ function formatProbability(value: number | null | undefined) {
 }
 
 function formatMarketPercent(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return 'N/A'
+  if (value == null || Number.isNaN(value)) return '暂无价格'
   if (value > 0 && value < 1) return '<1%'
   if (value % 1 === 0) return `${value}%`
   return `${value.toFixed(1)}%`
 }
 
 function formatConfidence(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return 'N/A'
+  if (value == null || Number.isNaN(value)) return '暂无'
   return `${Math.round(value * 100)}%`
 }
 
+function normalizeInferenceDirection(value: string | null | undefined) {
+  const normalized = (value || '').toLowerCase()
+  if (['positive', 'support', 'supports', 'cause', 'causes'].includes(normalized)) return 'positive'
+  if (['negative', 'oppose', 'opposes', 'contradict', 'contradicts'].includes(normalized)) return 'negative'
+  if (['conditional', 'hedge', 'hedges', 'correlate', 'correlates'].includes(normalized)) return 'conditional'
+  return 'unknown'
+}
+
 function directionLabel(value: string | null | undefined) {
-  if (value === 'positive') return '正向'
-  if (value === 'negative') return '反向'
-  if (value === 'conditional') return '条件'
-  return '待判定'
+  const normalized = (value || '').toLowerCase()
+  if (['supports', 'support'].includes(normalized)) return '正向支持'
+  if (['causes', 'cause'].includes(normalized)) return '因果影响'
+  if (['opposes', 'oppose', 'contradicts', 'contradict'].includes(normalized)) return '反向影响'
+  if (['hedges', 'hedge'].includes(normalized)) return '对冲影响'
+  if (['correlates', 'correlate'].includes(normalized)) return '相关影响'
+  if (['unclear', 'unknown'].includes(normalized)) return '影响不明确'
+  if (normalized === 'positive') return '正向'
+  if (normalized === 'negative') return '反向'
+  if (normalized === 'conditional') return '条件影响'
+  return '影响不明确'
+}
+
+function inferenceLayerLabel(layer: number | null | undefined) {
+  if (layer == null || !Number.isFinite(layer)) return '关联市场'
+  if (layer <= 0) return '核心市场'
+  if (layer === 1) return '一级联动'
+  if (layer === 2) return '二级联动'
+  if (layer === 3) return '三级联动'
+  return `第 ${layer} 层联动`
+}
+
+function inferenceImpactSummary(direction: string | null | undefined) {
+  const normalized = (direction || '').toLowerCase()
+  if (['supports', 'support', 'positive', 'causes', 'cause'].includes(normalized)) return '提高目标结果概率'
+  if (['opposes', 'oppose', 'negative', 'contradicts', 'contradict'].includes(normalized)) return '压低目标结果概率'
+  if (['hedges', 'hedge'].includes(normalized)) return '用于对冲根市场风险'
+  if (['correlates', 'correlate', 'conditional'].includes(normalized)) return '相关性需结合条件复核'
+  return '影响方向不明确'
+}
+
+function defaultOrderHintForDirection(direction: string | null | undefined) {
+  return normalizeInferenceDirection(direction) === 'negative' ? 'Buy No' : 'Buy Yes'
+}
+
+function scriptMarketUnitPrice(scriptMarket: BackendScript['markets'][number]) {
+  const buyOutcome = scriptMarket.outcomes.find((outcome) => outcome.aiAction === 'buy' || outcome.userAction === 'buy')
+  return buyOutcome?.price ?? buyOutcome?.limitPrice ?? scriptMarket.bestAsk ?? scriptMarket.lastTradePrice ?? scriptMarket.outcomes[0]?.price ?? null
+}
+
+function scriptMarketPricePercent(scriptMarket: BackendScript['markets'][number]) {
+  return unitPriceToPercent(scriptMarketUnitPrice(scriptMarket))
+}
+
+function scriptMarketVolumeLabel(scriptMarket: BackendScript['markets'][number]) {
+  const volume = scriptMarket.volume24hr ?? scriptMarket.volume
+  return volume == null || Number.isNaN(volume) ? '暂无成交量' : formatCompactMoney(volume)
 }
 
 function marketSubtitle(market: Market) {
@@ -1615,11 +1679,11 @@ function unitPriceToPercent(price: number | null | undefined) {
 
 function formatUnitPercent(price: number | null | undefined) {
   const percent = unitPriceToPercent(price)
-  return percent == null ? 'N/A' : `${percent}%`
+  return percent == null ? '暂无价格' : `${percent}%`
 }
 
 function formatCents(price: number | null | undefined) {
-  if (price == null || Number.isNaN(price)) return 'N/A'
+  if (price == null || Number.isNaN(price)) return '暂无报价'
   const cents = clamp(price, 0, 1) * 100
   const precision = cents < 1 || cents > 99 || cents % 1 ? 1 : 0
   return `${cents.toFixed(precision)}¢`
@@ -2242,7 +2306,7 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
     volume: formatCompactMoney(node.volume),
     volumeValue: node.volume,
     liquidity: node.liquidity,
-    traders: node.volume24hr ? formatCompactMoney(node.volume24hr) : '24h N/A',
+    traders: node.volume24hr ? formatCompactMoney(node.volume24hr) : '24h 暂无数据',
     x: node.x ?? 50,
     y: node.y ?? 50,
     tone: categoryTones[categoryKey] || categoryTones[category] || (index % 5 === 0 ? 'purple' : index % 3 === 0 ? 'orange' : index % 2 === 0 ? 'green' : 'blue'),
@@ -4076,8 +4140,10 @@ function NetworkFlowCanvas({
 }
 
 function scriptTone(direction: string | null | undefined, confidence: number | null | undefined): 'green' | 'orange' | 'red' | 'purple' {
-  if (direction === 'negative') return 'red'
-  if (direction === 'conditional') return 'orange'
+  const normalizedDirection = normalizeInferenceDirection(direction)
+  if (normalizedDirection === 'negative') return 'red'
+  if (normalizedDirection === 'conditional') return 'orange'
+  if (normalizedDirection === 'unknown') return 'purple'
   if ((confidence || 0) < 0.35) return 'purple'
   return 'green'
 }
@@ -4104,13 +4170,13 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
         legs: [{
           marketId: target.id,
           marketTitle: target.title,
-          side: link.direction === 'negative' ? 'Buy No' : 'Buy Yes',
+          side: defaultOrderHintForDirection(link.direction),
           probability: target.price,
           direction: link.direction,
-          impact: link.impact,
+          impact: link.impact || inferenceImpactSummary(link.direction),
           confidence: link.confidence,
           rationale: link.rationale || target.reason || target.evidenceSummary || 'AI 已核实该市场与根节点有关联。',
-          orderHint: link.direction === 'negative' ? 'Buy No' : 'Buy Yes',
+          orderHint: defaultOrderHintForDirection(link.direction),
           evidenceIds: link.evidenceIds || target.evidenceIds || [],
         }],
       }]
@@ -4127,13 +4193,13 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
       legs: [{
         marketId: item.id,
         marketTitle: item.title,
-        side: item.direction === 'negative' ? 'Buy No' : 'Buy Yes',
+        side: defaultOrderHintForDirection(item.direction),
         probability: item.price,
         direction: item.direction || 'unknown',
-        impact: item.impact,
+        impact: item.impact || inferenceImpactSummary(item.direction),
         confidence: item.verificationScore || item.confidence,
         rationale: item.reason || item.evidenceSummary || 'AI 已核实该市场与根节点有关联。',
-        orderHint: item.direction === 'negative' ? 'Buy No' : 'Buy Yes',
+        orderHint: defaultOrderHintForDirection(item.direction),
         evidenceIds: item.evidenceIds || [],
       }],
     }))
@@ -4242,7 +4308,7 @@ function CausalMap({
                       />
                       <div>
                         <b>{trimNodeTitle(leg.marketTitle, 56)}</b>
-                        <small>{directionLabel(leg.direction)} · {leg.impact || '待观察'}</small>
+                        <small>{directionLabel(leg.direction)} · {leg.impact || inferenceImpactSummary(leg.direction)}</small>
                         <p>{leg.rationale}</p>
                       </div>
                       <strong>{formatMarketPercent(leg.probability)}</strong>
@@ -4364,7 +4430,7 @@ function MarketHoverCard({
       </div>
       <div className="hover-card-footer">
         <span className={market.acceptingOrders === false ? 'closed' : 'open'}>{market.acceptingOrders === false ? '暂停接单' : '可交易'}</span>
-        {topOutcome ? <span>{topOutcome.label}: {topOutcome.price == null ? 'N/A' : `${Math.round(topOutcome.price * 100)}%`}</span> : null}
+        {topOutcome ? <span>{topOutcome.label}: {formatUnitPercent(topOutcome.price)}</span> : null}
       </div>
     </aside>
   )
@@ -4760,7 +4826,7 @@ function MarketOrderBook({
                 <span>{outcome.subtitle}</span>
               </div>
               <div className="orderbook-price">
-                <strong>{outcome.percent == null ? 'N/A' : `${outcome.percent}%`}</strong>
+                <strong>{formatMarketPercent(outcome.percent)}</strong>
                 <span className={outcome.trend >= 0 ? 'green-text' : 'red-text'}>{outcome.trend >= 0 ? '▲' : '▼'} {Math.abs(outcome.trend)}%</span>
               </div>
               <div className="orderbook-quotes">
@@ -4876,25 +4942,28 @@ function DiscoveryTable({ market, relatedMarkets }: { market?: Market; relatedMa
         {relatedMarkets.map((item) => {
           const tone = categoryTones[item.category] || seedMarket.tone
           const score = item.verificationScore ?? item.confidence
+          const evidenceCount = item.evidenceCount ?? item.evidenceIds?.length ?? 0
+          const relationMeta = evidenceCount > 0 ? `证据 ${evidenceCount}` : item.relation
           return (
-          <div key={item.id}>
-            <MarketIcon market={{ icon: seedMarket.icon, iconUrl: item.icon || item.image || null, tone }} size="small" />
-            <div className="discovery-market-title">
-              <b>{item.title}</b>
-              {item.eventTitle ? <small>{item.eventTitle}</small> : null}
+            <div key={item.id}>
+              <MarketIcon market={{ icon: seedMarket.icon, iconUrl: item.icon || item.image || null, tone }} size="small" />
+              <div className="discovery-market-title">
+                <b>{item.title}</b>
+                {item.eventTitle ? <small>{item.eventTitle}</small> : null}
+              </div>
+              <span className="relation-cell">
+                <b>{item.relation || item.category}</b>
+                <small>{directionLabel(item.direction)} · {relationMeta}</small>
+              </span>
+              <strong>{formatConfidence(score)}</strong>
+              <em>{item.volume}</em>
+              <div className="impact-cell">
+                <b>{item.impact || inferenceImpactSummary(item.direction)}</b>
+                <small>{formatMarketPercent(item.price)}</small>
+              </div>
             </div>
-            <span className="relation-cell">
-              <b>{item.relation || item.category}</b>
-              <small>{directionLabel(item.direction)} · 证据 {item.evidenceCount || item.evidenceIds?.length || 1}</small>
-            </span>
-            <strong>{formatConfidence(score)}</strong>
-            <em>{item.volume}</em>
-            <div className="impact-cell">
-              <b>{item.impact || '待观察'}</b>
-              <small>{formatMarketPercent(item.price)}</small>
-            </div>
-          </div>
-        )})}
+          )
+        })}
       </div>
     )
   }
@@ -4946,7 +5015,7 @@ function SummaryList({ market, result }: { market: Market; result: InferenceResu
     ])
     const linkItems = result.causalLinks.slice(0, 5).map((link) => [
       `${market.title} → ${link.target}`,
-      `${directionLabel(link.direction)} · ${formatConfidence(link.confidence)} · ${link.impact || '待观察'}。${link.rationale}${link.evidenceSummary ? ` 证据：${link.evidenceSummary}` : ''}`,
+      `${directionLabel(link.direction)} · ${formatConfidence(link.confidence)} · ${link.impact || inferenceImpactSummary(link.direction)}。${link.rationale}${link.evidenceSummary ? ` 证据：${link.evidenceSummary}` : ''}`,
     ])
     const scenarioItems = result.scenarios.slice(0, 2).map((scenario) => [scenario.name, `${scenario.probabilityShift}：${scenario.description}`])
     const excludedNote = result.excludedMarkets?.length

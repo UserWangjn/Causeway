@@ -42,13 +42,20 @@ describe('ScriptsService', () => {
           id: 'script_market_1',
           marketId: 'market_1',
           layer: 0,
+          impactDirection: 'supports',
           confidence: '1',
+          reason: 'market reason',
           market: {
             question: 'Will market one resolve Yes?',
+            icon: 'icon.png',
+            image: 'image.png',
             orderMinSize: '5',
             orderPriceMinTickSize: '0.01',
             bestAsk: '0.42',
             lastTradePrice: '0.39',
+            volume: '1000',
+            volume24hr: '250',
+            liquidity: '500',
             outcomes: [
               {
                 id: 'outcome_yes',
@@ -114,15 +121,22 @@ describe('ScriptsService', () => {
             id: true,
             marketId: true,
             layer: true,
+            impactDirection: true,
             confidence: true,
-                market: {
-                  select: {
-                    question: true,
-                    orderMinSize: true,
-                    orderPriceMinTickSize: true,
-                    bestAsk: true,
-                    lastTradePrice: true,
-                    outcomes: {
+            reason: true,
+            market: {
+              select: {
+                question: true,
+                icon: true,
+                image: true,
+                orderMinSize: true,
+                orderPriceMinTickSize: true,
+                bestAsk: true,
+                lastTradePrice: true,
+                volume: true,
+                volume24hr: true,
+                liquidity: true,
+                outcomes: {
                   orderBy: { outcomeIndex: 'asc' },
                   select: {
                     id: true,
@@ -199,6 +213,13 @@ describe('ScriptsService', () => {
           title: 'Will market one resolve Yes?',
           orderMinSize: 5,
           tickSize: 0.01,
+          impactDirection: 'supports',
+          reason: 'market reason',
+          icon: 'icon.png',
+          image: 'image.png',
+          volume: 1000,
+          volume24hr: 250,
+          liquidity: 500,
           outcomes: [
             {
               selectionId: 'selection_1',

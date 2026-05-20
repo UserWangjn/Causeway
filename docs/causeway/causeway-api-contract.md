@@ -286,6 +286,8 @@ q
 limit
 ```
 
+`q` 至少 2 个字符，避免对全量本地市场缓存执行高频单字符模糊扫描。
+
 响应：
 
 ```ts
@@ -356,11 +358,12 @@ limit
 ```ts
 type MarketSearch = {
   results: {
-    type: "market" | "event";
+    type: "market" | "event" | "topic";
     id: string;
     marketId: string | null;
     eventId: string | null;
     eventSlug: string | null;
+    topic: string | null;
     slug: string | null;
     title: string;
     subtitle: string | null;
@@ -373,12 +376,14 @@ type MarketSearch = {
     liquidity: number | null;
     endDate: string | null;
     score: number;
-    matchedBy: "market" | "event";
+    matchedBy: "market" | "event" | "topic" | "cache";
   }[];
   generatedAt: string;
-  source: string;
+  source: "polymarket_gamma_search_v2" | "causeway_market_cache";
 };
 ```
+
+正常优先使用 Polymarket Gamma Search V2；当 Gamma 慢、失败或返回空结果时，后端必须回退到本地已同步市场缓存，避免前端搜索直接 502。
 
 ### `GET /events/detail`
 
@@ -542,11 +547,18 @@ type ScriptMarket = {
   marketId: string;
   title: string;
   layer: 0 | 1 | 2 | 3;
+  impactDirection: "supports" | "opposes" | "unclear";
   confidence: number;
+  reason: string;
+  icon: string | null;
+  image: string | null;
   orderMinSize: number | null;
   tickSize: number | null;
   bestAsk: number | null;
   lastTradePrice: number | null;
+  volume: number | null;
+  volume24hr: number | null;
+  liquidity: number | null;
   outcomes: {
     selectionId: string;
     outcomeId: string;

@@ -5,6 +5,28 @@ import type { ClobClient } from '../../src/integrations/polymarket/services/clob
 import type { GammaClient } from '../../src/integrations/polymarket/services/gamma.client';
 import { MarketsService } from '../../src/modules/markets/markets.service';
 
+const SEARCH_RESULT_KEYS = [
+  'category',
+  'categoryKey',
+  'endDate',
+  'eventId',
+  'eventSlug',
+  'icon',
+  'id',
+  'image',
+  'liquidity',
+  'marketId',
+  'matchedBy',
+  'price',
+  'score',
+  'slug',
+  'subtitle',
+  'title',
+  'topic',
+  'type',
+  'volume',
+].sort();
+
 describe('MarketsService', () => {
   it('returns market list items in the documented API shape', async () => {
     const findMany = vi.fn().mockResolvedValue([
@@ -228,6 +250,130 @@ describe('MarketsService', () => {
       { key: 'politics', label: 'Politics', count: 1 },
       { key: 'sports', label: 'Sports', count: 1 },
     ]);
+  });
+
+  it('normalizes Gamma search results into the documented stable shape', async () => {
+    const searchV2 = vi.fn().mockResolvedValue({
+      events: [
+        {
+          id: 'event_1',
+          slug: 'event-one',
+          title: 'Fixture sports event',
+          image: 'event.png',
+          tags: ['sports'],
+          volume: '1000',
+          liquidity: '250',
+          endDate: '2026-12-31T00:00:00.000Z',
+          markets: [
+            {
+              id: 'market_1',
+              slug: 'market-one',
+              question: 'Will fixture market resolve?',
+              groupItemTitle: 'Fixture market',
+              bestAsk: '0.42',
+              volume: '100',
+              liquidity: '50',
+              endDate: '2026-12-30T00:00:00.000Z',
+            },
+          ],
+        },
+      ],
+      tags: [
+        {
+          id: 'tag_1',
+          slug: 'crypto',
+          label: 'Crypto',
+          event_count: '7',
+        },
+      ],
+    });
+    const service = createService({}, {}, { searchV2 });
+
+    const result = await service.searchMarkets({ q: 'fixture', limit: 5 });
+
+    expect(result.source).toBe('polymarket_gamma_search_v2');
+    expect(searchV2).toHaveBeenCalledWith({ q: 'fixture', limitPerType: 6 });
+    expect(result.results).toHaveLength(3);
+    for (const item of result.results) {
+      expect(Object.keys(item).sort()).toEqual(SEARCH_RESULT_KEYS);
+    }
+    expect(result.results.map((item) => item.type)).toEqual(['market', 'event', 'topic']);
+    expect(result.results[0]).toMatchObject({
+      type: 'market',
+      category: 'Sports',
+      categoryKey: 'sports',
+      topic: null,
+      price: 0.42,
+    });
+    expect(result.results[2]).toMatchObject({
+      type: 'topic',
+      topic: 'crypto',
+      category: 'Crypto',
+      categoryKey: 'crypto',
+      icon: null,
+      image: null,
+    });
+  });
+
+  it('falls back to cached market search when Gamma search fails', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        ...marketRecord('market_1', 'market-one', 'Will fixture market resolve?'),
+        outcomes: [outcomeRecord('outcome_yes', 0, 'Yes', 'token_yes', '0.42')],
+        event: {
+          id: 'event_1',
+          slug: 'event-one',
+          title: 'Fixture Event',
+          tags: ['politics'],
+          icon: 'event-icon.png',
+          image: 'event-image.png',
+          volume: '1000',
+          liquidity: '500',
+          endDate: new Date('2026-12-31T00:00:00.000Z'),
+          syncedAt: new Date('2026-05-18T00:00:00.000Z'),
+          description: 'Event description',
+        },
+      },
+    ]);
+    const searchV2 = vi.fn().mockRejectedValue(new Error('Gamma unavailable'));
+    const service = createService({
+      polymarketMarket: {
+        findMany,
+      },
+    }, {}, { searchV2 });
+
+    const result = await service.searchMarkets({ q: 'fixture', limit: 3 });
+
+    expect(result.source).toBe('causeway_market_cache');
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        OR: [
+          { question: { contains: 'fixture', mode: 'insensitive' } },
+          { slug: { contains: 'fixture', mode: 'insensitive' } },
+          { event: { is: { title: { contains: 'fixture', mode: 'insensitive' } } } },
+          { event: { is: { slug: { contains: 'fixture', mode: 'insensitive' } } } },
+        ],
+      },
+      orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+      take: 3,
+      select: expect.any(Object) as object,
+    });
+    expect(Object.keys(result.results[0] ?? {}).sort()).toEqual(SEARCH_RESULT_KEYS);
+    expect(result.results[0]).toMatchObject({
+      type: 'market',
+      id: 'market:market_1',
+      marketId: 'market_1',
+      eventId: 'event_1',
+      eventSlug: 'event-one',
+      topic: null,
+      category: 'Politics',
+      categoryKey: 'politics',
+      matchedBy: 'market',
+    });
   });
 
   it('returns market details with all outcomes and related markets from the same event', async () => {

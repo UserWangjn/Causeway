@@ -1,4 +1,4 @@
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
 import {
@@ -186,6 +186,8 @@ const HOT_MARKET_ACTIVITY_WHERE = Prisma.validator<Prisma.PolymarketMarketWhereI
 
 @Injectable()
 export class MarketsService {
+  private readonly logger = new Logger(MarketsService.name);
+
   constructor(
     @Inject(ClobClient)
     private readonly clobClient: ClobClient,
@@ -293,14 +295,50 @@ export class MarketsService {
   async searchMarkets(query: MarketSearchQueryDto) {
     const q = query.q.trim();
     const limit = query.limit ?? 8;
-    const payload = await this.gammaClient.searchV2({ q, limitPerType: Math.max(6, Math.min(limit, 12)) });
-    const results = formatGammaSearchResults(payload, limit);
+    try {
+      const payload = await this.gammaClient.searchV2({ q, limitPerType: Math.max(6, Math.min(limit, 12)) });
+      const results = formatGammaSearchResults(payload, limit);
+
+      if (results.length) {
+        return {
+          results,
+          generatedAt: new Date().toISOString(),
+          source: 'polymarket_gamma_search_v2',
+        };
+      }
+    } catch (error) {
+      this.logger.warn(`Gamma market search failed for "${q.slice(0, 64)}"; falling back to local cache: ${errorLogMessage(error)}`);
+    }
+
+    const results = await this.searchCachedMarkets(q, limit);
 
     return {
       results,
       generatedAt: new Date().toISOString(),
-      source: 'polymarket_gamma_search_v2',
+      source: 'causeway_market_cache',
     };
+  }
+
+  private async searchCachedMarkets(q: string, limit: number): Promise<GammaSearchResult[]> {
+    const markets = await this.prisma.polymarketMarket.findMany({
+      where: {
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        OR: [
+          { question: { contains: q, mode: 'insensitive' } },
+          { slug: { contains: q, mode: 'insensitive' } },
+          { event: { is: { title: { contains: q, mode: 'insensitive' } } } },
+          { event: { is: { slug: { contains: q, mode: 'insensitive' } } } },
+        ],
+      },
+      orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+      take: limit,
+      select: EXPLORER_MARKET_SELECT,
+    });
+
+    return markets.map((market, index) => formatCachedSearchResult(market, q, index));
   }
 
   async getMarket(marketId: string) {
@@ -1328,24 +1366,58 @@ function normalizeHistoryInterval(value: string | undefined): '1h' | '6h' | '1d'
 type GammaSearchResult = {
   type: 'market' | 'event' | 'topic';
   id: string;
-  marketId?: string | null;
-  eventId?: string | null;
-  eventSlug?: string | null;
-  topic?: string | null;
-  slug?: string | null;
+  marketId: string | null;
+  eventId: string | null;
+  eventSlug: string | null;
+  topic: string | null;
+  slug: string | null;
   title: string;
-  subtitle?: string | null;
-  category?: string | null;
-  categoryKey?: string | null;
-  icon?: string | null;
-  image?: string | null;
-  price?: number | null;
-  volume?: number | null;
-  liquidity?: number | null;
-  endDate?: string | null;
+  subtitle: string | null;
+  category: string | null;
+  categoryKey: string | null;
+  icon: string | null;
+  image: string | null;
+  price: number | null;
+  volume: number | null;
+  liquidity: number | null;
+  endDate: string | null;
   score: number;
-  matchedBy: string;
+  matchedBy: 'market' | 'event' | 'topic' | 'cache';
 };
+
+function formatCachedSearchResult(market: ExplorerMarketRecord, q: string, index: number): GammaSearchResult {
+  const categoryKey = readMarketCategoryKey(market.event?.tags, [market.question, market.slug, market.event?.title]);
+  const eventTitle = market.event?.title ?? null;
+  const icon = market.icon ?? market.event?.icon ?? null;
+  const image = market.image ?? market.event?.image ?? icon;
+  return {
+    type: 'market',
+    id: `market:${market.id}`,
+    marketId: market.id,
+    eventId: market.eventId,
+    eventSlug: market.event?.slug ?? null,
+    topic: null,
+    slug: market.slug,
+    title: market.question,
+    subtitle: eventTitle ?? market.slug,
+    category: marketCategoryLabel(categoryKey),
+    categoryKey,
+    icon,
+    image,
+    price: firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid, market.outcomes[0]?.price),
+    volume: toNullableNumber(market.volume),
+    liquidity: toNullableNumber(market.liquidity),
+    endDate: market.endDate?.toISOString() ?? market.event?.endDate?.toISOString() ?? null,
+    score: gammaScore(
+      {
+        volume: market.volume,
+        liquidity: market.liquidity,
+      },
+      index,
+    ),
+    matchedBy: cachedSearchMatchType(market, q),
+  };
+}
 
 function formatGammaSearchResults(payload: Record<string, unknown>, limit: number): GammaSearchResult[] {
   const results: GammaSearchResult[] = [];
@@ -1359,6 +1431,7 @@ function formatGammaSearchResults(payload: Record<string, unknown>, limit: numbe
     const eventImage = readString(event.image) ?? readString(event.icon);
     const eventEndDate = readString(event.endDate);
     const markets = readRecordArray(event.markets);
+    const eventCategoryKey = readMarketCategoryKey(event.tags, [eventTitle, eventSlug]);
 
     results.push({
       type: 'event',
@@ -1366,9 +1439,12 @@ function formatGammaSearchResults(payload: Record<string, unknown>, limit: numbe
       marketId: null,
       eventId,
       eventSlug,
+      topic: null,
       slug: eventSlug,
       title: eventTitle,
       subtitle: `${markets.length} markets`,
+      category: marketCategoryLabel(eventCategoryKey),
+      categoryKey: eventCategoryKey,
       icon: eventImage,
       image: eventImage,
       price: null,
@@ -1383,15 +1459,19 @@ function formatGammaSearchResults(payload: Record<string, unknown>, limit: numbe
       const marketId = readString(market.id);
       const marketSlug = readString(market.slug);
       const marketTitle = readString(market.question) ?? readString(market.groupItemTitle) ?? eventTitle;
+      const marketCategoryKey = readMarketCategoryKey(event.tags, [marketTitle, marketSlug, eventTitle]);
       results.push({
         type: 'market',
         id: `market:${marketId ?? marketSlug ?? `${eventIndex}:${marketIndex}`}`,
         marketId,
         eventId,
         eventSlug,
+        topic: null,
         slug: marketSlug,
         title: marketTitle,
         subtitle: readString(market.groupItemTitle) ?? eventTitle,
+        category: marketCategoryLabel(marketCategoryKey),
+        categoryKey: marketCategoryKey,
         icon: eventImage,
         image: eventImage,
         price: firstNumber(market.lastTradePrice, market.bestAsk, readOutcomePrice(market, 0)),
@@ -1407,6 +1487,7 @@ function formatGammaSearchResults(payload: Record<string, unknown>, limit: numbe
   for (const [index, tag] of tags.entries()) {
     const slug = readString(tag.slug);
     const label = readString(tag.label) ?? slug ?? 'Topic';
+    const categoryKey = normalizeMarketCategoryKey(slug ?? label);
     results.push({
       type: 'topic',
       id: `topic:${readString(tag.id) ?? slug ?? index}`,
@@ -1417,6 +1498,10 @@ function formatGammaSearchResults(payload: Record<string, unknown>, limit: numbe
       slug,
       title: label,
       subtitle: `${toNullableNumber(tag.event_count) ?? 0} events`,
+      category: categoryKey ? marketCategoryLabel(categoryKey) : null,
+      categoryKey,
+      icon: null,
+      image: null,
       price: null,
       volume: null,
       liquidity: null,
@@ -1432,6 +1517,19 @@ function formatGammaSearchResults(payload: Record<string, unknown>, limit: numbe
       .sort((left, right) => right.score - left.score)
       .slice(0, limit),
   );
+}
+
+function cachedSearchMatchType(market: ExplorerMarketRecord, q: string): GammaSearchResult['matchedBy'] {
+  const needle = q.toLowerCase();
+  if (market.question.toLowerCase().includes(needle) || market.slug.toLowerCase().includes(needle)) return 'market';
+  if (market.event?.title?.toLowerCase().includes(needle) || market.event?.slug?.toLowerCase().includes(needle)) return 'event';
+  return 'cache';
+}
+
+function errorLogMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  return 'unknown error';
 }
 
 function gammaScore(value: Record<string, unknown>, index: number): number {
