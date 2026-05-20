@@ -4,6 +4,150 @@ import type { PrismaService } from '../../src/database/prisma.service';
 import { ScriptsService } from '../../src/modules/scripts/scripts.service';
 
 describe('ScriptsService', () => {
+  it('lists the authenticated user scripts from persisted causal scripts', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'script_1',
+        title: 'Causeway script: root question',
+        status: 'draft',
+        summary: 'summary',
+        rootMarketId: 'market_1',
+        rootOutcomeId: 'outcome_yes',
+        createdAt: new Date('2026-05-18T00:00:00.000Z'),
+        updatedAt: new Date('2026-05-18T00:01:00.000Z'),
+        markets: [
+          {
+            market: {
+              question: 'Will real market resolve Yes?',
+              icon: 'icon.png',
+              image: 'image.png',
+              bestAsk: '0.42',
+              lastTradePrice: '0.41',
+              volume: '1000',
+              volume24hr: '250',
+              liquidity: '500',
+            },
+          },
+        ],
+        _count: {
+          markets: 3,
+          orderIntents: 1,
+        },
+      },
+    ]);
+    const polymarketOutcomeFindMany = vi.fn().mockResolvedValue([
+      {
+        id: 'outcome_yes',
+        label: 'Yes',
+        clobTokenId: 'token_yes',
+        price: '0.40',
+        bestBid: '0.39',
+        bestAsk: '0.42',
+        lastTradePrice: '0.41',
+      },
+    ]);
+    const service = new ScriptsService({
+      causalScript: {
+        findMany,
+      },
+      polymarketOutcome: {
+        findMany: polymarketOutcomeFindMany,
+      },
+    } as unknown as PrismaService);
+
+    const result = await service.listScripts(currentUser(), { limit: 10 });
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: { userId: 'user_1' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      take: 11,
+      select: expect.objectContaining({
+        id: true,
+        rootMarketId: true,
+        markets: expect.any(Object) as object,
+        _count: expect.any(Object) as object,
+      }) as object,
+    });
+    expect(polymarketOutcomeFindMany).toHaveBeenCalledWith({
+      where: { id: { in: ['outcome_yes'] } },
+      select: expect.any(Object) as object,
+    });
+    expect(result).toEqual({
+      items: [
+        {
+          id: 'script_1',
+          title: 'Will real market resolve Yes?',
+          status: 'draft',
+          summary: 'summary',
+          rootMarketId: 'market_1',
+          rootOutcomeId: 'outcome_yes',
+          rootOutcomeLabel: 'Yes',
+          rootPrice: 0.42,
+          rootVolume: 1000,
+          rootVolume24hr: 250,
+          rootLiquidity: 500,
+          icon: 'icon.png',
+          image: 'image.png',
+          marketCount: 3,
+          orderIntentCount: 1,
+          createdAt: '2026-05-18T00:00:00.000Z',
+          updatedAt: '2026-05-18T00:01:00.000Z',
+        },
+      ],
+      nextCursor: null,
+      hasMore: false,
+    });
+  });
+
+  it('applies script list status, search, and cursor filters in the database query', async () => {
+    const cursor = Buffer.from(JSON.stringify({
+      v: 1,
+      scope: 'scripts',
+      id: 'script_cursor',
+      q: 'UFC',
+      status: 'active',
+      timestamp: '2026-05-18T00:00:00.000Z',
+    }), 'utf8').toString('base64url');
+    const findMany = vi.fn().mockResolvedValue([]);
+    const service = new ScriptsService({
+      causalScript: {
+        findMany,
+      },
+      polymarketOutcome: {
+        findMany: vi.fn(),
+      },
+    } as unknown as PrismaService);
+
+    await service.listScripts(currentUser(), { limit: 5, status: 'active', q: ' UFC ', cursor });
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        AND: [
+          { userId: 'user_1', status: 'active' },
+          {
+            OR: expect.arrayContaining([
+              { title: { contains: 'UFC', mode: 'insensitive' } },
+              { summary: { contains: 'UFC', mode: 'insensitive' } },
+              { rootMarketId: 'UFC' },
+            ]) as object[],
+          },
+          {
+            OR: [
+              { createdAt: { lt: new Date('2026-05-18T00:00:00.000Z') } },
+              {
+                AND: [
+                  { createdAt: new Date('2026-05-18T00:00:00.000Z') },
+                  { id: { gt: 'script_cursor' } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      take: 6,
+    }));
+  });
+
   it('returns a script in the public API contract shape', async () => {
     const causalScriptFindFirst = vi.fn().mockResolvedValue({
       id: 'script_1',
@@ -37,6 +181,17 @@ describe('ScriptsService', () => {
       summary: 'summary',
       createdAt: new Date('2026-05-18T00:00:00.000Z'),
       updatedAt: new Date('2026-05-18T00:01:00.000Z'),
+      inferenceRun: {
+        id: 'run_1',
+        status: 'completed',
+        stage: 'script_generation',
+        progress: 100,
+        cacheHit: false,
+        model: 'mock-causeway-v1',
+        errorMessage: null,
+        createdAt: new Date('2026-05-18T00:00:00.000Z'),
+        completedAt: new Date('2026-05-18T00:00:30.000Z'),
+      },
       markets: [
         {
           id: 'script_market_1',
@@ -115,6 +270,19 @@ describe('ScriptsService', () => {
         summary: true,
         createdAt: true,
         updatedAt: true,
+        inferenceRun: {
+          select: {
+            id: true,
+            status: true,
+            stage: true,
+            progress: true,
+            cacheHit: true,
+            model: true,
+            errorMessage: true,
+            createdAt: true,
+            completedAt: true,
+          },
+        },
         markets: {
           orderBy: [{ layer: 'asc' }, { createdAt: 'asc' }],
           select: {
@@ -206,6 +374,17 @@ describe('ScriptsService', () => {
           ],
         edges: [],
       },
+      inferenceRun: {
+        id: 'run_1',
+        status: 'completed',
+        stage: 'script_generation',
+        progress: 100,
+        cacheHit: false,
+        model: 'mock-causeway-v1',
+        errorMessage: null,
+        createdAt: '2026-05-18T00:00:00.000Z',
+        completedAt: '2026-05-18T00:00:30.000Z',
+      },
       markets: [
         {
           scriptMarketId: 'script_market_1',
@@ -285,6 +464,17 @@ describe('ScriptsService', () => {
       summary: 'Manual order draft for Yes.',
       createdAt: new Date('2026-05-18T00:00:00.000Z'),
       updatedAt: new Date('2026-05-18T00:01:00.000Z'),
+      inferenceRun: {
+        id: 'run_direct',
+        status: 'completed',
+        stage: 'script_generation',
+        progress: 100,
+        cacheHit: false,
+        model: 'manual-order',
+        errorMessage: null,
+        createdAt: new Date('2026-05-18T00:00:00.000Z'),
+        completedAt: new Date('2026-05-18T00:00:30.000Z'),
+      },
       markets: [
         {
           id: 'script_market_1',

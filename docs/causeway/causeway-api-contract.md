@@ -480,6 +480,44 @@ type InferenceRunStatus = {
 
 ## 7. Scripts
 
+### `GET /scripts`
+
+返回当前登录用户真实保存的脚本列表，前端“我的脚本”只能使用该接口或空状态，不能回退到静态 demo 脚本。
+脚本在 AI 推演完成时自动保存；用户完成真实订单提交流程后，脚本状态从 `draft` 更新为 `active`。Dry-run 只代表本地演练完成，不能把脚本显示为已提交。
+
+查询参数：
+
+```text
+limit
+cursor
+status=draft|active|archived
+q
+```
+
+响应：
+
+```ts
+type ScriptList = Page<{
+  id: string;
+  title: string;
+  status: "draft" | "active" | "archived";
+  summary: string | null;
+  rootMarketId: string;
+  rootOutcomeId: string;
+  rootOutcomeLabel: string | null;
+  rootPrice: number | null;
+  rootVolume: number | null;
+  rootVolume24hr: number | null;
+  rootLiquidity: number | null;
+  icon: string | null;
+  image: string | null;
+  marketCount: number;
+  orderIntentCount: number;
+  createdAt: string;
+  updatedAt: string;
+}>;
+```
+
 ### `POST /scripts/direct-order`
 
 用于市场详情页的单 outcome 下单入口。后端会把用户选择的 market/outcome 转成一个标准 `CausalScript`，后续仍复用 `PATCH /scripts/:scriptId/outcome-selections/:selectionId`、`POST /orders/preview`、`POST /orders/prepare-signature`、`POST /orders/submit`，不新增第二套订单模型。
@@ -505,6 +543,7 @@ type InferenceRunStatus = {
 type CausalScript = {
   id: string;
   title: string;
+  status: "draft" | "active" | "archived";
   root: {
     marketId: string;
     outcomeId: string;
@@ -514,6 +553,26 @@ type CausalScript = {
     nodes: ScriptNode[];
     edges: ScriptEdge[];
   };
+  inferenceRun: {
+    id: string;
+    status: "queued" | "running" | "completed" | "failed" | "cancelled";
+    stage:
+      | "candidate_retrieval"
+      | "ai_reasoning"
+      | "outcome_mapping"
+      | "market_refresh"
+      | "script_generation"
+      | null;
+    progress: number;
+    cacheHit: boolean;
+    model: string;
+    errorMessage: string | null;
+    createdAt: string;
+    completedAt: string | null;
+  };
+  summary: string | null;
+  createdAt: string;
+  updatedAt: string;
   markets: ScriptMarket[];
 };
 
@@ -691,6 +750,49 @@ type OrderPreview = {
 };
 ```
 
+### Trading readiness for real orders
+
+真实交易的用户体验要求是：用户只连接并签名钱包，不手工填写 Polymarket API key。前端在进入 `real` 模式时必须先调用 trading readiness 流程：
+
+- `GET /trading/readiness`
+- `POST /trading/clob-auth/prepare`
+- 钱包签署返回的 `ClobAuth` typed data
+- `POST /trading/clob-auth/complete`
+- `POST /trading/deposit-wallet/ensure`
+
+后端按用户维度加密保存 CLOB L2 credentials，并默认使用 Polymarket deposit wallet / `signatureType=3` (`POLY_1271`) 生成订单签名 payload。已有 Safe/Proxy 兼容能力可以保留为高级路径，但不是新用户默认路径。
+
+```ts
+type TradingReadiness = {
+  status:
+    | "disabled"
+    | "needs_clob_auth"
+    | "needs_deposit_wallet"
+    | "deposit_wallet_pending"
+    | "needs_funding"
+    | "ready"
+    | "degraded"
+    | "unavailable";
+  canTrade: boolean;
+  reason: string | null;
+  walletAddress: string;
+  chainId: number;
+  signatureType: 3;
+  clobApiKeyConfigured: boolean;
+  clobApiKeyPreview: string | null;
+  depositWalletAddress: string | null;
+  depositWalletDeployed: boolean;
+  depositWalletTxId: string | null;
+  depositWalletTxState: string | null;
+  builderConfigured: boolean;
+  steps: { code: string; message: string; action: string }[];
+};
+```
+
+`POST /trading/clob-auth/prepare` 返回 Polymarket CLOB L1 `ClobAuth` typed data 和一次性 `challengeId`。`POST /trading/clob-auth/complete` 接收 `{ challengeId, nonce, timestamp, signature }`，后端验证 challenge 未过期且未使用、签名属于当前登录钱包后，调用 Polymarket CLOB 创建或派生用户自己的 L2 API credentials，并加密保存。
+
+`POST /trading/deposit-wallet/ensure` 使用 Builder Relayer 确保当前钱包的 deposit wallet 已创建。该接口只记录 transaction id/state，不暴露 Builder secret，也不记录用户私钥。
+
 ### `POST /orders/prepare-signature`
 
 真实下单前调用。只有 `orders/preview` 返回 `requiresSignature=true` 时前端才需要调用。`dry_run` 模式返回 `not_required`，`real` 模式返回前端需要签名的 payload。若真实 CLOB 签名方案尚未接通，返回 `unavailable`，前端仍可展示一致的错误状态。
@@ -706,7 +808,7 @@ type OrderPreview = {
 }
 ```
 
-`funderAddress` 仅作为高级调用方的可选覆盖字段。Causeway 默认真实 CLOB 订单使用 Polymarket `signatureType=2` (`POLY_GNOSIS_SAFE`)，后端会通过 Polymarket relayer `relay-payload` 自动解析用户钱包对应的 proxy / Safe funder，前端不应要求用户手工填写 funder 地址。
+`funderAddress` 仅作为高级调用方的可选覆盖字段。Causeway 默认真实 CLOB 订单使用 Polymarket `signatureType=3` (`POLY_1271`) 和用户 deposit wallet。`prepare-signature` 返回的 `eip712.primaryType` 可能是 `TypedDataSign`，前端按返回结构签名即可，不应手写订单签名结构。
 
 响应：
 
@@ -726,17 +828,15 @@ type PrepareSignatureResult = {
     signerAddress: string;
     funderAddress: string | null;
     eip712: {
-      primaryType: "Order";
+      primaryType: "Order" | "TypedDataSign";
       domain: {
         name: "Polymarket CTF Exchange";
         version: "2";
         chainId: number;
         verifyingContract: string;
       };
-      types: {
-        Order: { name: string; type: string }[];
-      };
-      message: Record<string, string | number>;
+      types: Record<string, { name: string; type: string }[]>;
+      message: Record<string, unknown>;
     };
   }[];
   error: string | null;
@@ -767,7 +867,7 @@ type PrepareSignatureResult = {
 type OrderSubmitResult = {
   intentId: string;
   executionMode: "dry_run" | "real";
-  status: "dry_run_completed" | "submitted" | "partially_submitted" | "failed";
+  status: "dry_run_completed" | "submitted" | "partially_submitted" | "unknown" | "failed";
   orders: {
     orderId: string;
     externalOrderId: string | null;
@@ -789,7 +889,7 @@ type OrderSubmitResult = {
 type OrderIntentDetail = {
   intentId: string;
   executionMode: "dry_run" | "real";
-  status: "draft" | "preview_ready" | "user_confirming" | "dry_run_completed" | "submitted" | "partially_submitted" | "failed" | "cancelled";
+  status: "draft" | "preview_ready" | "user_confirming" | "dry_run_completed" | "submitted" | "partially_submitted" | "unknown" | "failed" | "cancelled";
   preview: OrderPreview | null;
   submitResult: OrderSubmitResult | null;
   createdAt: string;
@@ -817,7 +917,7 @@ type PortfolioSummary = {
 };
 ```
 
-`openOrdersValue` 只统计已经提交但未完全结束的订单，例如 `submitted`、`partially_filled`。`preview_ready` 和 `user_confirming` 只代表预览或确认中，不能计入资产敞口。现金余额源未接通时，`cashAvailable=null` 且 summary 必须返回 `capability="degraded"` 或 `capability="unavailable"`；不能因为 Data API 可配置就把空 summary 伪造成 `available`。没有本地持仓和订单时，summary 必须结合最近一次 positions sync 状态区分“未同步”“同步失败”和“已同步为空”。
+`openOrdersValue` 只统计已经提交但未完全结束的订单，例如 `submitted`、`partially_filled`、`unknown`。`preview_ready` 和 `user_confirming` 只代表预览或确认中，不能计入资产敞口。现金余额源未接通时，`cashAvailable=null` 且 summary 必须返回 `capability="degraded"` 或 `capability="unavailable"`；不能因为 Data API 可配置就把空 summary 伪造成 `available`。没有本地持仓和订单时，summary 必须结合最近一次 positions sync 状态区分“未同步”“同步失败”和“已同步为空”。
 
 ### `GET /portfolio/positions`
 
@@ -900,6 +1000,7 @@ type PortfolioOrderIntent = {
     | "dry_run_completed"
     | "submitted"
     | "partially_submitted"
+    | "unknown"
     | "failed"
     | "cancelled";
   executionMode: "dry_run" | "real";

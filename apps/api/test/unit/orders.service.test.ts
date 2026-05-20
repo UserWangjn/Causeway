@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { HttpStatus } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiException } from '../../src/common/errors/api.exception';
 import type { CurrentUser } from '../../src/common/decorators/current-user.decorator';
@@ -7,6 +8,7 @@ import type { PrismaService } from '../../src/database/prisma.service';
 import type { ClobClient, PreparedClobOrder } from '../../src/integrations/polymarket/services/clob.client';
 import type { SubmitOrderDto } from '../../src/modules/orders/dto/submit-order.dto';
 import { OrdersService } from '../../src/modules/orders/orders.service';
+import type { TradingService } from '../../src/modules/trading/trading.service';
 
 describe('OrdersService', () => {
   it('returns the first idempotent result when a concurrent insert hits the unique constraint', async () => {
@@ -205,6 +207,96 @@ describe('OrdersService', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  it('keeps a real preview unsigned when the requested amount exceeds available funding', async () => {
+    const createdIntent = {
+      id: 'intent_1',
+      createdAt: new Date('2026-05-20T00:00:00.000Z'),
+    };
+    const tx = {
+      orderIntent: {
+        create: vi.fn().mockResolvedValue(createdIntent),
+      },
+      causewayOrder: {
+        create: vi.fn(),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const orderIntentUpdate = vi.fn();
+    const service = createService({
+      causalScript: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'script_1' }),
+      },
+      scriptOutcomeSelection: {
+        findMany: vi.fn().mockResolvedValue([previewSelectionRow()]),
+      },
+      orderIntent: {
+        update: orderIntentUpdate,
+      },
+      $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
+    }, {
+      status: 'available',
+      reason: null,
+      cashAvailable: 5,
+      collateralAvailable: 100,
+      balanceCapability: 'available',
+      balanceCapabilityReason: null,
+    }, {
+      getOrderBook: vi.fn().mockResolvedValue({
+        tokenId: '123456789012345678901',
+        bids: [],
+        asks: [{ price: 0.5, size: 100 }],
+        tickSize: 0.01,
+        minOrderSize: 1,
+        refreshedAt: '2026-05-20T00:00:00.000Z',
+      }),
+    });
+
+    const result = await service.preview(currentUser(), {
+      scriptId: 'script_1',
+      executionMode: 'real',
+      selections: [
+        {
+          selectionId: 'selection_1',
+          orderMode: 'market',
+          amountUsd: 10,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      intentId: 'intent_1',
+      executionMode: 'real',
+      tradingCapability: 'unavailable',
+      balanceCapability: 'unavailable',
+      cashAvailable: 5,
+      totalAmountUsd: 10,
+      requiresSignature: false,
+      submitMode: 'unavailable',
+      tradingCapabilityReason: 'Insufficient deposit wallet balance: $10.00 required, $5.00 available.',
+    });
+    expect(tx.orderIntent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tradingCapability: 'unavailable',
+        tradingCapabilityReason: 'Insufficient deposit wallet balance: $10.00 required, $5.00 available.',
+        balanceCapability: 'unavailable',
+        balanceCapabilityReason: 'Insufficient deposit wallet balance: $10.00 required, $5.00 available.',
+        cashAvailable: 5,
+        totalAmountUsd: 10,
+      }) as unknown,
+    });
+    expect(orderIntentUpdate).toHaveBeenCalledWith({
+      where: { id: 'intent_1' },
+      data: {
+        previewJson: expect.objectContaining({
+          requiresSignature: false,
+          submitMode: 'unavailable',
+        }) as unknown,
+      },
+    });
+  });
+
   it('writes an audit event when a dry-run submission completes', async () => {
     const dto = submitDto();
     const auditCreate = vi.fn();
@@ -361,7 +453,6 @@ describe('OrdersService', () => {
 
   it('prepares real CLOB signature payloads and persists them for submit', async () => {
     const preparedOrder = preparedClobOrder('order_1');
-    const resolveFunderAddress = vi.fn().mockResolvedValue('0x2222222222222222222222222222222222222222');
     const prepareSignaturePayloads = vi.fn().mockReturnValue([preparedOrder]);
     const tx = {
       orderIntent: {
@@ -376,7 +467,7 @@ describe('OrdersService', () => {
         findFirst: vi.fn().mockResolvedValue(realIntent('intent_1')),
       },
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
-    }, { status: 'available', reason: null }, { prepareSignaturePayloads, resolveFunderAddress });
+    }, { status: 'available', reason: null }, { prepareSignaturePayloads });
 
     const result = await service.prepareSignature(currentUser(), {
       intentId: 'intent_1',
@@ -392,7 +483,6 @@ describe('OrdersService', () => {
       protocol: 'polymarket_clob_eip712_v2',
       payloads: [preparedOrder],
     });
-    expect(resolveFunderAddress).toHaveBeenCalledWith('0x1111111111111111111111111111111111111111', undefined);
     expect(prepareSignaturePayloads).toHaveBeenCalledWith([
       expect.objectContaining({
         orderId: 'order_1',
@@ -403,7 +493,10 @@ describe('OrdersService', () => {
         tickSize: 0.01,
         negRisk: false,
       }),
-    ], expect.any(Date));
+    ], expect.any(Date), expect.objectContaining({
+      credentials: testClobCredentials(),
+      signatureType: 3,
+    }));
     expect(tx.causewayOrder.update).toHaveBeenCalledWith({
       where: { id: 'order_1' },
       data: {
@@ -450,6 +543,9 @@ describe('OrdersService', () => {
       orderIntent: {
         update: vi.fn(),
       },
+      causalScript: {
+        updateMany: vi.fn(),
+      },
       causewayOrder: {
         update: vi.fn(),
       },
@@ -494,7 +590,7 @@ describe('OrdersService', () => {
         preparedOrder: preparedClobOrder('order_1'),
         signature: `0x${'a'.repeat(130)}`,
       },
-    ]);
+    ], testClobCredentials());
     expect(completeTx.causewayOrder.update).toHaveBeenCalledWith({
       where: { id: 'order_1' },
       data: {
@@ -503,6 +599,93 @@ describe('OrdersService', () => {
         errorMessage: null,
         responsePayload: { success: true, orderID: 'clob_order_1' },
       },
+    });
+    expect(completeTx.causalScript.updateMany).toHaveBeenCalledWith({
+      where: { id: 'script_1', userId: 'user_1' },
+      data: { status: 'active' },
+    });
+  });
+
+  it('marks real submit as unknown when the CLOB submit result may have been accepted', async () => {
+    const dto = {
+      ...submitDto(),
+      executionMode: 'real',
+      signedOrders: [
+        {
+          orderId: 'order_1',
+          signature: `0x${'a'.repeat(130)}`,
+        },
+      ],
+    };
+    const postSignedOrders = vi.fn().mockRejectedValue(new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB request failed after retries', {
+      endpoint: '/orders',
+      cause: 'CLOB request timed out',
+    }));
+    const claimTx = {
+      orderSubmission: {
+        create: vi.fn().mockResolvedValue({ id: 'submission_1' }),
+      },
+      orderIntent: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const unknownTx = {
+      orderIntent: {
+        update: vi.fn(),
+      },
+      causewayOrder: {
+        updateMany: vi.fn(),
+      },
+      orderSubmission: {
+        update: vi.fn(),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const transaction = vi
+      .fn()
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(claimTx))
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(unknownTx));
+    const service = createService({
+      orderSubmission: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      orderIntent: {
+        findFirst: vi.fn().mockResolvedValue(realIntent('intent_1', preparedClobOrder('order_1'))),
+      },
+      $transaction: transaction,
+    }, { status: 'available', reason: null }, { postSignedOrders });
+
+    const result = await service.submit(currentUser('req_real_unknown'), dto);
+
+    expect(result).toMatchObject({
+      intentId: 'intent_1',
+      executionMode: 'real',
+      status: 'unknown',
+      orders: [
+        {
+          orderId: 'order_1',
+          status: 'unknown',
+          errorMessage: 'CLOB request failed after retries',
+        },
+      ],
+    });
+    expect(unknownTx.orderIntent.update).toHaveBeenCalledWith({
+      where: { id: 'intent_1' },
+      data: { status: 'unknown' },
+    });
+    expect(unknownTx.causewayOrder.updateMany).toHaveBeenCalledWith({
+      where: { orderIntentId: 'intent_1', status: { in: ['preview_ready', 'submitted'] } },
+      data: { status: 'unknown', errorMessage: 'CLOB request failed after retries' },
+    });
+    expect(unknownTx.auditEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'order.submit_real_unknown',
+      }) as unknown,
     });
   });
 
@@ -615,20 +798,57 @@ describe('OrdersService', () => {
 
 function createService(
   prisma: unknown,
-  capability: { status: 'available' | 'degraded' | 'unavailable'; reason: string | null } = {
+  capability: TestCapability = {
     status: 'unavailable',
     reason: 'fixture unavailable',
   },
   clobOverrides: Partial<ClobClient> = {},
 ) {
+  const defaultFunding = capability.status === 'available' ? 1_000 : null;
   const clobClient = {
     getCapability: vi.fn().mockReturnValue(capability),
     resolveFunderAddress: vi.fn().mockResolvedValue('0x2222222222222222222222222222222222222222'),
+    getOrderBook: vi.fn().mockResolvedValue(null),
     prepareSignaturePayloads: vi.fn().mockReturnValue([]),
     postSignedOrders: vi.fn(),
     ...clobOverrides,
   } as unknown as ClobClient;
-  return new OrdersService(clobClient, prisma as PrismaService);
+  const tradingService = {
+    getOrderCapability: vi.fn().mockResolvedValue({
+      ...capability,
+      signatureType: 3,
+      funderAddress: '0x2222222222222222222222222222222222222222',
+      clobApiKeyPreview: 'test...key',
+      cashAvailable: capability.cashAvailable ?? defaultFunding,
+      collateralAvailable: capability.collateralAvailable ?? defaultFunding,
+      balanceCapability: capability.balanceCapability ?? (capability.status === 'available' ? 'available' : 'degraded'),
+      balanceCapabilityReason: capability.balanceCapabilityReason ?? null,
+    }),
+    getOrderAuth: vi.fn().mockResolvedValue({
+      credentials: testClobCredentials(),
+      signatureType: 3,
+      funderAddress: '0x2222222222222222222222222222222222222222',
+    }),
+  };
+  return new OrdersService(clobClient, prisma as PrismaService, tradingService as unknown as TradingService);
+}
+
+type TestCapability = {
+  status: 'available' | 'degraded' | 'unavailable';
+  reason: string | null;
+  cashAvailable?: number | null;
+  collateralAvailable?: number | null;
+  balanceCapability?: 'available' | 'degraded' | 'unavailable';
+  balanceCapabilityReason?: string | null;
+};
+
+function testClobCredentials() {
+  return {
+    key: 'api-key',
+    secret: 'api-secret',
+    passphrase: 'api-passphrase',
+    address: '0x1111111111111111111111111111111111111111',
+  };
 }
 
 function currentUser(requestId?: string): CurrentUser {
@@ -660,8 +880,10 @@ function uniqueConstraintError() {
 function realIntent(intentId: string, preparedOrder?: PreparedClobOrder) {
   return {
     id: intentId,
+    scriptId: 'script_1',
     executionMode: 'real',
     status: 'preview_ready',
+    totalAmountUsd: 5,
     previewExpiresAt: new Date(Date.now() + 60_000),
     orders: [
       {
@@ -682,6 +904,36 @@ function realIntent(intentId: string, preparedOrder?: PreparedClobOrder) {
         },
       },
     ],
+  };
+}
+
+function previewSelectionRow() {
+  return {
+    id: 'selection_1',
+    userAction: 'buy',
+    outcome: {
+      id: 'outcome_1',
+      label: 'Yes',
+      clobTokenId: '123456789012345678901',
+      price: 0.5,
+      bestAsk: 0.5,
+      lastTradePrice: 0.5,
+    },
+    scriptMarket: {
+      market: {
+        id: 'market_1',
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        acceptingOrders: true,
+        enableOrderBook: true,
+        bestAsk: 0.5,
+        lastTradePrice: 0.5,
+        orderMinSize: 1,
+        orderPriceMinTickSize: 0.01,
+      },
+    },
   };
 }
 

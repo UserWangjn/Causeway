@@ -4,7 +4,7 @@
 
 本文定义 Causeway API 从本地开发到生产部署的最低可重复流程。它补齐 B9 生产就绪要求：环境矩阵、迁移流程、健康检查、限流、备份恢复、日志监控和发布门禁。
 
-真实 CLOB 下单不属于本文的默认发布流程；生产环境默认保持 `ENABLE_REAL_ORDERS=false`。启用真实订单前必须配置 CLOB L2 API 凭据，并确认前端按 `signatureType=2` / `POLY_GNOSIS_SAFE` 传入 `funderAddress` 和用户钱包签名。
+真实 CLOB 下单不属于默认发布流程；生产环境默认保持 `ENABLE_REAL_ORDERS=false`。启用真实订单前必须配置 Builder API credentials 和 `CREDENTIAL_ENCRYPTION_KEY`。新用户默认走 Polymarket deposit wallet / `signatureType=3` (`POLY_1271`)；用户只连接并签名钱包，后端按用户维度加密保存 CLOB L2 credentials，不再要求用户或前端手工填写 CLOB API key。
 
 ## 2. 环境矩阵
 
@@ -18,6 +18,8 @@
 
 - `JWT_SECRET` 至少 32 字符，建议 64 字符以上随机值。
 - `INTERNAL_API_TOKEN` 至少 32 字符，建议 64 字符以上随机值。
+- `CREDENTIAL_ENCRYPTION_KEY` 用于加密用户级 Polymarket CLOB credentials，启用真实订单时必须配置，建议 64 字符以上随机值或 32 bytes base64/hex。
+- `POLYMARKET_BUILDER_API_KEY` / `POLYMARKET_BUILDER_API_SECRET` / `POLYMARKET_BUILDER_API_PASSPHRASE` 只进入环境变量或密钥管理系统，不能提交到 git。
 - 禁止使用 `change-me`、`replace-me`、`dev-local-*`、重复字符等占位或低熵值。
 - 不在仓库、日志、错误响应或 issue 中粘贴真实 secret。
 

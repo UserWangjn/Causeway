@@ -1,11 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
-import { OrderMode, Prisma, UserSelectionAction } from '@prisma/client';
+import { OrderMode, Prisma, ScriptStatus, UserSelectionAction } from '@prisma/client';
 import { ApiException } from '../../common/errors/api.exception';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
+import {
+  decodeOpaqueCursor,
+  encodeOpaqueCursor,
+  invalidPaginationCursor,
+} from '../../common/pagination/opaque-cursor';
 import { toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
 import { CreateDirectOrderScriptDto } from './dto/create-direct-order-script.dto';
+import { ListScriptsQueryDto } from './dto/list-scripts-query.dto';
 import { UpdateOutcomeSelectionDto } from './dto/update-outcome-selection.dto';
 
 const SCRIPT_OUTCOME_SELECT = Prisma.validator<Prisma.PolymarketOutcomeSelect>()({
@@ -74,9 +80,57 @@ const SCRIPT_SELECT = Prisma.validator<Prisma.CausalScriptSelect>()({
   summary: true,
   createdAt: true,
   updatedAt: true,
+  inferenceRun: {
+    select: {
+      id: true,
+      status: true,
+      stage: true,
+      progress: true,
+      cacheHit: true,
+      model: true,
+      errorMessage: true,
+      createdAt: true,
+      completedAt: true,
+    },
+  },
   markets: {
     orderBy: [{ layer: 'asc' }, { createdAt: 'asc' }],
     select: SCRIPT_MARKET_SELECT,
+  },
+});
+
+const SCRIPT_LIST_SELECT = Prisma.validator<Prisma.CausalScriptSelect>()({
+  id: true,
+  title: true,
+  status: true,
+  summary: true,
+  rootMarketId: true,
+  rootOutcomeId: true,
+  createdAt: true,
+  updatedAt: true,
+  markets: {
+    where: { layer: 0 },
+    take: 1,
+    select: {
+      market: {
+        select: {
+          question: true,
+          icon: true,
+          image: true,
+          bestAsk: true,
+          lastTradePrice: true,
+          volume: true,
+          volume24hr: true,
+          liquidity: true,
+        },
+      },
+    },
+  },
+  _count: {
+    select: {
+      markets: true,
+      orderIntents: true,
+    },
   },
 });
 
@@ -104,6 +158,36 @@ const DIRECT_ORDER_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelec
 export class ScriptsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
+  async listScripts(user: CurrentUser, query: ListScriptsQueryDto = {}) {
+    const limit = query.limit ?? 20;
+    const search = normalizeScriptListSearch(query.q);
+    const cursor = decodeScriptListCursor(query.cursor, query.status, search);
+    const scripts = await this.prisma.causalScript.findMany({
+      where: buildScriptListWhere(user.id, cursor, query.status, search),
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      take: limit + 1,
+      select: SCRIPT_LIST_SELECT,
+    });
+    const items = scripts.slice(0, limit);
+    const rootOutcomeById = await this.loadScriptListRootOutcomes(items);
+
+    return {
+      items: items.map((script) => formatScriptListItem(script, rootOutcomeById.get(script.rootOutcomeId))),
+      nextCursor: scripts.length > limit ? encodeScriptListCursor(items[items.length - 1], query.status, search) : null,
+      hasMore: scripts.length > limit,
+    };
+  }
+
+  private async loadScriptListRootOutcomes(scripts: ListedScript[]): Promise<Map<string, ListedRootOutcome>> {
+    const outcomeIds = [...new Set(scripts.map((script) => script.rootOutcomeId).filter(Boolean))];
+    if (outcomeIds.length === 0) return new Map();
+    const outcomes = await this.prisma.polymarketOutcome.findMany({
+      where: { id: { in: outcomeIds } },
+      select: SCRIPT_OUTCOME_SELECT,
+    });
+    return new Map(outcomes.map((outcome) => [outcome.id, outcome]));
+  }
+
   async getScript(user: CurrentUser, scriptId: string) {
     const script = await this.prisma.causalScript.findFirst({
       where: { id: scriptId, userId: user.id },
@@ -122,6 +206,17 @@ export class ScriptsService {
       graph: {
         nodes: graph.nodes,
         edges: graph.edges,
+      },
+      inferenceRun: {
+        id: script.inferenceRun.id,
+        status: script.inferenceRun.status,
+        stage: script.inferenceRun.stage,
+        progress: script.inferenceRun.progress,
+        cacheHit: script.inferenceRun.cacheHit,
+        model: script.inferenceRun.model,
+        errorMessage: script.inferenceRun.errorMessage,
+        createdAt: script.inferenceRun.createdAt.toISOString(),
+        completedAt: script.inferenceRun.completedAt?.toISOString() ?? null,
       },
       summary: script.summary,
       createdAt: script.createdAt.toISOString(),
@@ -398,6 +493,21 @@ type LoadedScriptMarket = Prisma.ScriptMarketGetPayload<{
   select: typeof SCRIPT_MARKET_SELECT;
 }>;
 
+type ListedScript = Prisma.CausalScriptGetPayload<{
+  select: typeof SCRIPT_LIST_SELECT;
+}>;
+
+type ListedRootOutcome = Prisma.PolymarketOutcomeGetPayload<{
+  select: typeof SCRIPT_OUTCOME_SELECT;
+}>;
+
+type ScriptListCursor = {
+  id: string;
+  q: string | null;
+  status: ScriptStatus | null;
+  timestamp: Date;
+};
+
 type DirectOrderMarket = Prisma.PolymarketMarketGetPayload<{
   select: typeof DIRECT_ORDER_MARKET_SELECT;
 }>;
@@ -413,6 +523,142 @@ type ScriptGraphResponse = {
   nodes: Array<Record<string, unknown>>;
   edges: Array<Record<string, unknown>>;
 };
+
+function formatScriptListItem(script: ListedScript, rootOutcome: ListedRootOutcome | undefined) {
+  const rootScriptMarket = script.markets[0];
+  const rootMarket = rootScriptMarket?.market;
+
+  return {
+    id: script.id,
+    title: rootMarket?.question ?? script.title,
+    status: script.status,
+    summary: script.summary,
+    rootMarketId: script.rootMarketId,
+    rootOutcomeId: script.rootOutcomeId,
+    rootOutcomeLabel: rootOutcome?.label ?? null,
+    rootPrice: firstNumber(rootOutcome?.bestAsk, rootOutcome?.price, rootOutcome?.lastTradePrice, rootOutcome?.bestBid, rootMarket?.bestAsk, rootMarket?.lastTradePrice),
+    rootVolume: toNullableNumber(rootMarket?.volume),
+    rootVolume24hr: toNullableNumber(rootMarket?.volume24hr),
+    rootLiquidity: toNullableNumber(rootMarket?.liquidity),
+    icon: rootMarket?.icon ?? null,
+    image: rootMarket?.image ?? null,
+    marketCount: script._count.markets,
+    orderIntentCount: script._count.orderIntents,
+    createdAt: script.createdAt.toISOString(),
+    updatedAt: script.updatedAt.toISOString(),
+  };
+}
+
+function buildScriptListWhere(
+  userId: string,
+  cursor: ScriptListCursor | null,
+  status?: ScriptStatus,
+  search?: string | null,
+): Prisma.CausalScriptWhereInput {
+  const base: Prisma.CausalScriptWhereInput = {
+    userId,
+    ...(status ? { status } : {}),
+  };
+  const filters: Prisma.CausalScriptWhereInput[] = [base];
+  const normalizedSearch = normalizeScriptListSearch(search);
+  if (normalizedSearch) {
+    filters.push(buildScriptSearchWhere(normalizedSearch));
+  }
+  if (cursor) {
+    filters.push({
+      OR: [
+        { createdAt: { lt: cursor.timestamp } },
+        {
+          AND: [
+            { createdAt: cursor.timestamp },
+            { id: { gt: cursor.id } },
+          ],
+        },
+      ],
+    });
+  }
+
+  return filters.length === 1 ? base : { AND: filters };
+}
+
+function buildScriptSearchWhere(search: string): Prisma.CausalScriptWhereInput {
+  return {
+    OR: [
+      { title: { contains: search, mode: Prisma.QueryMode.insensitive } },
+      { summary: { contains: search, mode: Prisma.QueryMode.insensitive } },
+      { rootMarketId: search },
+      {
+        markets: {
+          some: {
+            layer: 0,
+            market: {
+              question: { contains: search, mode: Prisma.QueryMode.insensitive },
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
+function encodeScriptListCursor(script: ListedScript | undefined, status?: ScriptStatus, search?: string | null): string | null {
+  if (!script) return null;
+  return encodeOpaqueCursor({
+    v: 1,
+    scope: 'scripts',
+    id: script.id,
+    q: normalizeScriptListSearch(search),
+    status: status ?? null,
+    timestamp: script.createdAt.toISOString(),
+  });
+}
+
+function decodeScriptListCursor(cursor: string | undefined, status?: ScriptStatus, search?: string | null): ScriptListCursor | null {
+  if (!cursor) return null;
+  const decoded = decodeOpaqueCursor(cursor);
+  if (
+    !isRecord(decoded)
+    || decoded.v !== 1
+    || decoded.scope !== 'scripts'
+    || typeof decoded.id !== 'string'
+    || !(decoded.q === null || typeof decoded.q === 'string')
+    || !(decoded.status === null || typeof decoded.status === 'string')
+    || typeof decoded.timestamp !== 'string'
+  ) {
+    throw invalidPaginationCursor();
+  }
+
+  const normalizedSearch = normalizeScriptListSearch(search);
+  if (decoded.q !== normalizedSearch || decoded.status !== (status ?? null)) {
+    throw invalidPaginationCursor();
+  }
+  const decodedStatus = parseScriptListStatus(decoded.status);
+
+  const timestamp = new Date(decoded.timestamp);
+  if (Number.isNaN(timestamp.getTime())) {
+    throw invalidPaginationCursor();
+  }
+
+  return {
+    id: decoded.id,
+    q: decoded.q,
+    status: decodedStatus,
+    timestamp,
+  };
+}
+
+function normalizeScriptListSearch(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function parseScriptListStatus(value: string | null): ScriptStatus | null {
+  if (value === null) return null;
+  if (value === 'draft') return 'draft';
+  if (value === 'active') return 'active';
+  if (value === 'archived') return 'archived';
+  throw invalidPaginationCursor();
+}
 
 function formatScriptGraph(
   graphJson: Prisma.JsonValue,

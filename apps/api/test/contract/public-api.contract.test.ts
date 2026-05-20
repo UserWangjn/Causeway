@@ -300,12 +300,38 @@ describe('documented public API contracts', () => {
     expectKeys(runData, ['id', 'status', 'stage', 'progress', 'cacheHit', 'scriptId', 'errorMessage', 'createdAt', 'completedAt']);
     const scriptId = readString(runData, 'scriptId');
 
+    const scriptListData = apiData<Page<Record<string, unknown>>>(
+      await request(httpServer).get('/api/v1/scripts').set('authorization', `Bearer ${accessToken}`).query({ limit: 5, status: 'draft' }).expect(200),
+    );
+    expectKeys(scriptListData, PAGE_KEYS);
+    expect(scriptListData.items.length).toBeGreaterThan(0);
+    expectKeys(scriptListData.items[0], [
+      'id',
+      'title',
+      'status',
+      'summary',
+      'rootMarketId',
+      'rootOutcomeId',
+      'rootOutcomeLabel',
+      'rootPrice',
+      'rootVolume',
+      'rootVolume24hr',
+      'rootLiquidity',
+      'icon',
+      'image',
+      'marketCount',
+      'orderIntentCount',
+      'createdAt',
+      'updatedAt',
+    ]);
+
     const scriptData = apiData<Record<string, unknown>>(
       await request(httpServer).get(`/api/v1/scripts/${scriptId}`).set('authorization', `Bearer ${accessToken}`).expect(200),
     );
-    expectKeys(scriptData, ['id', 'title', 'status', 'root', 'graph', 'summary', 'createdAt', 'updatedAt', 'markets']);
+    expectKeys(scriptData, ['id', 'title', 'status', 'root', 'graph', 'inferenceRun', 'summary', 'createdAt', 'updatedAt', 'markets']);
     expectKeys(readRecord(scriptData, 'root'), ['marketId', 'outcomeId', 'outcomeLabel']);
     expectKeys(readRecord(scriptData, 'graph'), ['nodes', 'edges']);
+    expectKeys(readRecord(scriptData, 'inferenceRun'), ['id', 'status', 'stage', 'progress', 'cacheHit', 'model', 'errorMessage', 'createdAt', 'completedAt']);
     expectKeys(readRecordArray(readRecord(scriptData, 'graph'), 'nodes')[0], [
       'nodeId',
       'marketId',

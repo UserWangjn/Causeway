@@ -62,7 +62,7 @@ describe('MonitorService', () => {
     expect(causewayOrderFindMany).toHaveBeenCalledWith({
       where: {
         status: {
-          in: ['preview_ready', 'dry_run_completed', 'submitted', 'partially_filled', 'filled', 'cancelled', 'failed'],
+          in: ['preview_ready', 'dry_run_completed', 'submitted', 'partially_filled', 'filled', 'unknown', 'cancelled', 'failed'],
         },
       },
       select: {

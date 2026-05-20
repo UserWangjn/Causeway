@@ -1,4 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
+import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiException } from '../../src/common/errors/api.exception';
 import { ClobClient } from '../../src/integrations/polymarket/services/clob.client';
@@ -224,6 +225,116 @@ describe('ClobClient', () => {
     });
   });
 
+  it('prepares POLY_1271 EIP-712 payloads with the configured builder code', () => {
+    const expiresAt = new Date('2026-05-19T00:00:00.000Z');
+    const builderCode = `0x${'f'.repeat(64)}`;
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true }));
+
+    const [payload] = client.prepareSignaturePayloads([
+      {
+        orderId: 'order_1',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        funderAddress: '0x2222222222222222222222222222222222222222',
+        chainId: 137,
+        tokenId: '123456789',
+        side: 'BUY',
+        orderMode: 'limit',
+        orderType: 'GTC',
+        limitPrice: 0.56,
+        estimatedFillPrice: 0.56,
+        size: 10,
+        amountUsd: 5.6,
+        tickSize: 0.01,
+        negRisk: false,
+      },
+    ], expiresAt, {
+      credentials: userClobCredentials(),
+      signatureType: 3,
+      builderCode,
+    });
+
+    expect(payload).toMatchObject({
+      orderId: 'order_1',
+      signatureType: 3,
+      makerAddress: '0x2222222222222222222222222222222222222222',
+      signerAddress: '0x2222222222222222222222222222222222222222',
+      funderAddress: '0x2222222222222222222222222222222222222222',
+      eip712: {
+        primaryType: 'TypedDataSign',
+        domain: {
+          name: 'Polymarket CTF Exchange',
+          version: '2',
+          chainId: 137,
+        },
+      },
+      order: {
+        tokenId: '123456789',
+        makerAmount: '5600000',
+        takerAmount: '10000000',
+        signatureType: 3,
+        builder: builderCode,
+      },
+    });
+    const message = payload?.eip712.message as { contents?: Record<string, unknown>; verifyingContract?: string };
+    expect(message.verifyingContract).toBe('0x2222222222222222222222222222222222222222');
+    expect(message.contents).toMatchObject({
+      maker: '0x2222222222222222222222222222222222222222',
+      signer: '0x2222222222222222222222222222222222222222',
+      builder: builderCode,
+      signatureType: 3,
+    });
+  });
+
+  it('wraps POLY_1271 wallet signatures before posting CLOB orders', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify([{ success: true, orderID: 'clob_order_1', status: 'live' }])),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true }));
+    const [preparedOrder] = client.prepareSignaturePayloads([
+      {
+        orderId: 'order_1',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        funderAddress: '0x2222222222222222222222222222222222222222',
+        chainId: 137,
+        tokenId: '123456789',
+        side: 'BUY',
+        orderMode: 'market',
+        orderType: null,
+        limitPrice: null,
+        estimatedFillPrice: 0.5,
+        size: 20,
+        amountUsd: 10,
+        tickSize: 0.01,
+        negRisk: false,
+      },
+    ], new Date(Date.now() + 60_000), {
+      credentials: userClobCredentials(),
+      signatureType: 3,
+      builderCode: `0x${'f'.repeat(64)}`,
+    });
+    const walletSignature = `0x${'a'.repeat(130)}`;
+
+    await client.postSignedOrders([
+      {
+        preparedOrder,
+        signature: walletSignature,
+      },
+    ], userClobCredentials());
+
+    const options = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string>; body: string };
+    const postedBody = JSON.parse(options.body) as Array<{ owner: string; order: { signature: string; signatureType: number; builder: string } }>;
+    expect(options.headers.POLY_ADDRESS).toBe('0x1111111111111111111111111111111111111111');
+    expect(options.headers.POLY_API_KEY).toBe('user-api-key');
+    expect(postedBody[0]?.owner).toBe('user-api-key');
+    expect(postedBody[0]?.order.signatureType).toBe(3);
+    expect(postedBody[0]?.order.builder).toBe(`0x${'f'.repeat(64)}`);
+    expect(postedBody[0]?.order.signature).not.toBe(walletSignature);
+    expect(postedBody[0]?.order.signature.startsWith(walletSignature)).toBe(true);
+    expect(postedBody[0]?.order.signature.length).toBeGreaterThan(walletSignature.length);
+  });
+
   it('posts signed CLOB orders with configured L2 credentials', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -284,7 +395,72 @@ describe('ClobClient', () => {
       },
     ]);
   });
+
+  it('refreshes and reads CLOB balance allowance with the requested signature type', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-20T00:00:00.000Z'));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: vi.fn().mockResolvedValue(JSON.stringify({ updated: true })),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: vi.fn().mockResolvedValue(JSON.stringify({
+          balance: '12000000',
+          allowances: {
+            collateral: '9000000',
+          },
+        })),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true, withCreds: true }));
+
+    const balance = await client.getBalanceAllowance({
+      key: 'user-api-key',
+      secret: Buffer.from('user-clob-secret').toString('base64url'),
+      passphrase: 'user-passphrase',
+      address: '0x1111111111111111111111111111111111111111',
+    }, {
+      signatureType: 3,
+    });
+
+    expect(balance).toEqual({
+      balance: '12000000',
+      allowances: {
+        collateral: '9000000',
+      },
+    });
+    const updateUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    const readUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
+    expect(updateUrl.pathname).toBe('/balance-allowance/update');
+    expect(updateUrl.searchParams.get('asset_type')).toBe('COLLATERAL');
+    expect(updateUrl.searchParams.get('signature_type')).toBe('3');
+    expect(readUrl.pathname).toBe('/balance-allowance');
+    expect(readUrl.searchParams.get('signature_type')).toBe('3');
+    const updateOptions = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const expectedUpdateSignature = createHmac('sha256', Buffer.from('user-clob-secret'))
+      .update(`${timestamp}GET/balance-allowance/update`)
+      .digest('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    expect(updateOptions.headers.POLY_ADDRESS).toBe('0x1111111111111111111111111111111111111111');
+    expect(updateOptions.headers.POLY_API_KEY).toBe('user-api-key');
+    expect(updateOptions.headers.POLY_SIGNATURE).toBe(expectedUpdateSignature);
+  });
 });
+
+function userClobCredentials() {
+  return {
+    key: 'user-api-key',
+    secret: Buffer.from('user-clob-secret').toString('base64url'),
+    passphrase: 'user-passphrase',
+    address: '0x1111111111111111111111111111111111111111',
+  };
+}
 
 function configService(values: { retries: number; timeoutMs?: number; enableRealOrders?: boolean; withCreds?: boolean }): ConfigService {
   const apiSecret = Buffer.from('fixture-clob-secret').toString('base64url');

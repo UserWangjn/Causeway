@@ -365,7 +365,33 @@ describe('validateEnv', () => {
     ).toThrow(/POLYMARKET_MARKET_SYNC_LOCK_TTL_MS/);
   });
 
-  it('requires CLOB API credentials only when real orders are enabled in production', () => {
+  it('validates Builder Code as a bytes32 hex value', () => {
+    const env = validateEnv({
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+      JWT_SECRET: 'dev-secret',
+      POLYMARKET_BUILDER_CODE: '0xf18c6de717677d70556d13aa36f896763a78e6ed141337e6c064fbc054878a6d',
+    });
+
+    expect(env.POLYMARKET_BUILDER_CODE).toBe('0xf18c6de717677d70556d13aa36f896763a78e6ed141337e6c064fbc054878a6d');
+
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        POLYMARKET_BUILDER_CODE: 'builder-code',
+      }),
+    ).toThrow(/POLYMARKET_BUILDER_CODE/);
+  });
+
+  it('requires user-trading Builder credentials and credential encryption when real orders are enabled', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        ENABLE_REAL_ORDERS: 'true',
+      }),
+    ).toThrow(/POLYMARKET_BUILDER_API_KEY/);
+
     const base = {
       NODE_ENV: 'production',
       DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
@@ -374,19 +400,54 @@ describe('validateEnv', () => {
       ENABLE_REAL_ORDERS: 'true',
     };
 
-    expect(() => validateEnv(base)).toThrow(/POLYMARKET_CLOB_API_KEY/);
+    expect(() => validateEnv(base)).toThrow(/POLYMARKET_BUILDER_API_KEY/);
 
     const env = validateEnv({
       ...base,
-      POLYMARKET_CLOB_API_KEY: 'api-key',
-      POLYMARKET_CLOB_API_SECRET: 'api-secret',
-      POLYMARKET_CLOB_API_PASSPHRASE: 'api-passphrase',
-      POLYMARKET_CLOB_API_ADDRESS: '0x1111111111111111111111111111111111111111',
-      POLYMARKET_CLOB_SIGNATURE_TYPE: '2',
+      POLYMARKET_BUILDER_API_KEY: 'builder-key',
+      POLYMARKET_BUILDER_API_SECRET: 'builder-secret',
+      POLYMARKET_BUILDER_API_PASSPHRASE: 'builder-passphrase',
+      POLYMARKET_BUILDER_CODE: '0xf18c6de717677d70556d13aa36f896763a78e6ed141337e6c064fbc054878a6d',
+      CREDENTIAL_ENCRYPTION_KEY: 'credential-encryption-key-32-characters',
     });
 
     expect(env.ENABLE_REAL_ORDERS).toBe('true');
     expect(env.POLYMARKET_CLOB_SIGNATURE_TYPE).toBe(2);
+    expect(env.POLYMARKET_BUILDER_API_KEY).toBe('builder-key');
+    expect(env.POLYMARKET_BUILDER_CODE).toBe('0xf18c6de717677d70556d13aa36f896763a78e6ed141337e6c064fbc054878a6d');
+  });
+
+  it('rejects weak credential encryption keys when real orders are enabled', () => {
+    const base = {
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+      JWT_SECRET: 'dev-secret',
+      ENABLE_REAL_ORDERS: 'true',
+      POLYMARKET_BUILDER_API_KEY: 'builder-key',
+      POLYMARKET_BUILDER_API_SECRET: 'builder-secret',
+      POLYMARKET_BUILDER_API_PASSPHRASE: 'builder-passphrase',
+      POLYMARKET_BUILDER_CODE: '0xf18c6de717677d70556d13aa36f896763a78e6ed141337e6c064fbc054878a6d',
+    };
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        CREDENTIAL_ENCRYPTION_KEY: 'replace-me',
+      }),
+    ).toThrow(/CREDENTIAL_ENCRYPTION_KEY/);
+
+    expect(() =>
+      validateEnv({
+        ...base,
+        CREDENTIAL_ENCRYPTION_KEY: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      }),
+    ).toThrow(/CREDENTIAL_ENCRYPTION_KEY/);
+
+    expect(
+      validateEnv({
+        ...base,
+        CREDENTIAL_ENCRYPTION_KEY: Buffer.from('0123456789abcdef0123456789abcdef').toString('base64url'),
+      }).CREDENTIAL_ENCRYPTION_KEY,
+    ).toBe(Buffer.from('0123456789abcdef0123456789abcdef').toString('base64url'));
   });
 });
 

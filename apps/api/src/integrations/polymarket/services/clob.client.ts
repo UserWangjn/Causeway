@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { getAddress } from 'viem';
+import { encodeAbiParameters, getAddress, keccak256, toHex } from 'viem';
 import { ApiException } from '../../../common/errors/api.exception';
 import type { OrderBookSnapshot } from '../types';
 
@@ -12,6 +12,11 @@ export type PolymarketOrderSide = 'BUY' | 'SELL';
 const POST_ORDERS_PATH = '/orders';
 const CLOB_ORDER_DOMAIN_NAME = 'Polymarket CTF Exchange';
 const CLOB_ORDER_DOMAIN_VERSION = '2';
+const CLOB_ORDER_TYPE_STRING = 'Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)';
+const CLOB_ORDER_TYPE_HASH = keccak256(toHex(CLOB_ORDER_TYPE_STRING));
+const CLOB_DOMAIN_TYPE_HASH = keccak256(toHex('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)'));
+const CLOB_NAME_HASH = keccak256(toHex(CLOB_ORDER_DOMAIN_NAME));
+const CLOB_VERSION_HASH = keccak256(toHex(CLOB_ORDER_DOMAIN_VERSION));
 const ZERO_BYTES32 = `0x${'0'.repeat(64)}`;
 const COLLATERAL_DECIMALS = 6;
 const CLOB_TICK_SIZES = new Set(['0.1', '0.01', '0.001', '0.0001']);
@@ -38,6 +43,17 @@ const EIP712_ORDER_TYPES = {
     { name: 'builder', type: 'bytes32' },
   ],
 } as const;
+const EIP712_TYPED_DATA_SIGN_TYPES = {
+  TypedDataSign: [
+    { name: 'contents', type: 'Order' },
+    { name: 'name', type: 'string' },
+    { name: 'version', type: 'string' },
+    { name: 'chainId', type: 'uint256' },
+    { name: 'verifyingContract', type: 'address' },
+    { name: 'salt', type: 'bytes32' },
+  ],
+  Order: EIP712_ORDER_TYPES.Order,
+} as const;
 
 export enum SignatureTypeV2 {
   EOA = 0,
@@ -61,6 +77,19 @@ export type ClobSignaturePayloadInput = {
   amountUsd: number;
   tickSize: number | null;
   negRisk: boolean;
+  builderCode?: string | null;
+};
+
+type PreparedClobOrderEip712 = {
+  primaryType: 'Order' | 'TypedDataSign';
+  domain: {
+    name: string;
+    version: string;
+    chainId: number;
+    verifyingContract: string;
+  };
+  types: Record<string, ReadonlyArray<{ name: string; type: string }>>;
+  message: Record<string, unknown>;
 };
 
 export type PreparedClobOrder = {
@@ -76,29 +105,7 @@ export type PreparedClobOrder = {
   signerAddress: string;
   funderAddress: string | null;
   expiresAt: string;
-  eip712: {
-    primaryType: 'Order';
-    domain: {
-      name: string;
-      version: string;
-      chainId: number;
-      verifyingContract: string;
-    };
-    types: typeof EIP712_ORDER_TYPES;
-    message: {
-      salt: string;
-      maker: string;
-      signer: string;
-      tokenId: string;
-      makerAmount: string;
-      takerAmount: string;
-      side: 0 | 1;
-      signatureType: SignatureTypeV2;
-      timestamp: string;
-      metadata: string;
-      builder: string;
-    };
-  };
+  eip712: PreparedClobOrderEip712;
   order: {
     salt: string;
     maker: string;
@@ -113,6 +120,13 @@ export type PreparedClobOrder = {
     metadata: string;
     builder: string;
   };
+};
+
+export type ClobApiCredentials = {
+  key: string;
+  secret: string;
+  passphrase: string;
+  address: string;
 };
 
 export type SignedClobOrderInput = {
@@ -301,28 +315,28 @@ export class ClobClient {
     });
   }
 
-  getCapability() {
+  getCapability(auth?: { credentials?: ClobApiCredentials; signatureType?: SignatureTypeV2 }) {
     if (!this.realOrdersEnabled) {
       return {
         status: 'unavailable' as TradingCapabilityStatus,
         reason: 'CLOB real trading is disabled by ENABLE_REAL_ORDERS=false',
-        signatureType: this.signatureType,
+        signatureType: auth?.signatureType ?? this.signatureType,
       };
     }
 
-    const missing = this.missingCredentials();
+    const missing = this.missingCredentials(auth?.credentials);
     if (missing.length > 0) {
       return {
         status: 'unavailable' as TradingCapabilityStatus,
         reason: `CLOB real trading is missing required configuration: ${missing.join(', ')}`,
-        signatureType: this.signatureType,
+        signatureType: auth?.signatureType ?? this.signatureType,
       };
     }
 
     return {
       status: 'available' as TradingCapabilityStatus,
       reason: null,
-      signatureType: this.signatureType,
+      signatureType: auth?.signatureType ?? this.signatureType,
     };
   }
 
@@ -351,17 +365,21 @@ export class ClobClient {
     );
   }
 
-  prepareSignaturePayloads(orders: ClobSignaturePayloadInput[], expiresAt: Date): PreparedClobOrder[] {
-    const capability = this.getCapability();
+  prepareSignaturePayloads(
+    orders: ClobSignaturePayloadInput[],
+    expiresAt: Date,
+    options: { credentials?: ClobApiCredentials; signatureType?: SignatureTypeV2; builderCode?: string } = {},
+  ): PreparedClobOrder[] {
+    const capability = this.getCapability(options);
     if (capability.status !== 'available') {
       throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', capability.reason ?? 'CLOB real trading is unavailable');
     }
 
-    return orders.map((order) => this.prepareSignaturePayload(order, expiresAt));
+    return orders.map((order) => this.prepareSignaturePayload(order, expiresAt, options));
   }
 
-  async postSignedOrders(orders: ClobPostOrderInput[]): Promise<ClobPostOrderResult[]> {
-    const capability = this.getCapability();
+  async postSignedOrders(orders: ClobPostOrderInput[], credentials?: ClobApiCredentials): Promise<ClobPostOrderResult[]> {
+    const capability = this.getCapability({ credentials, signatureType: orders[0]?.preparedOrder.signatureType });
     if (capability.status !== 'available') {
       throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', capability.reason ?? 'CLOB real trading is unavailable');
     }
@@ -373,15 +391,15 @@ export class ClobClient {
     const payload = orders.map((order) => ({
       order: {
         ...order.preparedOrder.order,
-        signature: order.signature,
+        signature: buildSubmittedOrderSignature(order.preparedOrder, order.signature),
       },
-      owner: this.apiKey,
+      owner: credentials?.key ?? this.apiKey,
       orderType: order.preparedOrder.orderType,
       postOnly: order.preparedOrder.postOnly,
       deferExec: order.preparedOrder.deferExec,
     }));
     const body = JSON.stringify(payload);
-    const responseBody = await this.postJson(POST_ORDERS_PATH, body);
+    const responseBody = await this.postJson(POST_ORDERS_PATH, body, credentials);
     const responses: unknown[] = Array.isArray(responseBody) ? responseBody as unknown[] : orders.length === 1 ? [responseBody] : [];
 
     return orders.map((order, index) => {
@@ -400,17 +418,37 @@ export class ClobClient {
     });
   }
 
-  private prepareSignaturePayload(input: ClobSignaturePayloadInput, expiresAt: Date): PreparedClobOrder {
+  async getBalanceAllowance(
+    credentials: ClobApiCredentials,
+    options: { signatureType?: SignatureTypeV2 } = {},
+  ): Promise<{ balance: string; allowances: Record<string, string> }> {
+    const signatureType = options.signatureType ?? this.signatureType;
+    const query = {
+      asset_type: 'COLLATERAL',
+      signature_type: signatureType.toString(),
+    };
+    await this.requestJson('/balance-allowance/update', 'GET', '', credentials, query);
+    const response = await this.requestJson('/balance-allowance', 'GET', '', credentials, query);
+    return normalizeBalanceAllowance(response);
+  }
+
+  private prepareSignaturePayload(
+    input: ClobSignaturePayloadInput,
+    expiresAt: Date,
+    options: { signatureType?: SignatureTypeV2; builderCode?: string } = {},
+  ): PreparedClobOrder {
     const walletAddress = normalizeAddress(input.walletAddress, 'walletAddress');
     const funderAddress = normalizeOptionalAddress(input.funderAddress ?? this.defaultFunderAddress);
-    const makerAddress = resolveMakerAddress(this.signatureType, walletAddress, funderAddress);
-    const signerAddress = this.signatureType === SignatureTypeV2.POLY_1271 ? makerAddress : walletAddress;
+    const signatureType = options.signatureType ?? this.signatureType;
+    const makerAddress = resolveMakerAddress(signatureType, walletAddress, funderAddress);
+    const signerAddress = signatureType === SignatureTypeV2.POLY_1271 ? makerAddress : walletAddress;
     const tickSize = normalizeTickSize(input.tickSize);
     const exchange = resolveExchangeContract(input.chainId, input.negRisk);
     const orderAmounts = buildClobOrderAmounts(input);
     const orderType = resolveOrderType(input);
     const salt = randomUint256String();
     const timestamp = Date.now().toString();
+    const builder = normalizeBuilderCode(input.builderCode ?? options.builderCode);
 
     const message = {
       salt,
@@ -420,11 +458,12 @@ export class ClobClient {
       makerAmount: orderAmounts.makerAmount,
       takerAmount: orderAmounts.takerAmount,
       side: input.side === 'BUY' ? 0 : 1,
-      signatureType: this.signatureType,
+      signatureType,
       timestamp,
       metadata: ZERO_BYTES32,
-      builder: ZERO_BYTES32,
+      builder,
     } as const;
+    const eip712 = buildSignatureTypedData(message, input.chainId, exchange, signatureType);
 
     return {
       orderId: input.orderId,
@@ -434,22 +473,12 @@ export class ClobClient {
       deferExec: false,
       tickSize,
       negRisk: input.negRisk,
-      signatureType: this.signatureType,
+      signatureType,
       makerAddress,
       signerAddress,
       funderAddress: funderAddress ?? null,
       expiresAt: expiresAt.toISOString(),
-      eip712: {
-        primaryType: 'Order',
-        domain: {
-          name: CLOB_ORDER_DOMAIN_NAME,
-          version: CLOB_ORDER_DOMAIN_VERSION,
-          chainId: input.chainId,
-          verifyingContract: exchange,
-        },
-        types: EIP712_ORDER_TYPES,
-        message,
-      },
+      eip712,
       order: {
         salt,
         maker: makerAddress,
@@ -458,11 +487,11 @@ export class ClobClient {
         makerAmount: orderAmounts.makerAmount,
         takerAmount: orderAmounts.takerAmount,
         side: input.side,
-        signatureType: this.signatureType,
+        signatureType,
         timestamp,
         expiration: '0',
         metadata: ZERO_BYTES32,
-        builder: ZERO_BYTES32,
+        builder,
       },
     };
   }
@@ -510,21 +539,35 @@ export class ClobClient {
     }
   }
 
-  private async postJson(path: string, body: string): Promise<unknown> {
-    const headers = this.buildL2Headers('POST', path, body);
+  private async postJson(path: string, body: string, credentials?: ClobApiCredentials): Promise<unknown> {
+    return this.requestJson(path, 'POST', body, credentials);
+  }
+
+  private async requestJson(
+    path: string,
+    method: 'GET' | 'POST',
+    body: string,
+    credentials?: ClobApiCredentials,
+    query?: Record<string, string>,
+  ): Promise<unknown> {
+    const headers = this.buildL2Headers(method, path, body, credentials);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error('CLOB order submission timed out')), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(new Error('CLOB request timed out')), this.timeoutMs);
+    const url = new URL(path, this.baseUrl);
+    Object.entries(query ?? {}).forEach(([key, value]) => {
+      url.searchParams.set(key, value);
+    });
     try {
-      const response = await fetch(new URL(path, this.baseUrl), {
-        method: 'POST',
+      const response = await fetch(url, {
+        method,
         headers,
-        body,
+        ...(method === 'POST' ? { body } : {}),
         signal: controller.signal,
       });
       const text = await response.text();
       const parsed = parseJson(text);
       if (!response.ok) {
-        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB order submission failed', {
+        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB request failed', {
           status: response.status,
           endpoint: path,
           body: parsed,
@@ -533,7 +576,7 @@ export class ClobClient {
       return parsed;
     } catch (error) {
       if (error instanceof ApiException) throw error;
-      throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB order submission failed after retries', {
+      throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB request failed after retries', {
         endpoint: path,
         cause: error instanceof Error ? error.message : String(error),
       });
@@ -542,13 +585,17 @@ export class ClobClient {
     }
   }
 
-  private buildL2Headers(method: 'POST', path: string, body: string): Record<string, string> {
-    if (!this.apiKey || !this.apiSecret || !this.apiPassphrase || !this.apiAddress) {
+  private buildL2Headers(method: 'GET' | 'POST', path: string, body: string, credentials?: ClobApiCredentials): Record<string, string> {
+    const apiKey = credentials?.key ?? this.apiKey;
+    const apiSecret = credentials?.secret ?? this.apiSecret;
+    const apiPassphrase = credentials?.passphrase ?? this.apiPassphrase;
+    const apiAddress = credentials?.address ? normalizeAddress(credentials.address, 'address') : this.apiAddress;
+    if (!apiKey || !apiSecret || !apiPassphrase || !apiAddress) {
       throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', 'CLOB API credentials are not configured');
     }
 
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = createHmac('sha256', decodeBase64UrlSecret(this.apiSecret))
+    const signature = createHmac('sha256', decodeBase64UrlSecret(apiSecret))
       .update(`${timestamp}${method}${path}${body}`)
       .digest('base64')
       .replace(/\+/g, '-')
@@ -559,22 +606,129 @@ export class ClobClient {
       accept: 'application/json',
       'content-type': 'application/json',
       'user-agent': 'causeway-api/0.1',
-      POLY_ADDRESS: this.apiAddress,
+      POLY_ADDRESS: apiAddress,
       POLY_SIGNATURE: signature,
       POLY_TIMESTAMP: timestamp,
-      POLY_API_KEY: this.apiKey,
-      POLY_PASSPHRASE: this.apiPassphrase,
+      POLY_API_KEY: apiKey,
+      POLY_PASSPHRASE: apiPassphrase,
     };
   }
 
-  private missingCredentials(): string[] {
+  private missingCredentials(credentials?: ClobApiCredentials): string[] {
     const missing: string[] = [];
-    if (!this.apiKey) missing.push('POLYMARKET_CLOB_API_KEY');
-    if (!this.apiSecret) missing.push('POLYMARKET_CLOB_API_SECRET');
-    if (!this.apiPassphrase) missing.push('POLYMARKET_CLOB_API_PASSPHRASE');
-    if (!this.apiAddress) missing.push('POLYMARKET_CLOB_API_ADDRESS');
+    if (!(credentials?.key ?? this.apiKey)) missing.push('POLYMARKET_CLOB_API_KEY');
+    if (!(credentials?.secret ?? this.apiSecret)) missing.push('POLYMARKET_CLOB_API_SECRET');
+    if (!(credentials?.passphrase ?? this.apiPassphrase)) missing.push('POLYMARKET_CLOB_API_PASSPHRASE');
+    if (!(credentials?.address ?? this.apiAddress)) missing.push('POLYMARKET_CLOB_API_ADDRESS');
     return missing;
   }
+}
+
+function buildSignatureTypedData(
+  message: {
+    salt: string;
+    maker: string;
+    signer: string;
+    tokenId: string;
+    makerAmount: string;
+    takerAmount: string;
+    side: 0 | 1;
+    signatureType: SignatureTypeV2;
+    timestamp: string;
+    metadata: string;
+    builder: string;
+  },
+  chainId: number,
+  exchange: string,
+  signatureType: SignatureTypeV2,
+): PreparedClobOrderEip712 {
+  const domain = {
+    name: CLOB_ORDER_DOMAIN_NAME,
+    version: CLOB_ORDER_DOMAIN_VERSION,
+    chainId,
+    verifyingContract: exchange,
+  };
+  if (signatureType !== SignatureTypeV2.POLY_1271) {
+    return {
+      primaryType: 'Order',
+      domain,
+      types: EIP712_ORDER_TYPES,
+      message,
+    };
+  }
+
+  return {
+    primaryType: 'TypedDataSign',
+    domain,
+    types: EIP712_TYPED_DATA_SIGN_TYPES,
+    message: {
+      contents: message,
+      name: 'DepositWallet',
+      version: '1',
+      chainId,
+      verifyingContract: message.signer,
+      salt: ZERO_BYTES32,
+    },
+  };
+}
+
+function buildSubmittedOrderSignature(preparedOrder: PreparedClobOrder, walletSignature: string): string {
+  if (preparedOrder.signatureType !== SignatureTypeV2.POLY_1271) return walletSignature;
+  const message = {
+    salt: preparedOrder.order.salt,
+    maker: preparedOrder.order.maker,
+    signer: preparedOrder.order.signer,
+    tokenId: preparedOrder.order.tokenId,
+    makerAmount: preparedOrder.order.makerAmount,
+    takerAmount: preparedOrder.order.takerAmount,
+    side: preparedOrder.order.side === 'BUY' ? 0 : 1,
+    signatureType: preparedOrder.order.signatureType,
+    timestamp: preparedOrder.order.timestamp,
+    metadata: preparedOrder.order.metadata,
+    builder: preparedOrder.order.builder,
+  } as const;
+  const contentsHash = keccak256(encodeAbiParameters([
+    { type: 'bytes32' },
+    { type: 'uint256' },
+    { type: 'address' },
+    { type: 'address' },
+    { type: 'uint256' },
+    { type: 'uint256' },
+    { type: 'uint256' },
+    { type: 'uint8' },
+    { type: 'uint8' },
+    { type: 'uint256' },
+    { type: 'bytes32' },
+    { type: 'bytes32' },
+  ], [
+    CLOB_ORDER_TYPE_HASH,
+    BigInt(message.salt),
+    message.maker as `0x${string}`,
+    message.signer as `0x${string}`,
+    BigInt(message.tokenId),
+    BigInt(message.makerAmount),
+    BigInt(message.takerAmount),
+    message.side,
+    message.signatureType,
+    BigInt(message.timestamp),
+    message.metadata as `0x${string}`,
+    message.builder as `0x${string}`,
+  ]));
+  const appDomainSeparator = keccak256(encodeAbiParameters([
+    { type: 'bytes32' },
+    { type: 'bytes32' },
+    { type: 'bytes32' },
+    { type: 'uint256' },
+    { type: 'address' },
+  ], [
+    CLOB_DOMAIN_TYPE_HASH,
+    CLOB_NAME_HASH,
+    CLOB_VERSION_HASH,
+    BigInt(preparedOrder.eip712.domain.chainId),
+    preparedOrder.eip712.domain.verifyingContract as `0x${string}`,
+  ]));
+  const lenHex = (186).toString(16).padStart(4, '0');
+  return `0x${walletSignature.slice(2)}${appDomainSeparator.slice(2)}${contentsHash.slice(2)}${toHex(CLOB_ORDER_TYPE_STRING).slice(2)}${lenHex}`;
 }
 
 function buildClobOrderAmounts(input: ClobSignaturePayloadInput): { makerAmount: string; takerAmount: string } {
@@ -598,6 +752,23 @@ function resolveOrderType(input: ClobSignaturePayloadInput): PolymarketOrderType
   }
 
   return input.orderType ?? 'GTC';
+}
+
+function normalizeBuilderCode(value: string | null | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return ZERO_BYTES32;
+  if (/^0x[a-fA-F0-9]{64}$/.test(trimmed)) return trimmed;
+  throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'builderCode must be a bytes32 hex value');
+}
+
+function normalizeBalanceAllowance(response: unknown): { balance: string; allowances: Record<string, string> } {
+  if (!isRecord(response)) {
+    return { balance: '0', allowances: {} };
+  }
+  return {
+    balance: typeof response.balance === 'string' ? response.balance : '0',
+    allowances: readStringRecord(response.allowances),
+  };
 }
 
 function resolveMakerAddress(signatureType: SignatureTypeV2, walletAddress: string, funderAddress: string | undefined): string {
@@ -821,6 +992,15 @@ function toFiniteNumber(value: unknown): number | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function readStringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, string | number] => typeof entry[1] === 'string' || typeof entry[1] === 'number')
+      .map(([key, recordValue]) => [key, String(recordValue)]),
+  );
 }
 
 function sleep(ms: number): Promise<void> {

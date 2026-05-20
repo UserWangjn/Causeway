@@ -6,12 +6,25 @@ import type { CurrentUser } from '../../common/decorators/current-user.decorator
 import { hashJson } from '../../common/utils/hash.util';
 import { roundCurrency, toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
-import { ClobClient, PreparedClobOrder, SignedClobOrderInput } from '../../integrations/polymarket/services/clob.client';
+import { ClobApiCredentials, ClobClient, PreparedClobOrder, SignedClobOrderInput } from '../../integrations/polymarket/services/clob.client';
 import type { OrderBookSnapshot } from '../../integrations/polymarket/types';
+import { TradingService } from '../trading/trading.service';
 import { OrderPreviewDto } from './dto/order-preview.dto';
 import { PrepareSignatureDto } from './dto/prepare-signature.dto';
 import { SubmitOrderDto } from './dto/submit-order.dto';
 import { buildPreviewOrder } from './order-preview.builder';
+
+type OrderCapability = {
+  status: 'available' | 'degraded' | 'unavailable';
+  reason: string | null;
+  signatureType?: number;
+  funderAddress?: string | null;
+  clobApiKeyPreview?: string | null;
+  cashAvailable: number | null;
+  collateralAvailable: number | null;
+  balanceCapability: 'available' | 'degraded' | 'unavailable';
+  balanceCapabilityReason: string | null;
+};
 
 @Injectable()
 export class OrdersService {
@@ -20,6 +33,8 @@ export class OrdersService {
     private readonly clobClient: ClobClient,
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(TradingService)
+    private readonly tradingService: TradingService,
   ) {}
 
   async preview(user: CurrentUser, dto: OrderPreviewDto) {
@@ -33,9 +48,11 @@ export class OrdersService {
       });
     }
 
-    const capability = this.clobClient.getCapability();
+    const baseCapability: OrderCapability = dto.executionMode === 'real'
+      ? await this.tradingService.getOrderCapability(user)
+      : dryRunOrderCapability();
     const expiresAt = new Date(Date.now() + 60 * 1000);
-    const requireFreshOrderBook = dto.executionMode === 'real' && capability.status === 'available';
+    const requireFreshOrderBook = dto.executionMode === 'real' && baseCapability.status === 'available';
     const orderBookByTokenId = new Map<string, Promise<OrderBookSnapshot | null>>();
     const previewOrders = await Promise.all(dto.selections.map(async (selection) => {
       const row = selectionById.get(selection.selectionId);
@@ -64,6 +81,9 @@ export class OrdersService {
     const totalAmountUsd = roundCurrency(previewOrders.reduce((sum, order) => sum + order.amountUsd, 0));
     const estimatedMaxPayout = roundCurrency(previewOrders.reduce((sum, order) => sum + order.size, 0));
     const allOrdersValid = previewOrders.every((order) => order.valid);
+    const capability = dto.executionMode === 'real'
+      ? applyOrderFundingRequirement(baseCapability, totalAmountUsd)
+      : baseCapability;
 
     const intent = await this.prisma.$transaction(async (tx) => {
       const createdIntent = await tx.orderIntent.create({
@@ -73,11 +93,11 @@ export class OrdersService {
           status: 'preview_ready',
           executionMode: dto.executionMode as ExecutionMode,
           totalAmountUsd,
-          cashAvailable: null,
+          cashAvailable: capability.cashAvailable,
           tradingCapability: dto.executionMode === 'real' ? capability.status : 'degraded',
           tradingCapabilityReason: dto.executionMode === 'real' ? capability.reason : 'dry_run does not submit CLOB orders',
-          balanceCapability: 'unavailable',
-          balanceCapabilityReason: 'cash balance source is not wired yet',
+          balanceCapability: capability.balanceCapability,
+          balanceCapabilityReason: capability.balanceCapabilityReason,
           previewJson: toJson({ orders: previewOrders }),
           riskJson: toJson({
             allOrdersValid,
@@ -141,10 +161,10 @@ export class OrdersService {
       intentId: intent.id,
       executionMode: dto.executionMode,
       tradingCapability: dto.executionMode === 'real' ? capability.status : 'degraded',
-      balanceCapability: 'unavailable',
+      balanceCapability: capability.balanceCapability,
       tradingCapabilityReason: dto.executionMode === 'real' ? capability.reason : 'dry_run does not submit CLOB orders',
-      balanceCapabilityReason: 'cash balance source is not wired yet',
-      cashAvailable: null,
+      balanceCapabilityReason: capability.balanceCapabilityReason,
+      cashAvailable: capability.cashAvailable,
       totalAmountUsd,
       estimatedMaxPayout,
       estimatedMaxLoss: totalAmountUsd,
@@ -193,7 +213,12 @@ export class OrdersService {
     assertPreviewNotExpired(intent);
     assertIntentHasNoFailedOrders(intent);
 
-    const capability = this.clobClient.getCapability();
+    const baseCapability: OrderCapability = dto.executionMode === 'real'
+      ? await this.tradingService.getOrderCapability(user)
+      : dryRunOrderCapability();
+    const capability = dto.executionMode === 'real'
+      ? applyOrderFundingRequirement(baseCapability, toNullableNumber(intent.totalAmountUsd) ?? 0)
+      : baseCapability;
     const result: {
       intentId: string;
       executionMode: string;
@@ -213,10 +238,15 @@ export class OrdersService {
     };
 
     if (result.signingStatus === 'ready') {
-      const funderAddress = await this.clobClient.resolveFunderAddress(dto.walletAddress, dto.funderAddress);
+      const orderAuth = await this.tradingService.getOrderAuth(user);
       result.payloads = this.clobClient.prepareSignaturePayloads(
-        intent.orders.map((order) => toClobSignaturePayloadInput(order, dto.walletAddress, funderAddress, dto.chainId)),
+        intent.orders.map((order) => toClobSignaturePayloadInput(order, dto.walletAddress, orderAuth.funderAddress, dto.chainId, orderAuth.builderCode)),
         intent.previewExpiresAt ?? new Date(Date.now() + 60_000),
+        {
+          credentials: orderAuth.credentials,
+          signatureType: orderAuth.signatureType,
+          builderCode: orderAuth.builderCode,
+        },
       );
 
       const payloadByOrderId = new Map(result.payloads.map((payload) => [payload.orderId, payload]));
@@ -269,11 +299,15 @@ export class OrdersService {
 
     try {
       if (dto.executionMode === 'real') {
-        const capability = this.clobClient.getCapability();
+        const capability = applyOrderFundingRequirement(
+          await this.tradingService.getOrderCapability(user),
+          toNullableNumber(intent.totalAmountUsd) ?? 0,
+        );
         if (capability.status !== 'available') {
           throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', capability.reason ?? 'CLOB real trading is unavailable');
         }
-        return await this.submitReal(user.id, user.requestId, intent, normalizeSignedOrders(dto.signedOrders), dto.idempotencyKey, requestHash);
+        const orderAuth = await this.tradingService.getOrderAuth(user);
+        return await this.submitReal(user.id, user.requestId, intent, normalizeSignedOrders(dto.signedOrders), dto.idempotencyKey, requestHash, orderAuth.credentials);
       }
 
       return await this.submitDryRun(user.id, user.requestId, intent, dto.idempotencyKey, requestHash);
@@ -403,6 +437,7 @@ export class OrdersService {
     signedOrders: SignedClobOrderInput[],
     idempotencyKey: string,
     requestHash: string,
+    credentials: ClobApiCredentials,
   ) {
     const preparedOrders = resolveSignedPreparedOrders(intent, signedOrders);
     const claimStartedAt = new Date();
@@ -461,7 +496,15 @@ export class OrdersService {
     });
 
     try {
-      const orderResults = await this.clobClient.postSignedOrders(preparedOrders);
+      let orderResults: Awaited<ReturnType<ClobClient['postSignedOrders']>>;
+      try {
+        orderResults = await this.clobClient.postSignedOrders(preparedOrders, credentials);
+      } catch (error) {
+        if (isPotentiallyAcceptedClobSubmitError(error)) {
+          return this.markRealSubmitUnknown(userId, requestId, intent, submission.id, error);
+        }
+        throw error;
+      }
       const resultStatus = resolveRealSubmitStatus(orderResults);
       const result = {
         intentId: intent.id,
@@ -480,6 +523,12 @@ export class OrdersService {
           where: { id: intent.id },
           data: { status: toOrderIntentStatus(resultStatus) },
         });
+        if (resultStatus !== 'failed') {
+          await tx.causalScript.updateMany({
+            where: { id: intent.scriptId, userId },
+            data: { status: 'active' },
+          });
+        }
         for (const order of orderResults) {
           await tx.causewayOrder.update({
             where: { id: order.orderId },
@@ -544,6 +593,60 @@ export class OrdersService {
       });
       throw error;
     }
+  }
+
+  private async markRealSubmitUnknown(
+    userId: string,
+    requestId: string | undefined,
+    intent: LoadedOrderIntent,
+    submissionId: string,
+    error: unknown,
+  ) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const result = {
+      intentId: intent.id,
+      executionMode: intent.executionMode,
+      status: 'unknown',
+      errorMessage,
+      orders: intent.orders.map((order) => ({
+        orderId: order.id,
+        externalOrderId: order.externalOrderId,
+        status: 'unknown',
+        errorMessage,
+      })),
+    };
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.orderIntent.update({
+        where: { id: intent.id },
+        data: { status: OrderIntentStatus.unknown },
+      });
+      await tx.causewayOrder.updateMany({
+        where: { orderIntentId: intent.id, status: { in: ['preview_ready', 'submitted'] } },
+        data: { status: 'unknown', errorMessage },
+      });
+      await tx.orderSubmission.update({
+        where: { id: submissionId },
+        data: {
+          status: 'unknown',
+          errorMessage,
+          responseJson: toJson(result),
+        },
+      });
+      await tx.auditEvent.create({
+        data: {
+          userId,
+          ...(requestId ? { requestId } : {}),
+          actorType: 'user',
+          entityType: 'order_intent',
+          entityId: intent.id,
+          action: 'order.submit_real_unknown',
+          after: toJson(result),
+        },
+      });
+    });
+
+    return result;
   }
 
   private async resolveExistingSubmission(
@@ -716,6 +819,57 @@ function resolveSubmitMode(
   return tradingCapability === 'available' && allOrdersValid ? 'signed_clob_order' : 'unavailable';
 }
 
+function dryRunOrderCapability() {
+  return {
+    status: 'degraded' as const,
+    reason: 'dry_run does not submit CLOB orders',
+    cashAvailable: null,
+    collateralAvailable: null,
+    balanceCapability: 'unavailable' as const,
+    balanceCapabilityReason: 'dry_run does not submit CLOB orders',
+  };
+}
+
+function applyOrderFundingRequirement(capability: OrderCapability, totalAmountUsd: number): OrderCapability {
+  if (capability.status !== 'available' || totalAmountUsd <= 0) return capability;
+
+  const requiredAmountUsd = roundCurrency(totalAmountUsd);
+  if (capability.cashAvailable == null) {
+    return withFundingUnavailable(capability, `Cash balance must be refreshed before placing a ${formatUsd(requiredAmountUsd)} real order.`);
+  }
+  if (capability.cashAvailable + Number.EPSILON < requiredAmountUsd) {
+    return withFundingUnavailable(
+      capability,
+      `Insufficient deposit wallet balance: ${formatUsd(requiredAmountUsd)} required, ${formatUsd(capability.cashAvailable)} available.`,
+    );
+  }
+  if (capability.collateralAvailable == null) {
+    return withFundingUnavailable(capability, `Collateral allowance must be refreshed before placing a ${formatUsd(requiredAmountUsd)} real order.`);
+  }
+  if (capability.collateralAvailable + Number.EPSILON < requiredAmountUsd) {
+    return withFundingUnavailable(
+      capability,
+      `Insufficient CLOB collateral allowance: ${formatUsd(requiredAmountUsd)} required, ${formatUsd(capability.collateralAvailable)} approved.`,
+    );
+  }
+
+  return capability;
+}
+
+function withFundingUnavailable(capability: OrderCapability, reason: string): OrderCapability {
+  return {
+    ...capability,
+    status: 'unavailable',
+    reason,
+    balanceCapability: 'unavailable',
+    balanceCapabilityReason: reason,
+  };
+}
+
+function formatUsd(value: number): string {
+  return `$${roundCurrency(value).toFixed(2)}`;
+}
+
 function isLikelyRealClobTokenId(tokenId: string): boolean {
   return /^\d{20,}$/.test(tokenId.trim());
 }
@@ -734,6 +888,7 @@ function toClobSignaturePayloadInput(
   walletAddress: string,
   funderAddress: string | null | undefined,
   chainId: number,
+  builderCode?: string,
 ) {
   const tickSize = readSubmitPayloadNumber(order.submitPayload, 'tickSize') ?? toNullableNumber(order.market.orderPriceMinTickSize);
   const limitPrice = toNullableNumber(order.limitPrice);
@@ -762,6 +917,7 @@ function toClobSignaturePayloadInput(
     amountUsd,
     tickSize,
     negRisk: order.market.negRisk,
+    builderCode,
   };
 }
 
@@ -848,6 +1004,13 @@ function toOrderIntentStatus(status: 'submitted' | 'partially_submitted' | 'fail
   if (status === 'submitted') return OrderIntentStatus.submitted;
   if (status === 'partially_submitted') return OrderIntentStatus.partially_submitted;
   return OrderIntentStatus.failed;
+}
+
+function isPotentiallyAcceptedClobSubmitError(error: unknown): boolean {
+  if (!(error instanceof ApiException)) return false;
+  const response = error.getResponse();
+  if (!isRecord(response)) return false;
+  return response.code === 'POLYMARKET_API_ERROR' && isRecord(response.details) && typeof response.details.cause === 'string';
 }
 
 function readSubmitPayloadNumber(value: Prisma.JsonValue | null, key: string): number | null {

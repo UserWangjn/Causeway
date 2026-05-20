@@ -38,7 +38,6 @@ import {
   Info,
   Landmark,
   LogOut,
-  Pencil,
   Play,
   Plus,
   RotateCw,
@@ -46,7 +45,6 @@ import {
   Share2,
   ShieldCheck,
   Star,
-  Trash2,
   WalletCards,
 } from 'lucide-react'
 import { ConnectButton, useConnectModal } from '@rainbow-me/rainbowkit'
@@ -334,17 +332,7 @@ type PreparedOrderPayload = {
   signerAddress: string
   funderAddress: string | null
   expiresAt?: string
-  eip712: {
-    primaryType: 'Order'
-    domain: {
-      name: string
-      version: string
-      chainId: number
-      verifyingContract: string
-    }
-    types: Record<string, { name: string; type: string }[]>
-    message: Record<string, string | number>
-  }
+  eip712: TypedDataPayload
 }
 
 type PrepareSignatureResult = {
@@ -360,7 +348,7 @@ type PrepareSignatureResult = {
 type OrderSubmitResult = {
   intentId: string
   executionMode: OrderExecutionMode
-  status: 'dry_run_completed' | 'submitted' | 'partially_submitted' | 'failed'
+  status: 'dry_run_completed' | 'submitted' | 'partially_submitted' | 'unknown' | 'failed'
   orders: {
     orderId: string
     externalOrderId: string | null
@@ -440,8 +428,48 @@ type BackendInferenceStatus = {
   cacheHit: boolean
   scriptId: string | null
   errorMessage: string | null
+  model?: string
   createdAt?: string
   completedAt?: string | null
+}
+
+type TypedDataPayload = {
+  primaryType: string
+  domain: {
+    name?: string
+    version?: string
+    chainId?: number
+    verifyingContract?: string
+  }
+  types: Record<string, { name: string; type: string }[]>
+  message: Record<string, unknown>
+}
+
+type TradingReadiness = {
+  status: 'disabled' | 'needs_clob_auth' | 'needs_deposit_wallet' | 'deposit_wallet_pending' | 'needs_funding' | 'ready' | 'degraded' | 'unavailable'
+  canTrade: boolean
+  reason: string | null
+  walletAddress: string
+  chainId: number
+  signatureType: 0 | 1 | 2 | 3
+  clobApiKeyConfigured: boolean
+  clobApiKeyPreview: string | null
+  depositWalletAddress: string | null
+  depositWalletDeployed: boolean
+  depositWalletTxId: string | null
+  depositWalletTxState: string | null
+  builderConfigured: boolean
+  steps: { code: string; message: string; action: string }[]
+}
+
+type ClobAuthPrepareResult = {
+  challengeId: string
+  walletAddress: string
+  chainId: number
+  timestamp: number
+  nonce: number
+  expiresAt: string
+  eip712: TypedDataPayload
 }
 
 type BackendScript = {
@@ -474,6 +502,9 @@ type BackendScript = {
       confidence: number
       reason: string
     }>
+  }
+  inferenceRun?: Omit<BackendInferenceStatus, 'scriptId'> & {
+    model: string
   }
   markets: Array<{
     scriptMarketId?: string
@@ -512,6 +543,34 @@ type BackendScript = {
   createdAt: string
   updatedAt: string
 }
+
+type BackendScriptListItem = {
+  id: string
+  title: string
+  status: string
+  summary: string | null
+  rootMarketId: string
+  rootOutcomeId: string
+  rootOutcomeLabel: string | null
+  rootPrice: number | null
+  rootVolume: number | null
+  rootVolume24hr: number | null
+  rootLiquidity: number | null
+  icon: string | null
+  image: string | null
+  marketCount: number
+  orderIntentCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+type BackendScriptListResponse = {
+  items: BackendScriptListItem[]
+  nextCursor: string | null
+  hasMore: boolean
+}
+
+type ScriptStatusFilter = 'all' | 'draft' | 'active' | 'archived'
 
 type InferenceScope = 'news' | 'markets' | 'social' | 'all'
 type InferenceDepth = 1 | 2 | 3
@@ -944,8 +1003,6 @@ function authHeaders(token: string) {
   }
 }
 
-const typedDataUintFields = new Set(['salt', 'tokenId', 'makerAmount', 'takerAmount', 'timestamp'])
-
 function createIdempotencyKey() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -953,22 +1010,45 @@ function createIdempotencyKey() {
   return `client_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
 
-function normalizeTypedDataMessage(message: PreparedOrderPayload['eip712']['message']) {
-  return Object.fromEntries(Object.entries(message).map(([key, value]) => {
-    if (typedDataUintFields.has(key)) {
-      return [key, BigInt(String(value))]
-    }
-    return [key, value]
-  }))
+function normalizeTypedDataScalar(type: string, value: unknown): unknown {
+  if (/^u?int(?:[0-9]+)?$/.test(type) && typeof value !== 'bigint' && !(typeof value === 'string' && value.startsWith('0x'))) {
+    return BigInt(String(value))
+  }
+  return value
+}
+
+function normalizeTypedDataValueForType(type: string, value: unknown, types: TypedDataPayload['types']): unknown {
+  if (type.endsWith('[]')) {
+    if (!Array.isArray(value)) return value
+    return value.map((item) => normalizeTypedDataValueForType(type.slice(0, -2), item, types))
+  }
+
+  const fields = types[type]
+  if (fields && value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    return Object.fromEntries(
+      fields.map((field) => [field.name, normalizeTypedDataValueForType(field.type, record[field.name], types)]),
+    )
+  }
+
+  return normalizeTypedDataScalar(type, value)
+}
+
+function normalizeTypedDataMessage(payload: TypedDataPayload) {
+  return normalizeTypedDataValueForType(payload.primaryType, payload.message, payload.types) as Record<string, unknown>
+}
+
+function typedDataToSignVariables(payload: TypedDataPayload): SignTypedDataVariables {
+  return {
+    domain: payload.domain,
+    types: payload.types,
+    primaryType: payload.primaryType,
+    message: normalizeTypedDataMessage(payload),
+  } as SignTypedDataVariables
 }
 
 function toSignTypedDataVariables(payload: PreparedOrderPayload): SignTypedDataVariables {
-  return {
-    domain: payload.eip712.domain,
-    types: payload.eip712.types,
-    primaryType: payload.eip712.primaryType,
-    message: normalizeTypedDataMessage(payload.eip712.message),
-  } as SignTypedDataVariables
+  return typedDataToSignVariables(payload.eip712)
 }
 
 function positiveNumberOrNull(value: number | null | undefined) {
@@ -1183,6 +1263,39 @@ async function submitOrderIntent(
   }).then((response) => readApiData<OrderSubmitResult>(response))
 }
 
+async function fetchTradingReadiness(token: string) {
+  return fetch(`${API_PREFIX}/trading/readiness`, {
+    headers: authHeaders(token),
+  }).then((response) => readApiData<TradingReadiness>(response))
+}
+
+async function prepareClobAuth(token: string) {
+  return fetch(`${API_PREFIX}/trading/clob-auth/prepare`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  }).then((response) => readApiData<ClobAuthPrepareResult>(response))
+}
+
+async function completeClobAuth(token: string, payload: ClobAuthPrepareResult, signature: string) {
+  return fetch(`${API_PREFIX}/trading/clob-auth/complete`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      challengeId: payload.challengeId,
+      nonce: payload.nonce,
+      timestamp: payload.timestamp,
+      signature,
+    }),
+  }).then((response) => readApiData<TradingReadiness>(response))
+}
+
+async function ensureDepositWallet(token: string) {
+  return fetch(`${API_PREFIX}/trading/deposit-wallet/ensure`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  }).then((response) => readApiData<TradingReadiness>(response))
+}
+
 async function sleepWithAbort(ms: number, signal: AbortSignal) {
   await new Promise<void>((resolve, reject) => {
     const timer = window.setTimeout(resolve, ms)
@@ -1261,6 +1374,31 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
   return scriptToInferenceResult(script, status, inferenceMarket, settings)
 }
 
+async function fetchUserScripts(
+  token: string,
+  signal: AbortSignal,
+  cursor?: string | null,
+  statusFilter: ScriptStatusFilter = 'all',
+  query?: string | null,
+): Promise<BackendScriptListResponse> {
+  const params = new URLSearchParams({ limit: '20' })
+  if (cursor) params.set('cursor', cursor)
+  if (statusFilter !== 'all') params.set('status', statusFilter)
+  const normalizedQuery = query?.trim()
+  if (normalizedQuery) params.set('q', normalizedQuery)
+  return fetch(`${API_PREFIX}/scripts?${params.toString()}`, {
+    signal,
+    headers: authHeaders(token),
+  }).then((response) => readApiData<BackendScriptListResponse>(response))
+}
+
+async function fetchSavedScript(token: string, scriptId: string, signal: AbortSignal): Promise<BackendScript> {
+  return fetch(`${API_PREFIX}/scripts/${encodeURIComponent(scriptId)}`, {
+    signal,
+    headers: authHeaders(token),
+  }).then((response) => readApiData<BackendScript>(response))
+}
+
 async function loadMarketForInference(market: Market, signal: AbortSignal): Promise<Market> {
   if (marketInferenceOutcome(market)) return market
 
@@ -1272,6 +1410,116 @@ async function loadMarketForInference(market: Market, signal: AbortSignal): Prom
 
   const relatedMarket = detail.markets.map(apiNodeToMarket).find((item) => item.id === market.id && marketInferenceOutcome(item))
   return relatedMarket ?? market
+}
+
+function scriptCompletedRun(script: BackendScript): BackendInferenceStatus {
+  const inferenceRun = script.inferenceRun
+  if (inferenceRun) {
+    return {
+      id: inferenceRun.id,
+      status: inferenceRun.status,
+      stage: inferenceRun.stage,
+      progress: inferenceRun.progress,
+      cacheHit: inferenceRun.cacheHit,
+      scriptId: script.id,
+      errorMessage: inferenceRun.errorMessage,
+      model: inferenceRun.model,
+      createdAt: inferenceRun.createdAt,
+      completedAt: inferenceRun.completedAt,
+    }
+  }
+
+  return {
+    id: script.id,
+    status: 'completed',
+    stage: null,
+    progress: 100,
+    cacheHit: false,
+    scriptId: script.id,
+    errorMessage: null,
+    createdAt: script.createdAt,
+    completedAt: script.updatedAt,
+  }
+}
+
+function scriptListItemMarket(item: BackendScriptListItem, index = 0): Market {
+  const price = unitPriceToPercent(item.rootPrice) ?? 0
+  return {
+    id: item.rootMarketId,
+    title: item.title,
+    category: 'Polymarket',
+    icon: 'globe',
+    iconUrl: item.icon || item.image,
+    price,
+    change: 0,
+    volume: formatCompactMoney(item.rootVolume),
+    volumeValue: item.rootVolume,
+    liquidity: item.rootLiquidity,
+    traders: item.rootVolume24hr == null ? '24h 暂无数据' : `24h ${formatCompactMoney(item.rootVolume24hr)}`,
+    outcomes: item.rootOutcomeLabel
+      ? [{ outcomeId: item.rootOutcomeId, label: item.rootOutcomeLabel, price: item.rootPrice, tokenId: null }]
+      : [],
+    x: 50,
+    y: 50,
+    tone: index % 5 === 0 ? 'purple' : index % 3 === 0 ? 'orange' : index % 2 === 0 ? 'green' : 'blue',
+  }
+}
+
+function scriptRootMarket(script: BackendScript, fallback?: BackendScriptListItem): Market {
+  const rootMarketId = script.root?.marketId ?? fallback?.rootMarketId ?? script.markets[0]?.marketId ?? script.id
+  const rootOutcomeId = script.root?.outcomeId ?? fallback?.rootOutcomeId ?? ''
+  const rootScriptMarket =
+    script.markets.find((item) => item.marketId === rootMarketId)
+    ?? script.markets.find((item) => item.layer === 0)
+    ?? script.markets[0]
+  const rootOutcome =
+    rootScriptMarket?.outcomes.find((outcome) => outcome.outcomeId === rootOutcomeId)
+    ?? rootScriptMarket?.outcomes.find((outcome) => outcome.userAction === 'buy')
+    ?? rootScriptMarket?.outcomes[0]
+  const price = rootOutcome?.price ?? rootOutcome?.limitPrice ?? rootScriptMarket?.bestAsk ?? rootScriptMarket?.lastTradePrice ?? fallback?.rootPrice ?? null
+  const volume = rootScriptMarket?.volume ?? fallback?.rootVolume ?? null
+  const volume24hr = rootScriptMarket?.volume24hr ?? fallback?.rootVolume24hr ?? null
+  const liquidity = rootScriptMarket?.liquidity ?? fallback?.rootLiquidity ?? null
+
+  return {
+    id: rootMarketId,
+    title: rootScriptMarket?.title ?? fallback?.title ?? script.title,
+    category: 'Polymarket',
+    icon: 'globe',
+    iconUrl: rootScriptMarket?.icon || rootScriptMarket?.image || fallback?.icon || fallback?.image || null,
+    price: unitPriceToPercent(price) ?? 0,
+    change: 0,
+    volume: formatCompactMoney(volume),
+    volumeValue: volume,
+    liquidity,
+    traders: volume24hr == null ? '24h 暂无数据' : `24h ${formatCompactMoney(volume24hr)}`,
+    bestAsk: rootScriptMarket?.bestAsk ?? null,
+    lastTradePrice: rootScriptMarket?.lastTradePrice ?? null,
+    orderMinSize: rootScriptMarket?.orderMinSize ?? null,
+    tickSize: rootScriptMarket?.tickSize ?? null,
+    outcomes: rootScriptMarket?.outcomes.map((outcome) => ({
+      outcomeId: outcome.outcomeId,
+      label: outcome.label,
+      price: outcome.price ?? outcome.limitPrice ?? null,
+      tokenId: outcome.tokenId,
+    })) ?? (fallback?.rootOutcomeLabel ? [{ outcomeId: fallback.rootOutcomeId, label: fallback.rootOutcomeLabel, price: fallback.rootPrice, tokenId: null }] : []),
+    x: 50,
+    y: 50,
+    tone: 'purple',
+  }
+}
+
+function scriptStatusLabel(status: string) {
+  if (status === 'active') return '已提交'
+  if (status === 'archived') return '已归档'
+  if (status === 'draft') return '草稿'
+  return status
+}
+
+function scriptStatusClass(status: string) {
+  if (status === 'active') return 'done'
+  if (status === 'archived') return 'archived'
+  return 'running'
 }
 
 function scriptToInferenceResult(script: BackendScript, run: BackendInferenceStatus, market: Market, settings: InferenceSettingsState): InferenceResult {
@@ -1300,7 +1548,7 @@ function scriptToInferenceResult(script: BackendScript, run: BackendInferenceSta
     scriptId: script.id,
     status: 'completed',
     aiAvailable: true,
-    model: inferenceModel(settings),
+    model: run.model ?? script.inferenceRun?.model ?? inferenceModel(settings),
     rootMarket: {
       id: market.id,
       title: market.title,
@@ -1333,7 +1581,7 @@ function scriptToInferenceResult(script: BackendScript, run: BackendInferenceSta
       `任务状态：${run.status}，进度：${run.progress}%。`,
       '已读取生成的 causal script。',
     ],
-    generatedAt: run.completedAt || new Date().toISOString(),
+    generatedAt: run.completedAt || script.updatedAt,
   }
 }
 
@@ -1361,144 +1609,21 @@ type MarketFlowEdge = Edge<MarketFlowEdgeData, 'causal'>
 
 type HoverPlacement = 'right' | 'left' | 'bottom' | 'top'
 
-type ScriptRow = {
-  title: string
-  status: '进行中' | '已完成'
-  created: string
-  favorite?: boolean
-  points: number[]
-}
-
 const rootMarket: Market = {
-  id: 'trump-2024',
-  title: '特朗普赢得2024年大选?',
-  category: '政治',
-  icon: 'landmark',
-  price: 62,
-  change: 5,
-  volume: '$28.4M',
-  traders: '3.2K',
+  id: 'placeholder-market',
+  title: '请选择一个真实 Polymarket 市场',
+  category: 'Polymarket',
+  icon: 'globe',
+  price: 0,
+  change: 0,
+  volume: '暂无数据',
+  traders: '暂无数据',
   x: 48,
   y: 46,
-  tone: 'blue',
+  tone: 'purple',
 }
 
-const markets: Market[] = [
-  rootMarket,
-  {
-    id: 'congress',
-    title: '美国国会选举结果?',
-    category: '政治',
-    icon: 'bank',
-    price: 71,
-    change: 4,
-    volume: '$15.2M',
-    traders: '1.9K',
-    x: 38,
-    y: 22,
-    tone: 'blue',
-  },
-  {
-    id: 'fed',
-    title: '美联储降息概率?',
-    category: '宏观经济',
-    icon: 'landmark',
-    price: 68,
-    change: 2,
-    volume: '$11.8M',
-    traders: '1.4K',
-    x: 70,
-    y: 20,
-    tone: 'green',
-  },
-  {
-    id: 'tech',
-    title: '美国科技股Q3表现?',
-    category: '科技',
-    icon: 'cpu',
-    price: 57,
-    change: 3,
-    volume: '$9.8M',
-    traders: '1.2K',
-    x: 88,
-    y: 35,
-    tone: 'green',
-  },
-  {
-    id: 'btc',
-    title: '比特币突破8万美元?',
-    category: '加密货币',
-    icon: 'bitcoin',
-    price: 41,
-    change: -1,
-    volume: '$9.3M',
-    traders: '943',
-    x: 91,
-    y: 56,
-    tone: 'orange',
-  },
-  {
-    id: 'oil',
-    title: '原油价格上涨?',
-    category: '商品',
-    icon: 'factory',
-    price: 31,
-    change: -2,
-    volume: '$7.6M',
-    traders: '816',
-    x: 72,
-    y: 73,
-    tone: 'orange',
-  },
-  {
-    id: 'china',
-    title: '比特币与AI板块联动?',
-    category: '科技',
-    icon: 'cpu',
-    price: 27,
-    change: -1,
-    volume: '$5.1M',
-    traders: '642',
-    x: 42,
-    y: 72,
-    tone: 'blue',
-  },
-  {
-    id: 'recession',
-    title: '拜登退选概率?',
-    category: '政治',
-    icon: 'globe',
-    price: 37,
-    change: 1,
-    volume: '$6.9M',
-    traders: '902',
-    x: 24,
-    y: 45,
-    tone: 'purple',
-  },
-  {
-    id: 'halving',
-    title: '比特币年底走势?',
-    category: '加密货币',
-    icon: 'bitcoin',
-    price: 29,
-    change: -3,
-    volume: '$4.7M',
-    traders: '521',
-    x: 25,
-    y: 63,
-    tone: 'red',
-  },
-]
-
-const scriptRows: ScriptRow[] = [
-  { title: '特朗普赢得2024年大选?', status: '进行中', created: '2024-07-15 14:30', points: [71, 62, 41, 68] },
-  { title: '美联储降息影响路径', status: '已完成', created: '2024-07-14 09:15', points: [68, 52, 38, 59] },
-  { title: '比特币减半影响分析', status: '已完成', created: '2024-07-12 16:45', points: [57, 63, 47] },
-  { title: 'AI 技术突破对市场影响', status: '进行中', created: '2024-07-10 11:20', favorite: true, points: [73, 58, 42, 66] },
-  { title: '碳中和政策影响推演', status: '已完成', created: '2024-07-08 15:30', points: [61, 48, 36] },
-  { title: '中东局势升级影响分析', status: '已完成', created: '2024-07-07 22:10', points: [65, 54, 39, 62] },
-]
+const markets: Market[] = [rootMarket]
 
 const categoryTones: Record<string, Market['tone']> = {
   政治: 'blue',
@@ -2343,6 +2468,11 @@ function App() {
     setInferenceSettings((current) => ({ ...current, rootOutcomeId: outcomeId ?? null }))
     setView('infer')
   }, [])
+  const openSavedScript = useCallback((market: Market, result: InferenceResult) => {
+    setSelectedMarket(market)
+    setInferenceResult(result)
+    setView('script')
+  }, [])
 
   return (
     <div className={introVisible ? 'app-shell app-intro-active' : 'app-shell'}>
@@ -2364,7 +2494,7 @@ function App() {
           />
         )}
         {view === 'script' && <CausalScript auth={auth} market={selectedMarket} onBack={() => setView('progress')} onScripts={() => setView('scripts')} result={inferenceResult} />}
-        {view === 'scripts' && <MyScripts onNew={() => setView('infer')} onOpen={() => setView('script')} />}
+        {view === 'scripts' && <MyScripts auth={auth} onNew={() => setView('infer')} onOpen={openSavedScript} settings={inferenceSettings} />}
       </main>
     </div>
   )
@@ -3381,7 +3511,8 @@ function CausalScript({
           <span><Bot size={16} /> 置信度：{formatConfidence(result?.confidence)}</span>
         </div>
         <div className="footer-actions">
-          <button className="outline-button" type="button" onClick={onScripts}>保存到我的脚本</button>
+          <span className="script-saved-pill"><CheckCircle2 size={16} /> 已自动保存</span>
+          <button className="outline-button" type="button" onClick={onScripts}>查看我的脚本</button>
           <button className="primary-button" type="button"><RotateCw size={17} /> 重新推演</button>
         </div>
       </Card>
@@ -3534,8 +3665,40 @@ function ScriptOrderPanelState({
     await buildPreview()
   }, [buildPreview])
 
+  const ensureRealTradingReady = useCallback(async (token: string) => {
+    setStatus('signing')
+    let readiness = await fetchTradingReadiness(token)
+    if (!readiness.clobApiKeyConfigured) {
+      const authPayload = await prepareClobAuth(token)
+      const signature = await signTypedDataAsync(typedDataToSignVariables(authPayload.eip712))
+      readiness = await completeClobAuth(token, authPayload, signature)
+    }
+    if (!readiness.depositWalletDeployed) {
+      readiness = await ensureDepositWallet(token)
+    }
+    if (readiness.status === 'deposit_wallet_pending') {
+      throw new Error(readiness.reason || 'Polymarket deposit wallet is being created. Please retry after it is confirmed.')
+    }
+    if (!readiness.canTrade) {
+      throw new Error(readiness.reason || readiness.steps[0]?.message || 'Polymarket trading is not ready for this wallet.')
+    }
+    return readiness
+  }, [signTypedDataAsync])
+
   const handleSubmit = useCallback(async () => {
-    const nextPreview = preview ?? await buildPreview()
+    if (executionMode === 'real') {
+      try {
+        const { token } = await ensureAuthToken()
+        await ensureRealTradingReady(token)
+        setPreview(null)
+      } catch (readinessError) {
+        setError(errorMessage(readinessError))
+        setStatus('idle')
+        return
+      }
+    }
+
+    const nextPreview = executionMode === 'real' ? await buildPreview() : preview ?? await buildPreview()
     if (!nextPreview) return
     if (!nextPreview.orders.every((order) => order.valid)) {
       setError('预览中存在无效订单，请先修正金额、数量、限价或盘口状态。')
@@ -3576,7 +3739,7 @@ function ScriptOrderPanelState({
     } finally {
       setStatus('idle')
     }
-  }, [auth.chainId, auth.walletAddress, buildPreview, ensureAuthToken, preview, signTypedDataAsync])
+  }, [auth.chainId, auth.walletAddress, buildPreview, ensureAuthToken, ensureRealTradingReady, executionMode, preview, signTypedDataAsync])
 
   const refreshIntent = useCallback(async () => {
     if (!currentIntentId) return
@@ -3630,7 +3793,7 @@ function ScriptOrderPanelState({
           </div>
 
           {executionMode === 'real' ? (
-            <div className="soft-note">Backend resolves the user's Polymarket proxy / Safe funder automatically before EIP-712 signing.</div>
+            <div className="soft-note">Backend prepares user-level Polymarket trading credentials and a POLY_1271 deposit wallet after wallet login.</div>
           ) : null}
 
           <div className="order-draft-list">
@@ -3797,7 +3960,138 @@ function OrderSubmitBlock({ result }: { result: OrderSubmitResult }) {
   )
 }
 
-function MyScripts({ onNew, onOpen }: { onNew: () => void; onOpen: () => void }) {
+function MyScripts({
+  auth,
+  onNew,
+  onOpen,
+  settings,
+}: {
+  auth: CausewayAuth
+  onNew: () => void
+  onOpen: (market: Market, result: InferenceResult) => void
+  settings: InferenceSettingsState
+}) {
+  const [items, setItems] = useState<BackendScriptListItem[]>([])
+  const [itemsAccessToken, setItemsAccessToken] = useState<string | null>(null)
+  const [itemsStatusFilter, setItemsStatusFilter] = useState<ScriptStatusFilter>('all')
+  const [itemsQuery, setItemsQuery] = useState('')
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<ScriptStatusFilter>('all')
+  const [openingScriptId, setOpeningScriptId] = useState<string | null>(null)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 250)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
+  useEffect(() => {
+    if (!auth.accessToken) return
+
+    const controller = new AbortController()
+    const requestToken = auth.accessToken
+    const requestStatus = statusFilter
+    const requestQuery = debouncedQuery
+    queueMicrotask(() => {
+      if (controller.signal.aborted) return
+      setItems([])
+      setNextCursor(null)
+      setItemsAccessToken(requestToken)
+      setItemsStatusFilter(requestStatus)
+      setItemsQuery(requestQuery)
+      setLoading(true)
+      setError(null)
+    })
+    fetchUserScripts(requestToken, controller.signal, null, requestStatus, requestQuery)
+      .then((data) => {
+        setItems(data.items)
+        setNextCursor(data.nextCursor)
+        setItemsAccessToken(requestToken)
+        setItemsStatusFilter(requestStatus)
+        setItemsQuery(requestQuery)
+      })
+      .catch((loadError: unknown) => {
+        if (loadError instanceof DOMException && loadError.name === 'AbortError') return
+        setError(loadError instanceof Error ? loadError.message : '脚本列表加载失败')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [auth.accessToken, debouncedQuery, statusFilter])
+
+  const filteredItems = useMemo(() => {
+    return auth.isAuthenticated
+      && itemsAccessToken === auth.accessToken
+      && itemsStatusFilter === statusFilter
+      && itemsQuery === debouncedQuery
+      ? items
+      : []
+  }, [auth.accessToken, auth.isAuthenticated, debouncedQuery, items, itemsAccessToken, itemsQuery, itemsStatusFilter, statusFilter])
+
+  const stats = useMemo(() => {
+    const visibleItems = auth.isAuthenticated
+      && itemsAccessToken === auth.accessToken
+      && itemsStatusFilter === statusFilter
+      && itemsQuery === debouncedQuery
+      ? items
+      : []
+    const drafts = visibleItems.filter((item) => item.status === 'draft').length
+    const active = visibleItems.filter((item) => item.status === 'active').length
+    const archived = visibleItems.filter((item) => item.status === 'archived').length
+    const orderIntents = visibleItems.reduce((total, item) => total + item.orderIntentCount, 0)
+    return [
+      ['当前页脚本', String(visibleItems.length), '来自后端真实记录', 'blue', <Star size={19} />],
+      ['草稿', String(drafts), '可继续调整订单', 'orange', <Play size={19} />],
+      ['已提交', String(active), '已完成订单流程', 'green', <CheckCircle2 size={19} />],
+      [statusFilter === 'archived' ? '已归档' : '订单意向', String(statusFilter === 'archived' ? archived : orderIntents), statusFilter === 'archived' ? '历史脚本' : '由脚本生成', 'purple', <ExternalLink size={19} />],
+    ] as const
+  }, [auth.accessToken, auth.isAuthenticated, debouncedQuery, items, itemsAccessToken, itemsQuery, itemsStatusFilter, statusFilter])
+
+  const handleLoadMore = useCallback(async () => {
+    if (!auth.accessToken || !nextCursor || loadingMore || itemsAccessToken !== auth.accessToken || itemsStatusFilter !== statusFilter || itemsQuery !== debouncedQuery) return
+    const controller = new AbortController()
+    setLoadingMore(true)
+    setError(null)
+    try {
+      const data = await fetchUserScripts(auth.accessToken, controller.signal, nextCursor, statusFilter, debouncedQuery)
+      setItems((current) => {
+        const existingIds = new Set(current.map((item) => item.id))
+        return [...current, ...data.items.filter((item) => !existingIds.has(item.id))]
+      })
+      setNextCursor(data.nextCursor)
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '更多脚本加载失败')
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [auth.accessToken, debouncedQuery, itemsAccessToken, itemsQuery, itemsStatusFilter, loadingMore, nextCursor, statusFilter])
+
+  const handleOpen = useCallback(async (item: BackendScriptListItem) => {
+    if (!auth.accessToken) {
+      await auth.signIn()
+      return
+    }
+
+    const controller = new AbortController()
+    setOpeningScriptId(item.id)
+    setError(null)
+    try {
+      const script = await fetchSavedScript(auth.accessToken, item.id, controller.signal)
+      const market = scriptRootMarket(script, item)
+      onOpen(market, scriptToInferenceResult(script, scriptCompletedRun(script), market, settings))
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : '脚本详情加载失败')
+    } finally {
+      setOpeningScriptId(null)
+    }
+  }, [auth, onOpen, settings])
+
   return (
     <section className="page">
       <div className="scripts-headline">
@@ -3807,14 +4101,9 @@ function MyScripts({ onNew, onOpen }: { onNew: () => void; onOpen: () => void })
         </button>
       </div>
       <div className="stats-row">
-        {[
-          ['全部脚本', '28', '较昨日 +3', 'blue'],
-          ['进行中', '6', '较昨日 +1', 'orange'],
-          ['已完成', '17', '较昨日 +2', 'green'],
-          ['收藏', '5', '较昨日 +1', 'purple'],
-        ].map(([label, value, note, tone]) => (
+        {stats.map(([label, value, note, tone, icon]) => (
           <Card className="stat-card" key={label}>
-            <span className={`stat-icon ${tone}`}>{value === '6' ? <Play size={19} /> : value === '17' ? <CheckCircle2 size={19} /> : <Star size={19} />}</span>
+            <span className={`stat-icon ${tone}`}>{icon}</span>
             <div>
               <span>{label}</span>
               <b>{value}</b>
@@ -3825,38 +4114,89 @@ function MyScripts({ onNew, onOpen }: { onNew: () => void; onOpen: () => void })
       </div>
       <div className="scripts-toolbar">
         <div className="tabbar inline">
-          <button className="active" type="button">全部</button>
-          <button type="button">进行中</button>
-          <button type="button">已完成</button>
-          <button type="button">收藏</button>
+          {[
+            ['all', '全部'],
+            ['draft', '草稿'],
+            ['active', '已提交'],
+            ['archived', '归档'],
+          ].map(([value, label]) => (
+            <button
+              className={statusFilter === value ? 'active' : ''}
+              key={value}
+              type="button"
+              onClick={() => setStatusFilter(value as ScriptStatusFilter)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <div className="searchbox narrow">
           <Search size={17} />
-          <span>搜索脚本名称、关键词...</span>
+          <input
+            aria-label="搜索脚本"
+            value={query}
+            placeholder="搜索脚本名称、关键词..."
+            onChange={(event) => setQuery(event.target.value)}
+          />
         </div>
-        <button className="outline-button" type="button">最新创建</button>
+        <span className="scripts-sort-label">最新创建</span>
       </div>
+      {auth.isAuthenticated && error ? <div className="script-list-message error">{error}</div> : null}
+      {!auth.isAuthenticated ? (
+        <div className="script-list-message">
+          <b>登录钱包后查看真实脚本</b>
+          <span>这里不会展示演示数据；完成钱包签名后会读取当前用户已保存的后端脚本。</span>
+          <button className="primary-button" type="button" onClick={() => void auth.signIn()} disabled={auth.isSigningIn}>
+            <WalletCards size={17} /> {auth.isSigningIn ? '等待签名' : '登录钱包'}
+          </button>
+        </div>
+      ) : null}
       <div className="script-list">
-        {scriptRows.map((row) => (
-          <button className="script-row" key={row.title} type="button" onClick={onOpen}>
-            <MarketIcon market={markets[row.points.length]} size="small" />
+        {auth.isAuthenticated && loading ? <div className="script-list-message">正在从后端加载真实脚本...</div> : null}
+        {auth.isAuthenticated && !loading && !filteredItems.length ? (
+          <div className="script-list-message">
+            <b>{query.trim() ? '没有匹配的脚本' : '暂无真实脚本'}</b>
+            <span>{query.trim() ? '请调整搜索关键词。' : '完成一次 AI 推演后，生成的脚本会出现在这里。'}</span>
+          </div>
+        ) : null}
+        {auth.isAuthenticated && !loading && filteredItems.map((item, index) => (
+          <button
+            className="script-row"
+            key={item.id}
+            type="button"
+            onClick={() => void handleOpen(item)}
+            disabled={openingScriptId === item.id}
+          >
+            <MarketIcon market={scriptListItemMarket(item, index)} size="small" />
             <div className="script-row-title">
-              <b>{row.title}</b>
-              {row.favorite ? <Star className="starred" size={17} fill="currentColor" /> : <Star size={17} />}
-              <span>创建时间：{row.created}</span>
+              <b>{item.title}</b>
+              <span>
+                创建时间：{formatDateTime(item.createdAt)}
+                {item.rootOutcomeLabel ? ` · 根结果：${item.rootOutcomeLabel}` : ''}
+              </span>
             </div>
-            <span className={row.status === '进行中' ? 'status-badge running' : 'status-badge done'}>{row.status}</span>
-            <MiniPath values={row.points} />
+            <span className={`status-badge ${scriptStatusClass(item.status)}`}>{scriptStatusLabel(item.status)}</span>
+            <div className="script-row-metrics">
+              <span>价格 <b>{formatUnitPercent(item.rootPrice)}</b></span>
+              <span>24h <b>{formatCompactMoney(item.rootVolume24hr)}</b></span>
+              <span>市场 <b>{item.marketCount}</b></span>
+            </div>
             <div className="row-actions">
-              <ExternalLink size={18} />
-              <Pencil size={18} />
-              <Share2 size={18} />
-              <Trash2 size={18} />
+              {openingScriptId === item.id ? <RotateCw size={18} /> : <ExternalLink size={18} />}
             </div>
           </button>
         ))}
       </div>
-      <div className="pagination">共 28 条 <button type="button">1</button><span>2</span><span>3</span><span>下一页</span></div>
+      {auth.isAuthenticated ? (
+        <div className="pagination">
+          <span>当前 {filteredItems.length} 条</span>
+          {itemsAccessToken === auth.accessToken && itemsStatusFilter === statusFilter && itemsQuery === debouncedQuery && nextCursor ? (
+            <button type="button" onClick={() => void handleLoadMore()} disabled={loadingMore}>
+              {loadingMore ? '加载中' : '更多'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -5054,22 +5394,6 @@ function SummaryList({ market, result }: { market: Market; result: InferenceResu
           <div><b>{title}</b><p>{detail}</p></div>
         </div>
       ))}
-    </div>
-  )
-}
-
-function MiniPath({ values }: { values: number[] }) {
-  return (
-    <div className="mini-path">
-      <svg viewBox="0 0 300 70" aria-hidden="true">
-        <path d="M20 36 C70 8 82 62 130 34 S205 14 252 36" />
-        {values.map((value, index) => (
-          <g key={`${value}-${index}`}>
-            <circle cx={35 + index * 70} cy={36 + (index % 2 ? 7 : -6)} r="9" />
-            <text x={35 + index * 70} y={61 + (index % 2 ? 0 : -38)}>{value}%</text>
-          </g>
-        ))}
-      </svg>
     </div>
   )
 }

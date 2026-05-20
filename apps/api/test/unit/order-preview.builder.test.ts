@@ -135,6 +135,61 @@ describe('buildPreviewOrder', () => {
     expect(order.orderBookRefreshedAt).toBe('2026-05-19T00:00:00.000Z');
   });
 
+  it('uses order book depth instead of the first ask for market order sizing', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'market',
+        amountUsd: 10,
+      },
+      {
+        ...tradableContext,
+        orderBook: {
+          tokenId: 'token_1',
+          bids: [],
+          asks: [
+            { price: 0.4, size: 5 },
+            { price: 0.5, size: 16 },
+          ],
+          tickSize: 0.001,
+          minOrderSize: 2,
+          refreshedAt: '2026-05-19T00:00:00.000Z',
+        },
+        requireFreshOrderBook: true,
+      },
+    );
+
+    expect(order.valid).toBe(true);
+    expect(order.amountUsd).toBe(10);
+    expect(order.size).toBe(21);
+    expect(order.estimatedFillPrice).toBe(0.47619);
+  });
+
+  it('rejects market order previews when order book depth cannot fill the request', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'market',
+        amountUsd: 10,
+      },
+      {
+        ...tradableContext,
+        orderBook: {
+          tokenId: 'token_1',
+          bids: [],
+          asks: [{ price: 0.4, size: 10 }],
+          tickSize: 0.001,
+          minOrderSize: 2,
+          refreshedAt: '2026-05-19T00:00:00.000Z',
+        },
+        requireFreshOrderBook: true,
+      },
+    );
+
+    expect(order.valid).toBe(false);
+    expect(order.error).toBe('ORDERBOOK_DEPTH_UNAVAILABLE');
+  });
+
   it('rejects real-order previews when a fresh order book is required but unavailable', () => {
     const order = buildPreviewOrder(
       {

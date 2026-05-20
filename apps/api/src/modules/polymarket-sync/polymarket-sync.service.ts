@@ -432,7 +432,7 @@ export class PolymarketSyncService {
 
     const orderCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const scriptCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const openOrderStatuses = [CausewayOrderStatus.submitted, CausewayOrderStatus.partially_filled] satisfies CausewayOrderStatus[];
+    const openOrderStatuses = [CausewayOrderStatus.submitted, CausewayOrderStatus.partially_filled, CausewayOrderStatus.unknown] satisfies CausewayOrderStatus[];
     const hotMarketWhere = {
       active: true,
       closed: false,

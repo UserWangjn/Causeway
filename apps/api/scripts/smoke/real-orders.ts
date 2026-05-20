@@ -5,10 +5,11 @@ const ENABLED_ENV = 'SMOKE_REAL_ORDERS_ENABLED';
 const ACK_ENV = 'SMOKE_REAL_ORDERS_ACKNOWLEDGE_RISK';
 const REQUIRED_REAL_ORDER_ENV = [
   'ENABLE_REAL_ORDERS',
-  'POLYMARKET_CLOB_API_KEY',
-  'POLYMARKET_CLOB_API_SECRET',
-  'POLYMARKET_CLOB_API_PASSPHRASE',
-  'POLYMARKET_CLOB_API_ADDRESS',
+  'POLYMARKET_BUILDER_API_KEY',
+  'POLYMARKET_BUILDER_API_SECRET',
+  'POLYMARKET_BUILDER_API_PASSPHRASE',
+  'POLYMARKET_BUILDER_CODE',
+  'CREDENTIAL_ENCRYPTION_KEY',
 ] as const;
 
 export function runRealOrdersSmoke(): SmokeSummary {
@@ -40,7 +41,8 @@ export function runRealOrdersSmoke(): SmokeSummary {
     details: {
       mode: 'preflight_only',
       noOrderSubmitted: true,
-      signatureType: Number(process.env.POLYMARKET_CLOB_SIGNATURE_TYPE ?? 2),
+      signatureType: 3,
+      userCredentials: 'created_or_derived_after_wallet_signature',
     },
   };
 }

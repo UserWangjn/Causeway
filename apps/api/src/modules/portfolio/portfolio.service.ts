@@ -718,6 +718,7 @@ function mapPortfolioOrderStatus(status: string): Prisma.EnumOrderIntentStatusFi
         OrderIntentStatus.user_confirming,
         OrderIntentStatus.submitted,
         OrderIntentStatus.partially_submitted,
+        OrderIntentStatus.unknown,
       ],
     };
   }

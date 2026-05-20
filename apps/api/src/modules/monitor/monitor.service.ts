@@ -84,7 +84,7 @@ export class MonitorService {
         const orders: OrderStatusRefreshRecord[] = await this.prisma.causewayOrder.findMany({
           where: {
             status: {
-              in: ['preview_ready', 'dry_run_completed', 'submitted', 'partially_filled', 'filled', 'cancelled', 'failed'],
+              in: ['preview_ready', 'dry_run_completed', 'submitted', 'partially_filled', 'filled', 'unknown', 'cancelled', 'failed'],
             },
           },
           select: ORDER_STATUS_REFRESH_SELECT,

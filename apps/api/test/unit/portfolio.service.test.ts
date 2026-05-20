@@ -312,6 +312,7 @@ describe('PortfolioService', () => {
               OrderIntentStatus.user_confirming,
               OrderIntentStatus.submitted,
               OrderIntentStatus.partially_submitted,
+              OrderIntentStatus.unknown,
             ],
           },
         },

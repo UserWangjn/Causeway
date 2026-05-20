@@ -81,6 +81,17 @@ const rpcUrlSchema = z.preprocess(
     ])
     .optional(),
 );
+const builderCodeSchema = z.preprocess(
+  (value) => (typeof value === 'string' ? value.trim() : value),
+  z
+    .union([
+      z.literal(''),
+      z.string().regex(/^0x[a-fA-F0-9]{64}$/, {
+        message: 'POLYMARKET_BUILDER_CODE must be a bytes32 hex value',
+      }),
+    ])
+    .optional(),
+);
 
 const envSchema = z
   .object({
@@ -113,6 +124,10 @@ const envSchema = z
     POLYMARKET_CLOB_FUNDER_ADDRESS: z.string().optional().refine((value) => value == null || isEthereumAddress(value), {
       message: 'POLYMARKET_CLOB_FUNDER_ADDRESS must be an Ethereum address',
     }),
+    POLYMARKET_BUILDER_API_KEY: z.string().optional(),
+    POLYMARKET_BUILDER_API_SECRET: z.string().optional(),
+    POLYMARKET_BUILDER_API_PASSPHRASE: z.string().optional(),
+    POLYMARKET_BUILDER_CODE: builderCodeSchema,
     POLYMARKET_DATA_BASE_URL: z.string().url().default('https://data-api.polymarket.com'),
     POLYMARKET_DATA_API_ENABLED: z.enum(['true', 'false']).default('true'),
     POLYMARKET_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
@@ -135,6 +150,7 @@ const envSchema = z
     AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(16_000).default(4_000),
     ENABLE_REAL_ORDERS: z.enum(['true', 'false']).default('false'),
     DRY_RUN: z.enum(['true', 'false']).default('true'),
+    CREDENTIAL_ENCRYPTION_KEY: z.string().optional(),
     INTERNAL_API_TOKEN: z.string().optional(),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'log', 'debug', 'verbose', 'silent']).default('log'),
     LOG_HTTP_REQUESTS: z.enum(['true', 'false']).default('true'),
@@ -146,6 +162,28 @@ const envSchema = z
     RATE_LIMIT_INTERNAL_MAX: z.coerce.number().int().positive().default(300),
   })
   .superRefine((value, ctx) => {
+    if (value.ENABLE_REAL_ORDERS === 'true') {
+      for (const key of [
+        'POLYMARKET_BUILDER_API_KEY',
+        'POLYMARKET_BUILDER_API_SECRET',
+        'POLYMARKET_BUILDER_API_PASSPHRASE',
+        'POLYMARKET_BUILDER_CODE',
+        'CREDENTIAL_ENCRYPTION_KEY',
+      ] as const) {
+        if (!value[key]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when ENABLE_REAL_ORDERS=true`,
+          });
+        }
+      }
+
+      if (value.CREDENTIAL_ENCRYPTION_KEY) {
+        addCredentialEncryptionKeyIssues(value.CREDENTIAL_ENCRYPTION_KEY, ctx);
+      }
+    }
+
     if (value.NODE_ENV !== 'production') {
       return;
     }
@@ -193,23 +231,6 @@ const envSchema = z
         message: 'AUTH_POLYGON_RPC_URL must use https in production',
       });
     }
-
-    if (value.ENABLE_REAL_ORDERS === 'true') {
-      for (const key of [
-        'POLYMARKET_CLOB_API_KEY',
-        'POLYMARKET_CLOB_API_SECRET',
-        'POLYMARKET_CLOB_API_PASSPHRASE',
-        'POLYMARKET_CLOB_API_ADDRESS',
-      ] as const) {
-        if (!value[key]) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [key],
-            message: `${key} is required when ENABLE_REAL_ORDERS=true`,
-          });
-        }
-      }
-    }
   });
 
 export function validateEnv(config: Record<string, unknown>) {
@@ -246,6 +267,48 @@ function addProductionSecretIssues(
       message: `${path} must not use a low-entropy repeated value in production`,
     });
   }
+}
+
+function addCredentialEncryptionKeyIssues(value: string, ctx: z.RefinementCtx): void {
+  const path = 'CREDENTIAL_ENCRYPTION_KEY';
+  const trimmed = value.trim();
+  if (isPlaceholderSecret(trimmed)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [path],
+      message: `${path} must not use a placeholder value when real orders are enabled`,
+    });
+    return;
+  }
+
+  if (isValidCredentialKeyMaterial(trimmed)) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: [path],
+    message: `${path} must be a 32-byte base64/base64url value, 64-character hex value, or high-entropy passphrase of at least ${MIN_PRODUCTION_SECRET_LENGTH} characters when real orders are enabled`,
+  });
+}
+
+function isValidCredentialKeyMaterial(value: string): boolean {
+  if (/^[a-fA-F0-9]{64}$/.test(value)) return !isLowEntropySecret(value);
+
+  const normalizedBase64 = value.replace(/-/g, '+').replace(/_/g, '/');
+  if (/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) {
+    const padded = normalizedBase64.padEnd(Math.ceil(normalizedBase64.length / 4) * 4, '=');
+    try {
+      const decoded = Buffer.from(padded, 'base64');
+      if (decoded.length === 32 && !isLowEntropyBuffer(decoded)) return true;
+    } catch {
+      // Fall through to passphrase validation.
+    }
+  }
+
+  return value.length >= MIN_PRODUCTION_SECRET_LENGTH && !isLowEntropySecret(value);
+}
+
+function isLowEntropyBuffer(value: Buffer): boolean {
+  return new Set(value).size < 8;
 }
 
 function isPlaceholderSecret(value: string): boolean {

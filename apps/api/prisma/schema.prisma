@@ -89,6 +89,7 @@ enum OrderIntentStatus {
   dry_run_completed
   submitted
   partially_submitted
+  unknown
   failed
   cancelled
 }
@@ -99,6 +100,7 @@ enum CausewayOrderStatus {
   submitted
   partially_filled
   filled
+  unknown
   cancelled
   failed
 }
@@ -121,9 +123,56 @@ model User {
   scripts          CausalScript[]
   orderIntents     OrderIntent[]
   orderSubmissions OrderSubmission[]
+  polymarketAccount UserPolymarketAccount?
+  polymarketAuthChallenges PolymarketAuthChallenge[]
   portfolioSnapshots PortfolioSnapshot[]
   positions        ExternalPosition[]
   auditEvents      AuditEvent[]
+}
+
+model UserPolymarketAccount {
+  id                         String   @id @default(uuid())
+  userId                     String   @unique
+  walletAddress              String
+  chainId                    Int
+  signatureType              Int      @default(3)
+  clobApiKeyCiphertext       String?
+  clobApiSecretCiphertext    String?
+  clobApiPassphraseCiphertext String?
+  clobApiKeyPreview          String?
+  clobApiCreatedAt           DateTime?
+  depositWalletAddress       String?
+  depositWalletDeployed      Boolean  @default(false)
+  depositWalletTxId          String?
+  depositWalletTxState       String?
+  balanceRaw                 String?
+  allowanceJson              Json?
+  readinessStatus            String   @default("not_ready")
+  readinessReason            String?
+  lastReadinessCheckedAt     DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  user                       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([walletAddress, chainId])
+  @@index([readinessStatus, updatedAt(sort: Desc)])
+}
+
+model PolymarketAuthChallenge {
+  id            String    @id @default(uuid())
+  userId        String
+  walletAddress String
+  chainId       Int
+  timestamp     Int
+  nonce         Int
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime  @default(now())
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, walletAddress, chainId, timestamp, nonce])
+  @@index([expiresAt])
+  @@index([usedAt])
 }
 
 model WalletSession {

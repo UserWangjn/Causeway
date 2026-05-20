@@ -529,7 +529,7 @@ describe('PolymarketSyncService', () => {
     expect(causewayOrderFindMany).toHaveBeenNthCalledWith(1, expect.objectContaining({
       where: expect.objectContaining({
         status: {
-          in: ['submitted', 'partially_filled'],
+          in: ['submitted', 'partially_filled', 'unknown'],
         },
       }) as object,
     }));

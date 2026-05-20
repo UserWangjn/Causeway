@@ -35,6 +35,12 @@ export const configuration = () => ({
       signatureType: Number(process.env.POLYMARKET_CLOB_SIGNATURE_TYPE ?? 2),
       funderAddress: process.env.POLYMARKET_CLOB_FUNDER_ADDRESS,
     },
+    builder: {
+      apiKey: process.env.POLYMARKET_BUILDER_API_KEY,
+      secret: process.env.POLYMARKET_BUILDER_API_SECRET,
+      passphrase: process.env.POLYMARKET_BUILDER_API_PASSPHRASE,
+      code: process.env.POLYMARKET_BUILDER_CODE,
+    },
     dataBaseUrl: process.env.POLYMARKET_DATA_BASE_URL ?? 'https://data-api.polymarket.com',
     dataApi: {
       enabled: process.env.POLYMARKET_DATA_API_ENABLED !== 'false',
@@ -65,6 +71,9 @@ export const configuration = () => ({
   orders: {
     enableRealOrders: process.env.ENABLE_REAL_ORDERS === 'true',
     dryRun: process.env.DRY_RUN !== 'false',
+  },
+  security: {
+    credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,
   },
   internal: {
     apiToken: process.env.INTERNAL_API_TOKEN,

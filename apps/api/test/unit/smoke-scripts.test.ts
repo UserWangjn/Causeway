@@ -9,11 +9,11 @@ const SMOKE_ENV_KEYS = [
   'SMOKE_REAL_ORDERS_ENABLED',
   'SMOKE_REAL_ORDERS_ACKNOWLEDGE_RISK',
   'ENABLE_REAL_ORDERS',
-  'POLYMARKET_CLOB_API_KEY',
-  'POLYMARKET_CLOB_API_SECRET',
-  'POLYMARKET_CLOB_API_PASSPHRASE',
-  'POLYMARKET_CLOB_API_ADDRESS',
-  'POLYMARKET_CLOB_SIGNATURE_TYPE',
+  'POLYMARKET_BUILDER_API_KEY',
+  'POLYMARKET_BUILDER_API_SECRET',
+  'POLYMARKET_BUILDER_API_PASSPHRASE',
+  'POLYMARKET_BUILDER_CODE',
+  'CREDENTIAL_ENCRYPTION_KEY',
 ] as const;
 
 describe('smoke script safety boundaries', () => {
@@ -86,11 +86,11 @@ describe('smoke script safety boundaries', () => {
     process.env.SMOKE_REAL_ORDERS_ENABLED = 'true';
     process.env.SMOKE_REAL_ORDERS_ACKNOWLEDGE_RISK = 'true';
     process.env.ENABLE_REAL_ORDERS = 'true';
-    process.env.POLYMARKET_CLOB_API_KEY = 'api-key';
-    process.env.POLYMARKET_CLOB_API_SECRET = 'api-secret';
-    process.env.POLYMARKET_CLOB_API_PASSPHRASE = 'api-passphrase';
-    process.env.POLYMARKET_CLOB_API_ADDRESS = '0x1111111111111111111111111111111111111111';
-    process.env.POLYMARKET_CLOB_SIGNATURE_TYPE = '2';
+    process.env.POLYMARKET_BUILDER_API_KEY = 'builder-key';
+    process.env.POLYMARKET_BUILDER_API_SECRET = 'builder-secret';
+    process.env.POLYMARKET_BUILDER_API_PASSPHRASE = 'builder-passphrase';
+    process.env.POLYMARKET_BUILDER_CODE = '0xf18c6de717677d70556d13aa36f896763a78e6ed141337e6c064fbc054878a6d';
+    process.env.CREDENTIAL_ENCRYPTION_KEY = 'credential-encryption-key-32-characters';
 
     expect(runRealOrdersSmoke()).toEqual({
       name: 'real-orders',
@@ -98,7 +98,8 @@ describe('smoke script safety boundaries', () => {
       details: {
         mode: 'preflight_only',
         noOrderSubmitted: true,
-        signatureType: 2,
+        signatureType: 3,
+        userCredentials: 'created_or_derived_after_wallet_signature',
       },
     });
     expect(globalThis.fetch).not.toHaveBeenCalled();

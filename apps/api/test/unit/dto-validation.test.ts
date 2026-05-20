@@ -13,6 +13,7 @@ import { OrderPreviewDto } from '../../src/modules/orders/dto/order-preview.dto'
 import { SubmitOrderDto } from '../../src/modules/orders/dto/submit-order.dto';
 import { PortfolioOrdersQueryDto } from '../../src/modules/portfolio/dto/portfolio-orders-query.dto';
 import { PortfolioTradesQueryDto } from '../../src/modules/portfolio/dto/portfolio-trades-query.dto';
+import { ListScriptsQueryDto } from '../../src/modules/scripts/dto/list-scripts-query.dto';
 import { ScriptIdParamDto, ScriptSelectionParamDto } from '../../src/modules/scripts/dto/script-route.dto';
 import { UpdateOutcomeSelectionDto } from '../../src/modules/scripts/dto/update-outcome-selection.dto';
 
@@ -46,6 +47,12 @@ describe('DTO validation boundaries', () => {
       idempotencyKey: '00000000-0000-4000-8000-000000000001',
       signedOrders: [],
     });
+    await expectValid(ListScriptsQueryDto, {
+      limit: 20,
+      cursor: 'cursor-token',
+      status: 'draft',
+      q: 'market keyword',
+    });
   });
 
   it('rejects oversized freeform request fields before they reach services', async () => {
@@ -76,6 +83,12 @@ describe('DTO validation boundaries', () => {
     });
     await expectInvalid(PortfolioTradesQueryDto, {
       cursor: 'x'.repeat(2049),
+    });
+    await expectInvalid(ListScriptsQueryDto, {
+      limit: 51,
+      cursor: 'x'.repeat(2049),
+      status: 'submitted',
+      q: 'x'.repeat(201),
     });
   });
 

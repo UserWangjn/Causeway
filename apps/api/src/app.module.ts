@@ -17,6 +17,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { PolymarketSyncModule } from './modules/polymarket-sync/polymarket-sync.module';
 import { PortfolioModule } from './modules/portfolio/portfolio.module';
 import { ScriptsModule } from './modules/scripts/scripts.module';
+import { TradingModule } from './modules/trading/trading.module';
 import { WalletModule } from './modules/wallet/wallet.module';
 
 @Module({
@@ -38,6 +39,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     PolymarketSyncModule,
     InferenceModule,
     ScriptsModule,
+    TradingModule,
     OrdersModule,
     PortfolioModule,
     MonitorModule,
