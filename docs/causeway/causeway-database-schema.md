@@ -250,6 +250,8 @@ model PolymarketMarket {
 }
 ```
 
+`rules` 存储前端可展示的规则/结算说明。Polymarket Gamma 当前大量市场没有独立 `rules` 字段，入库时会优先使用显式规则字段，没有时回填 `description`，并保留完整 `rawPayload` 便于后续字段升级。
+
 ### 5.3 `PolymarketOutcome`
 
 `outcomeIndex` 必须对应 Gamma 返回的 `outcomes/outcomePrices/clobTokenIds` 数组下标。

@@ -224,6 +224,11 @@ type MarketDetail = MarketListItem & {
 };
 ```
 
+字段语义：
+
+- `description`：Polymarket Gamma 返回的原始市场说明。
+- `rules`：前端可直接展示的规则/结算说明。Gamma 未提供独立 `rules` 字段时，后端使用 `description` 兜底，避免详情页出现空规则。
+
 ### `GET /markets/by-slug/:slug`
 
 用于前端 `/markets/:marketSlug` 路由解析，响应结构同 `GET /markets/:marketId`。

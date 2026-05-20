@@ -2757,6 +2757,7 @@ function MarketDetail({
   const displayMarket = selectedEventMarket
   const detailMarkets = eventMarkets.length > 1 ? eventMarkets : [selectedEventMarket]
   const ruleCopy = marketRuleCopy(displayMarket)
+  const descriptionCopy = marketDescriptionCopy(displayMarket)
   const primaryMarket = [...detailMarkets].sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))[0] || market
   return (
     <section className="page market-detail-page">
@@ -2810,10 +2811,10 @@ function MarketDetail({
 
         <aside className="market-detail-side">
           <Card className="market-side-card">
-            <SectionHeader title="市场描述" />
+            <SectionHeader title="规则说明" />
             <div className="market-rule-copy">
-              <p>{marketDescriptionCopy(displayMarket)}</p>
-              {ruleCopy !== marketDescriptionCopy(displayMarket) ? <p>{ruleCopy}</p> : null}
+              <p>{descriptionCopy}</p>
+              {ruleCopy !== descriptionCopy ? <p>{ruleCopy}</p> : null}
             </div>
           </Card>
           <Card className="market-side-card">

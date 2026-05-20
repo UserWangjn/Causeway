@@ -426,11 +426,15 @@ describe('MarketsService', () => {
       event: {
         id: 'event_1',
         title: 'Parent Event Title',
+        description: 'Parent event description',
+        rules: 'Parent event description',
       },
       selectedMarket: {
         id: 'market_1',
         title: 'Will selected market resolve?',
         eventTitle: 'Parent Event Title',
+        description: 'Selected market description',
+        rules: 'Selected market description',
       },
       markets: [
         {

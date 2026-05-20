@@ -65,6 +65,7 @@ export function normalizeGammaMarket(payload: Record<string, unknown>): Normaliz
   const slug = readString(payload, ['slug']) ?? (externalMarketId ? `market-${externalMarketId}` : null);
   const question = readString(payload, ['question', 'title']);
   const outcomes = normalizeOutcomes(payload);
+  const description = readString(payload, ['description']);
 
   if (!slug || !question || !outcomes.length) {
     return null;
@@ -76,8 +77,8 @@ export function normalizeGammaMarket(payload: Record<string, unknown>): Normaliz
     questionId: readString(payload, ['questionID', 'questionId']),
     slug,
     question,
-    description: readString(payload, ['description']),
-    rules: readString(payload, ['rules']),
+    description,
+    rules: readMarketRules(payload, description),
     image: readString(payload, ['image']),
     icon: readString(payload, ['icon']),
     active: readBoolean(payload.active, true),
@@ -192,6 +193,17 @@ function readString(payload: Record<string, unknown>, keys: string[]): string | 
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return null;
+}
+
+function readMarketRules(payload: Record<string, unknown>, description: string | null): string | null {
+  return readString(payload, [
+    'rules',
+    'resolutionRules',
+    'resolutionCriteria',
+    'resolutionCriteriaText',
+    'resolution_criteria',
+    'resolution_rules',
+  ]) ?? description;
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {

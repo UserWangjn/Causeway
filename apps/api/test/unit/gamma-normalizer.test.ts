@@ -40,4 +40,35 @@ describe('normalizeGammaMarket', () => {
     expect(normalizeGammaMarket(payload)).toBeNull();
     expect(getGammaMarketSkipReason(payload)).toBe('missing_outcomes');
   });
+
+  it('uses Gamma description as display rules when explicit rules are missing', () => {
+    const market = normalizeGammaMarket({
+      id: '123',
+      slug: 'sample-market',
+      question: 'Will this test expose rules?',
+      description: 'This market resolves according to the official final result.',
+      outcomes: '["Yes","No"]',
+      outcomePrices: '["0.4","0.6"]',
+      clobTokenIds: '["token_yes","token_no"]',
+    });
+
+    expect(market?.description).toBe('This market resolves according to the official final result.');
+    expect(market?.rules).toBe('This market resolves according to the official final result.');
+  });
+
+  it('keeps explicit Gamma rules ahead of the description', () => {
+    const market = normalizeGammaMarket({
+      id: '123',
+      slug: 'sample-market',
+      question: 'Will this test keep explicit rules?',
+      description: 'General market description.',
+      rules: 'Explicit resolution criteria.',
+      outcomes: '["Yes","No"]',
+      outcomePrices: '["0.4","0.6"]',
+      clobTokenIds: '["token_yes","token_no"]',
+    });
+
+    expect(market?.description).toBe('General market description.');
+    expect(market?.rules).toBe('Explicit resolution criteria.');
+  });
 });

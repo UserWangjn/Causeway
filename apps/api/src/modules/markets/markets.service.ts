@@ -797,13 +797,14 @@ export class MarketsService {
     market: MarketDetailRecord,
   ) {
     const listItem = this.formatMarketListItem(market);
+    const description = firstNonBlankText(market.description);
     return {
       ...listItem,
       externalMarketId: market.externalMarketId,
       conditionId: market.conditionId,
       questionId: market.questionId,
-      description: market.description,
-      rules: market.rules,
+      description,
+      rules: firstNonBlankText(market.rules, description),
       archived: market.archived,
       negRisk: market.negRisk,
       orderMinSize: toNullableNumber(market.orderMinSize),
@@ -865,6 +866,12 @@ export class MarketsService {
         ? markets[selectedMarketIndex]
         : this.formatExplorerMarketNode(selectedMarket, 0)
       : null;
+    const eventDescription = firstNonBlankText(event.description);
+    const eventRules = firstNonBlankText(
+      eventDescription,
+      selectedMarketNode?.rules,
+      markets.find((market) => market.rules)?.rules,
+    );
     return {
       event: {
         id: event.id,
@@ -880,8 +887,8 @@ export class MarketsService {
         volume: toNullableNumber(event.volume),
         volume24hr: null,
         liquidity: toNullableNumber(event.liquidity),
-        description: event.description,
-        rules: null,
+        description: eventDescription,
+        rules: eventRules,
         marketsCount: event.markets.length,
         syncedAt: event.syncedAt.toISOString(),
       },
@@ -899,6 +906,7 @@ export class MarketsService {
       market.event?.title,
       market.event?.slug,
     ]);
+    const description = firstNonBlankText(market.description);
     return {
       id: market.id,
       slug: market.slug,
@@ -918,8 +926,8 @@ export class MarketsService {
       volume24hr: toNullableNumber(market.volume24hr),
       liquidity: toNullableNumber(market.liquidity),
       endDate: market.endDate?.toISOString() ?? null,
-      description: market.description,
-      rules: market.rules,
+      description,
+      rules: firstNonBlankText(market.rules, description),
       acceptingOrders: market.acceptingOrders,
       outcomes: market.outcomes.map((outcome) => ({
         outcomeId: outcome.id,
@@ -1139,6 +1147,14 @@ function isValidMarketCursorValue(sort: MarketSort, value: unknown): value is st
 function trimToUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function firstNonBlankText(...values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
 }
 
 function normalizeCategoryFilter(value: string | undefined): string | undefined {
