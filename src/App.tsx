@@ -4586,9 +4586,10 @@ function MarketOrderBook({
                 className="buy-yes orderbook-order-button"
                 disabled={loading || pendingOrderId != null || outcome.market.acceptingOrders === false || !outcome.outcomeId}
                 type="button"
+                aria-label={`下单 ${outcome.label} ${formatCents(outcome.ask)}`}
                 onClick={() => void handleOrder(outcome)}
               >
-                {pendingOrderId === outcome.id ? 'Creating...' : `Order ${outcome.label} ${formatCents(outcome.ask)}`}
+                {pendingOrderId === outcome.id ? '创建中...' : `下单 ${formatCents(outcome.ask)}`}
               </button>
             </div>
           )

@@ -2205,10 +2205,14 @@ button {
 
 .buy-yes,
 .buy-no {
-  height: 46px;
+  min-height: 46px;
+  padding: 0 14px;
   border: 0;
   border-radius: 8px;
+  font-size: 14px;
   font-weight: 820;
+  line-height: 1.15;
+  white-space: nowrap;
 }
 
 .buy-yes {
