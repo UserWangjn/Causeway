@@ -6,6 +6,7 @@ export type AiClientCapability = {
   status: 'available' | 'unavailable';
   reason: string | null;
   model: string | null;
+  models: string[];
 };
 
 export type AiStructuredPrompt = {
@@ -29,13 +30,15 @@ export class AiClientService {
         status: 'unavailable',
         reason: settingsResult.reason,
         model: null,
+        models: [],
       };
     }
 
     return {
       status: 'available',
       reason: null,
-      model: settingsResult.settings.model,
+      model: settingsResult.settings.defaultModel,
+      models: settingsResult.settings.allowedModels,
     };
   }
 
@@ -57,12 +60,13 @@ export class AiClientService {
       );
     }
     const settings = settingsResult.settings;
-    if (options.model && options.model !== settings.model) {
+    const model = options.model?.trim() || settings.defaultModel;
+    if (!settings.allowedModels.includes(model)) {
       throw new ApiException(
         HttpStatus.SERVICE_UNAVAILABLE,
         'CAPABILITY_UNAVAILABLE',
-        `AI model ${options.model} is not configured`,
-        { configuredModel: settings.model },
+        `AI model ${model} is not configured`,
+        { configuredModel: settings.defaultModel, allowedModels: settings.allowedModels },
       );
     }
 
@@ -82,14 +86,14 @@ export class AiClientService {
           'content-type': 'application/json',
           'user-agent': 'causeway-api/0.1',
         },
-        body: JSON.stringify(buildChatCompletionRequest(settings, options.prompt ?? buildDefaultStructuredPrompt(input))),
+        body: JSON.stringify(buildChatCompletionRequest(settings, model, options.prompt ?? buildDefaultStructuredPrompt(input))),
         signal: controller.signal,
       });
 
       if (!response.ok) {
         throw new ApiException(HttpStatus.BAD_GATEWAY, 'AI_PROVIDER_ERROR', 'AI provider request failed', {
           status: response.status,
-          model: settings.model,
+          model,
           endpoint: redactUrl(endpoint),
         });
       }
@@ -99,7 +103,7 @@ export class AiClientService {
     } catch (error) {
       if (error instanceof ApiException) throw error;
       throw new ApiException(HttpStatus.BAD_GATEWAY, 'AI_PROVIDER_ERROR', 'AI provider request failed', {
-        model: settings.model,
+        model,
         endpoint: redactUrl(endpoint),
         cause: summarizeError(error),
       });
@@ -111,9 +115,9 @@ export class AiClientService {
   private readSettings(): AiClientSettingsResult {
     const baseUrl = this.config.get<string>('ai.baseUrl')?.trim();
     const apiKey = this.config.get<string>('ai.apiKey')?.trim();
-    const model = this.config.get<string>('ai.model')?.trim();
+    const defaultModel = this.config.get<string>('ai.model')?.trim();
     const nodeEnv = this.config.get<string>('NODE_ENV') ?? process.env.NODE_ENV ?? 'development';
-    if (!baseUrl || !apiKey || !model) {
+    if (!baseUrl || !apiKey || !defaultModel) {
       return { ok: false, reason: 'AI inference client is not configured' };
     }
 
@@ -127,7 +131,8 @@ export class AiClientService {
       settings: {
         endpoint,
         apiKey,
-        model,
+        defaultModel,
+        allowedModels: readAllowedModels(this.config.get<string>('ai.allowedModels'), defaultModel),
         thinkingMode: this.config.get<string>('ai.thinkingMode')?.trim() || undefined,
         timeoutMs: this.config.get<number>('ai.httpTimeoutMs', 30_000),
         maxOutputTokens: this.config.get<number>('ai.maxOutputTokens', 4_000),
@@ -149,15 +154,25 @@ type AiClientSettingsResult =
 type AiClientSettings = {
   endpoint: URL;
   apiKey: string;
-  model: string;
+  defaultModel: string;
+  allowedModels: string[];
   thinkingMode?: string;
   timeoutMs: number;
   maxOutputTokens: number;
 };
 
-function buildChatCompletionRequest(settings: AiClientSettings, prompt: AiStructuredPrompt): Record<string, unknown> {
+function readAllowedModels(rawValue: string | undefined, defaultModel: string): string[] {
+  const models = new Set<string>([defaultModel]);
+  for (const value of (rawValue ?? '').split(',')) {
+    const model = value.trim();
+    if (model) models.add(model);
+  }
+  return [...models];
+}
+
+function buildChatCompletionRequest(settings: AiClientSettings, model: string, prompt: AiStructuredPrompt): Record<string, unknown> {
   const request: Record<string, unknown> = {
-    model: settings.model,
+    model,
     temperature: 0.1,
     max_tokens: settings.maxOutputTokens,
     response_format: { type: 'json_object' },

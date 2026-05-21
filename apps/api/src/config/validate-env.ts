@@ -145,6 +145,7 @@ const envSchema = z
     AI_BASE_URL: aiBaseUrlSchema,
     AI_API_KEY: z.string().optional(),
     AI_MODEL: z.string().optional(),
+    AI_ALLOWED_MODELS: z.string().optional(),
     AI_THINKING_MODE: z.union([z.literal(''), z.enum(['enabled', 'disabled'])]).optional(),
     AI_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(16_000).default(4_000),

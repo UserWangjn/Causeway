@@ -324,10 +324,12 @@ describe('ClobClient', () => {
     ], userClobCredentials());
 
     const options = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string>; body: string };
-    const postedBody = JSON.parse(options.body) as Array<{ owner: string; order: { signature: string; signatureType: number; builder: string } }>;
+    const postedBody = JSON.parse(options.body) as Array<{ owner: string; order: { salt: unknown; signature: string; signatureType: number; builder: string } }>;
     expect(options.headers.POLY_ADDRESS).toBe('0x1111111111111111111111111111111111111111');
     expect(options.headers.POLY_API_KEY).toBe('user-api-key');
     expect(postedBody[0]?.owner).toBe('user-api-key');
+    expect(typeof postedBody[0]?.order.salt).toBe('number');
+    expect(Number.isSafeInteger(postedBody[0]?.order.salt)).toBe(true);
     expect(postedBody[0]?.order.signatureType).toBe(3);
     expect(postedBody[0]?.order.builder).toBe(`0x${'f'.repeat(64)}`);
     expect(postedBody[0]?.order.signature).not.toBe(walletSignature);
@@ -380,10 +382,13 @@ describe('ClobClient', () => {
     const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
     expect(requestedUrl.pathname).toBe('/orders');
     const options = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string>; body: string };
+    const postedBody = JSON.parse(options.body) as Array<{ order: { salt: unknown; tokenId: string; signature: string; signatureType: number } }>;
     expect(options.headers.POLY_ADDRESS).toBe('0x3333333333333333333333333333333333333333');
     expect(options.headers.POLY_API_KEY).toBe('test-api-key');
     expect(options.headers.POLY_SIGNATURE).toBeTruthy();
-    expect(JSON.parse(options.body)).toMatchObject([
+    expect(typeof postedBody[0]?.order.salt).toBe('number');
+    expect(Number.isSafeInteger(postedBody[0]?.order.salt)).toBe(true);
+    expect(postedBody).toMatchObject([
       {
         owner: 'test-api-key',
         orderType: 'FOK',
@@ -394,6 +399,47 @@ describe('ClobClient', () => {
         },
       },
     ]);
+  });
+
+  it('rejects obsolete prepared CLOB orders with non-JSON-safe salts before posting', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true, withCreds: true }));
+    const [preparedOrder] = client.prepareSignaturePayloads([
+      {
+        orderId: 'order_1',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        funderAddress: '0x2222222222222222222222222222222222222222',
+        chainId: 137,
+        tokenId: '123456789',
+        side: 'BUY',
+        orderMode: 'market',
+        orderType: null,
+        limitPrice: null,
+        estimatedFillPrice: 0.5,
+        size: 20,
+        amountUsd: 10,
+        tickSize: 0.01,
+        negRisk: false,
+      },
+    ], new Date(Date.now() + 60_000));
+    preparedOrder.order.salt = '48000363872919644534630203621789430944777931323977526149791572903677956210993';
+
+    await expect(client.postSignedOrders([
+      {
+        preparedOrder,
+        signature: `0x${'a'.repeat(130)}`,
+      },
+    ])).rejects.toMatchObject({
+      response: {
+        code: 'ORDER_INTENT_NOT_SUBMITTABLE',
+        details: {
+          orderId: 'order_1',
+          saltLength: 77,
+        },
+      },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('refreshes and reads CLOB balance allowance with the requested signature type', async () => {

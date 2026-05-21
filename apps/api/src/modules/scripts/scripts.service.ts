@@ -34,6 +34,20 @@ const SCRIPT_MARKET_SELECT = Prisma.validator<Prisma.ScriptMarketSelect>()({
   market: {
     select: {
       question: true,
+      eventId: true,
+      event: {
+        select: {
+          id: true,
+          slug: true,
+          title: true,
+        },
+      },
+      active: true,
+      closed: true,
+      archived: true,
+      staleDetectedAt: true,
+      acceptingOrders: true,
+      enableOrderBook: true,
       icon: true,
       image: true,
       orderMinSize: true,
@@ -115,6 +129,14 @@ const SCRIPT_LIST_SELECT = Prisma.validator<Prisma.CausalScriptSelect>()({
       market: {
         select: {
           question: true,
+          eventId: true,
+          event: {
+            select: {
+              id: true,
+              slug: true,
+              title: true,
+            },
+          },
           icon: true,
           image: true,
           bestAsk: true,
@@ -138,6 +160,13 @@ const DIRECT_ORDER_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelec
   id: true,
   eventId: true,
   question: true,
+  event: {
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+    },
+  },
   active: true,
   closed: true,
   archived: true,
@@ -225,10 +254,19 @@ export class ScriptsService {
         scriptMarketId: scriptMarket.id,
         marketId: scriptMarket.marketId,
         title: scriptMarket.market.question,
+        eventId: scriptMarket.market.event?.id ?? scriptMarket.market.eventId ?? null,
+        eventSlug: scriptMarket.market.event?.slug ?? null,
+        eventTitle: scriptMarket.market.event?.title ?? null,
         layer: scriptMarket.layer,
         impactDirection: scriptMarket.impactDirection,
         confidence: toNullableNumber(scriptMarket.confidence),
         reason: scriptMarket.reason,
+        active: scriptMarket.market.active,
+        closed: scriptMarket.market.closed,
+        archived: scriptMarket.market.archived,
+        staleDetectedAt: scriptMarket.market.staleDetectedAt?.toISOString() ?? null,
+        acceptingOrders: scriptMarket.market.acceptingOrders,
+        enableOrderBook: scriptMarket.market.enableOrderBook,
         icon: scriptMarket.market.icon,
         image: scriptMarket.market.image,
         orderMinSize: toNullableNumber(scriptMarket.market.orderMinSize),
@@ -531,6 +569,9 @@ function formatScriptListItem(script: ListedScript, rootOutcome: ListedRootOutco
   return {
     id: script.id,
     title: rootMarket?.question ?? script.title,
+    rootEventId: rootMarket?.event?.id ?? rootMarket?.eventId ?? null,
+    rootEventSlug: rootMarket?.event?.slug ?? null,
+    rootEventTitle: rootMarket?.event?.title ?? null,
     status: script.status,
     summary: script.summary,
     rootMarketId: script.rootMarketId,
@@ -668,6 +709,14 @@ function formatScriptGraph(
 ): ScriptGraphResponse {
   const graph = isRecord(graphJson) ? graphJson : {};
   const marketTitleById = new Map(markets.map((scriptMarket) => [scriptMarket.marketId, scriptMarket.market.question]));
+  const marketEventById = new Map(markets.map((scriptMarket) => [
+    scriptMarket.marketId,
+    {
+      eventId: scriptMarket.market.event?.id ?? scriptMarket.market.eventId ?? null,
+      eventSlug: scriptMarket.market.event?.slug ?? null,
+      eventTitle: scriptMarket.market.event?.title ?? null,
+    },
+  ]));
   const outcomeById = new Map(
     markets.flatMap((scriptMarket) =>
       scriptMarket.market.outcomes.map((outcome) => [
@@ -689,7 +738,7 @@ function formatScriptGraph(
       outcomeId: readString(graphRoot.outcomeId) ?? rootOutcomeId,
       outcomeLabel: readString(graphRoot.outcomeLabel) ?? rootOutcome?.label ?? '',
     },
-    nodes: readArray(graph.nodes).map((node) => formatGraphNode(node, marketTitleById, outcomeById)),
+    nodes: readArray(graph.nodes).map((node) => formatGraphNode(node, marketTitleById, marketEventById, outcomeById)),
     edges: readArray(graph.edges).map(formatGraphEdge),
   };
 }
@@ -697,6 +746,7 @@ function formatScriptGraph(
 function formatGraphNode(
   value: unknown,
   marketTitleById: Map<string, string>,
+  marketEventById: Map<string, { eventId: string | null; eventSlug: string | null; eventTitle: string | null }>,
   outcomeById: Map<string, { label: string; tokenId: string; price: number | null }>,
 ): Record<string, unknown> {
   const node = isRecord(value) ? value : {};
@@ -711,6 +761,9 @@ function formatGraphNode(
     nodeId: readString(node.nodeId) ?? '',
     marketId,
     title: marketTitleById.get(marketId) ?? '',
+    eventId: marketEventById.get(marketId)?.eventId ?? null,
+    eventSlug: marketEventById.get(marketId)?.eventSlug ?? null,
+    eventTitle: marketEventById.get(marketId)?.eventTitle ?? null,
     layer: readNumber(node.layer) ?? 0,
     recommendedOutcomes,
     confidence: readNumber(node.confidence) ?? 0,

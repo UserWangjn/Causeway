@@ -38,6 +38,7 @@ const MAX_AI_RAW_CONTENT_AUDIT_CHARS = 8_000;
 const SCRIPT_PERSIST_TRANSACTION_MAX_WAIT_MS = 5_000;
 const SCRIPT_PERSIST_TRANSACTION_TIMEOUT_MS = 20_000;
 const DEFAULT_SCRIPT_BUY_AMOUNT_USD = '10';
+const AUTO_INFERENCE_MODEL = 'auto';
 
 const CANDIDATE_MARKET_INCLUDE = {
   event: true,
@@ -69,36 +70,31 @@ export class InferenceService implements OnModuleDestroy {
     this.isShuttingDown = true;
   }
 
-  async createRun(user: CurrentUser, dto: CreateInferenceRunDto) {
-    if (dto.model !== MOCK_INFERENCE_MODEL) {
-      const capability = this.aiClient.getCapability();
-      if (capability.status !== 'available') {
-        throw new ApiException(
-          HttpStatus.SERVICE_UNAVAILABLE,
-          'CAPABILITY_UNAVAILABLE',
-          capability.reason ?? 'AI inference client is unavailable',
-        );
-      }
-      if (capability.model !== dto.model) {
-        throw new ApiException(
-          HttpStatus.SERVICE_UNAVAILABLE,
-          'CAPABILITY_UNAVAILABLE',
-          `AI model ${dto.model} is not configured`,
-          { configuredModel: capability.model },
-        );
-      }
-    }
+  getCapability() {
+    const capability = this.aiClient.getCapability();
+    return {
+      status: capability.status,
+      reason: capability.reason,
+      defaultModel: capability.model,
+      models: capability.models,
+      mockModel: MOCK_INFERENCE_MODEL,
+    };
+  }
 
-    const root = await this.loadRootMarket(dto.rootMarketId, dto.rootOutcomeId);
-    const candidateMarkets = await this.loadCandidateMarkets(root.market, dto);
-    const promptInput = fitPromptInputToBudget(buildPromptInput(root, candidateMarkets, dto));
+  async createRun(user: CurrentUser, dto: CreateInferenceRunDto) {
+    const resolvedDto = { ...dto, model: this.resolveRequestedModel(dto.model) };
+
+    const root = await this.loadRootMarket(resolvedDto.rootMarketId, resolvedDto.rootOutcomeId);
+    const candidateMarkets = await this.loadCandidateMarkets(root.market, resolvedDto);
+    const promptInput = fitPromptInputToBudget(buildPromptInput(root, candidateMarkets, resolvedDto));
     const cacheKey = buildInferenceCacheKey({
       promptInput,
-      model: dto.model,
+      model: resolvedDto.model,
     });
     const inputJson = toJson({
       ...promptInput,
-      model: dto.model,
+      model: resolvedDto.model,
+      requestedModel: dto.model,
       promptVersion: INFERENCE_PROMPT_VERSION,
       outputSchemaVersion: INFERENCE_OUTPUT_SCHEMA_VERSION,
     });
@@ -110,13 +106,13 @@ export class InferenceService implements OnModuleDestroy {
         rootMarketId: root.market.id,
         rootOutcomeId: root.outcome.id,
         rootClobTokenId: root.outcome.clobTokenId,
-        depth: dto.depth,
-        maxMarketsPerLayer: dto.maxMarketsPerLayer,
-        confidenceThreshold: dto.confidenceThreshold,
-        model: dto.model,
+        depth: resolvedDto.depth,
+        maxMarketsPerLayer: resolvedDto.maxMarketsPerLayer,
+        confidenceThreshold: resolvedDto.confidenceThreshold,
+        model: resolvedDto.model,
         promptVersion: INFERENCE_PROMPT_VERSION,
         outputSchemaVersion: INFERENCE_OUTPUT_SCHEMA_VERSION,
-        cacheEnabled: dto.cacheEnabled ?? true,
+        cacheEnabled: resolvedDto.cacheEnabled ?? true,
         cacheKey,
         status: 'queued',
         stage: 'candidate_retrieval',
@@ -132,6 +128,33 @@ export class InferenceService implements OnModuleDestroy {
       cacheHit: false,
       scriptId: null,
     };
+  }
+
+  private resolveRequestedModel(requestedModel: string): string {
+    if (requestedModel === MOCK_INFERENCE_MODEL) return requestedModel;
+
+    const capability = this.aiClient.getCapability();
+    if (capability.status !== 'available' || !capability.model) {
+      throw new ApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'CAPABILITY_UNAVAILABLE',
+        capability.reason ?? 'AI inference client is unavailable',
+      );
+    }
+
+    if (requestedModel === AUTO_INFERENCE_MODEL) return capability.model;
+
+    const allowedModels = capability.models?.length ? capability.models : [capability.model];
+    if (!allowedModels.includes(requestedModel)) {
+      throw new ApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'CAPABILITY_UNAVAILABLE',
+        `AI model ${requestedModel} is not configured`,
+        { configuredModel: capability.model, allowedModels },
+      );
+    }
+
+    return requestedModel;
   }
 
   @Interval(1_000)

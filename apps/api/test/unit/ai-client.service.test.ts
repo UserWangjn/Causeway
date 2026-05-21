@@ -16,6 +16,7 @@ describe('AiClientService', () => {
       status: 'unavailable',
       reason: 'AI inference client is not configured',
       model: null,
+      models: [],
     });
   });
 
@@ -26,6 +27,7 @@ describe('AiClientService', () => {
       status: 'unavailable',
       reason: 'AI provider base URL is invalid',
       model: null,
+      models: [],
     });
     await expect(client.runStructuredInference({}, { model: 'gpt-test' })).rejects.toMatchObject({
       response: {
@@ -41,6 +43,7 @@ describe('AiClientService', () => {
         status: 'unavailable',
         reason: 'AI provider base URL is invalid',
         model: null,
+        models: [],
       },
     );
     expect(new AiClientService(configService({ baseUrl: 'https://provider.test/v1?api_key=secret' })).getCapability()).toEqual(
@@ -48,6 +51,7 @@ describe('AiClientService', () => {
         status: 'unavailable',
         reason: 'AI provider base URL is invalid',
         model: null,
+        models: [],
       },
     );
     expect(new AiClientService(configService({ baseUrl: 'https://provider.test/v1#section' })).getCapability()).toEqual(
@@ -55,6 +59,7 @@ describe('AiClientService', () => {
         status: 'unavailable',
         reason: 'AI provider base URL is invalid',
         model: null,
+        models: [],
       },
     );
   });
@@ -64,6 +69,7 @@ describe('AiClientService', () => {
       status: 'unavailable',
       reason: 'AI provider base URL is invalid',
       model: null,
+      models: [],
     });
     expect(
       new AiClientService(configService({ baseUrl: 'http://127.0.0.1:11434/v1', nodeEnv: 'production' })).getCapability(),
@@ -71,6 +77,7 @@ describe('AiClientService', () => {
       status: 'unavailable',
       reason: 'AI provider base URL is invalid',
       model: null,
+      models: [],
     });
   });
 
@@ -81,6 +88,7 @@ describe('AiClientService', () => {
       status: 'available',
       reason: null,
       model: 'gpt-test',
+      models: ['gpt-test'],
     });
   });
 
@@ -179,7 +187,35 @@ describe('AiClientService', () => {
     await expect(client.runStructuredInferenceContent({}, { model: 'gpt-test' })).resolves.toBe('not-json');
   });
 
-  it('rejects requests for models other than the configured provider model', async () => {
+  it('uses explicitly allowed models for provider requests', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ summary: 'provider output', warnings: [] }),
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AiClientService(configService({ model: 'gpt-flash', allowedModels: 'gpt-flash,gpt-pro' }));
+
+    await client.runStructuredInference({}, { model: 'gpt-pro' });
+
+    expect(client.getCapability()).toEqual({
+      status: 'available',
+      reason: null,
+      model: 'gpt-flash',
+      models: ['gpt-flash', 'gpt-pro'],
+    });
+    const [, init] = readFetchCall(fetchMock);
+    expect(readJsonBody(init.body).model).toBe('gpt-pro');
+  });
+
+  it('rejects requests for models outside the configured allow-list', async () => {
     const client = new AiClientService(configService({ model: 'gpt-configured' }));
 
     await expect(client.runStructuredInference({}, { model: 'gpt-other' })).rejects.toMatchObject({
@@ -187,6 +223,7 @@ describe('AiClientService', () => {
         code: 'CAPABILITY_UNAVAILABLE',
         details: {
           configuredModel: 'gpt-configured',
+          allowedModels: ['gpt-configured'],
         },
       },
     });
@@ -292,6 +329,7 @@ function configService(overrides: Partial<AiConfigValues> = {}): ConfigService {
         'ai.baseUrl': values.baseUrl,
         'ai.apiKey': values.apiKey,
         'ai.model': values.model,
+        'ai.allowedModels': values.allowedModels,
         'ai.thinkingMode': values.thinkingMode,
         'ai.httpTimeoutMs': values.httpTimeoutMs,
         'ai.maxOutputTokens': values.maxOutputTokens,
@@ -306,6 +344,7 @@ type AiConfigValues = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  allowedModels?: string;
   thinkingMode?: string;
   httpTimeoutMs: number;
   maxOutputTokens: number;

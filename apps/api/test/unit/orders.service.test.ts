@@ -606,6 +606,209 @@ describe('OrdersService', () => {
     });
   });
 
+  it('accepts legacy single-order signedOrders signature strings by intent order position', async () => {
+    const dto = {
+      ...submitDto(),
+      executionMode: 'real',
+      signedOrders: [`0x${'b'.repeat(130)}`],
+    };
+    const postSignedOrders = vi.fn().mockResolvedValue([
+      {
+        orderId: 'order_1',
+        externalOrderId: 'clob_order_1',
+        status: 'submitted',
+        errorMessage: null,
+        response: { success: true, orderID: 'clob_order_1' },
+      },
+    ]);
+    const claimTx = {
+      orderSubmission: {
+        create: vi.fn().mockResolvedValue({ id: 'submission_1' }),
+      },
+      orderIntent: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const completeTx = {
+      orderIntent: {
+        update: vi.fn(),
+      },
+      causalScript: {
+        updateMany: vi.fn(),
+      },
+      causewayOrder: {
+        update: vi.fn(),
+      },
+      orderSubmission: {
+        update: vi.fn(),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const transaction = vi
+      .fn()
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(claimTx))
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(completeTx));
+    const service = createService({
+      orderSubmission: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      orderIntent: {
+        findFirst: vi.fn().mockResolvedValue(realIntent('intent_1', preparedClobOrder('order_1'))),
+      },
+      $transaction: transaction,
+    }, { status: 'available', reason: null }, { postSignedOrders });
+
+    await service.submit(currentUser('req_real_legacy'), dto);
+
+    expect(postSignedOrders).toHaveBeenCalledWith([
+      {
+        preparedOrder: preparedClobOrder('order_1'),
+        signature: `0x${'b'.repeat(130)}`,
+      },
+    ], testClobCredentials());
+  });
+
+  it('accepts tuple signedOrders from older clients', async () => {
+    const dto = {
+      ...submitDto(),
+      executionMode: 'real',
+      signedOrders: [['order_1', `0x${'c'.repeat(130)}`]],
+    };
+    const postSignedOrders = vi.fn().mockResolvedValue([
+      {
+        orderId: 'order_1',
+        externalOrderId: 'clob_order_1',
+        status: 'submitted',
+        errorMessage: null,
+        response: { success: true, orderID: 'clob_order_1' },
+      },
+    ]);
+    const claimTx = {
+      orderSubmission: {
+        create: vi.fn().mockResolvedValue({ id: 'submission_1' }),
+      },
+      orderIntent: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const completeTx = {
+      orderIntent: {
+        update: vi.fn(),
+      },
+      causalScript: {
+        updateMany: vi.fn(),
+      },
+      causewayOrder: {
+        update: vi.fn(),
+      },
+      orderSubmission: {
+        update: vi.fn(),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const transaction = vi
+      .fn()
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(claimTx))
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(completeTx));
+    const service = createService({
+      orderSubmission: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      orderIntent: {
+        findFirst: vi.fn().mockResolvedValue(realIntent('intent_1', preparedClobOrder('order_1'))),
+      },
+      $transaction: transaction,
+    }, { status: 'available', reason: null }, { postSignedOrders });
+
+    await service.submit(currentUser('req_real_tuple'), dto);
+
+    expect(postSignedOrders).toHaveBeenCalledWith([
+      {
+        preparedOrder: preparedClobOrder('order_1'),
+        signature: `0x${'c'.repeat(130)}`,
+      },
+    ], testClobCredentials());
+  });
+
+  it('accepts byte-array signatures from wallet adapters', async () => {
+    const byteSignature = Array.from({ length: 65 }, () => 0xab);
+    const expectedSignature = `0x${'ab'.repeat(65)}`;
+    const dto = {
+      ...submitDto(),
+      executionMode: 'real',
+      signedOrders: [byteSignature],
+    };
+    const postSignedOrders = vi.fn().mockResolvedValue([
+      {
+        orderId: 'order_1',
+        externalOrderId: 'clob_order_1',
+        status: 'submitted',
+        errorMessage: null,
+        response: { success: true, orderID: 'clob_order_1' },
+      },
+    ]);
+    const claimTx = {
+      orderSubmission: {
+        create: vi.fn().mockResolvedValue({ id: 'submission_1' }),
+      },
+      orderIntent: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const completeTx = {
+      orderIntent: {
+        update: vi.fn(),
+      },
+      causalScript: {
+        updateMany: vi.fn(),
+      },
+      causewayOrder: {
+        update: vi.fn(),
+      },
+      orderSubmission: {
+        update: vi.fn(),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const transaction = vi
+      .fn()
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(claimTx))
+      .mockImplementationOnce((callback: (transactionClient: unknown) => Promise<unknown>) => callback(completeTx));
+    const service = createService({
+      orderSubmission: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      orderIntent: {
+        findFirst: vi.fn().mockResolvedValue(realIntent('intent_1', preparedClobOrder('order_1'))),
+      },
+      $transaction: transaction,
+    }, { status: 'available', reason: null }, { postSignedOrders });
+
+    await service.submit(currentUser('req_real_byte_array'), dto);
+
+    expect(postSignedOrders).toHaveBeenCalledWith([
+      {
+        preparedOrder: preparedClobOrder('order_1'),
+        signature: expectedSignature,
+      },
+    ], testClobCredentials());
+  });
+
   it('marks real submit as unknown when the CLOB submit result may have been accepted', async () => {
     const dto = {
       ...submitDto(),

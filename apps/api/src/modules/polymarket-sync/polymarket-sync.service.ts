@@ -22,7 +22,8 @@ import { SyncRunsQueryDto } from './dto/sync-runs-query.dto';
 export class PolymarketSyncService {
   private readonly pageSize = 100;
   private readonly eventPageSize = 100;
-  private readonly marketUpsertConcurrency = 8;
+  private readonly eventUpsertConcurrency = 3;
+  private readonly marketUpsertConcurrency = 4;
 
   constructor(
     @Inject(GammaClient)
@@ -530,7 +531,7 @@ export class PolymarketSyncService {
       }
     }
 
-    await mapWithConcurrency([...events.values()], this.marketUpsertConcurrency, async (event) => {
+    await mapWithConcurrency([...events.values()], this.eventUpsertConcurrency, async (event) => {
       throwIfSyncAborted(abortSignal);
       await this.upsertEvent(event, seenAt);
     });

@@ -64,6 +64,7 @@ export const configuration = () => ({
     baseUrl: process.env.AI_BASE_URL,
     apiKey: process.env.AI_API_KEY,
     model: process.env.AI_MODEL,
+    allowedModels: process.env.AI_ALLOWED_MODELS,
     thinkingMode: process.env.AI_THINKING_MODE,
     httpTimeoutMs: Number(process.env.AI_HTTP_TIMEOUT_MS ?? 30_000),
     maxOutputTokens: Number(process.env.AI_MAX_OUTPUT_TOKENS ?? 4_000),

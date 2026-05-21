@@ -1,4 +1,4 @@
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { ExecutionMode, OrderIntentStatus, Prisma } from '@prisma/client';
 import { getAddress } from 'viem';
 import { ApiException } from '../../common/errors/api.exception';
@@ -31,8 +31,21 @@ type OrderCapability = {
   accountOptions?: unknown[];
 };
 
+type PreviewOrderBookResult = {
+  snapshot: OrderBookSnapshot | null;
+  error: 'not_found' | 'unavailable' | null;
+  statusCode: number | null;
+};
+
+type SubmitOrderContext = {
+  clientVersion?: string;
+  clientSignedOrdersShape?: string;
+};
+
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     @Inject(ClobClient)
     private readonly clobClient: ClobClient,
@@ -59,7 +72,7 @@ export class OrdersService {
       : dryRunOrderCapability();
     const expiresAt = new Date(Date.now() + 60 * 1000);
     const requireFreshOrderBook = dto.executionMode === 'real' && baseCapability.status === 'available';
-    const orderBookByTokenId = new Map<string, Promise<OrderBookSnapshot | null>>();
+    const orderBookByTokenId = new Map<string, Promise<PreviewOrderBookResult>>();
     const previewOrders = await Promise.all(dto.selections.map(async (selection) => {
       const row = selectionById.get(selection.selectionId);
       if (!row) {
@@ -72,16 +85,19 @@ export class OrdersService {
         });
       }
 
-      const shouldRefreshOrderBook = requireFreshOrderBook || isLikelyRealClobTokenId(row.outcome.clobTokenId);
-      const orderBook = shouldRefreshOrderBook
+      const localMarketTradable = isMarketLocallyTradable(row.scriptMarket.market);
+      const shouldRefreshOrderBook = localMarketTradable && (requireFreshOrderBook || isLikelyRealClobTokenId(row.outcome.clobTokenId));
+      const orderBookResult = shouldRefreshOrderBook
         ? await this.loadPreviewOrderBook(row.outcome.clobTokenId, orderBookByTokenId)
         : null;
 
       return buildPreviewOrder(selection, {
         market: row.scriptMarket.market,
         outcome: row.outcome,
-        orderBook,
+        orderBook: orderBookResult?.snapshot ?? null,
         requireFreshOrderBook,
+        orderBookError: orderBookResult?.error ?? null,
+        orderBookStatusCode: orderBookResult?.statusCode ?? null,
       });
     }));
     const totalAmountUsd = roundCurrency(previewOrders.reduce((sum, order) => sum + order.amountUsd, 0));
@@ -137,6 +153,8 @@ export class OrdersService {
               tickSize: order.tickSize,
               minOrderSize: order.minOrderSize,
               orderBookRefreshedAt: order.orderBookRefreshedAt,
+              orderBookError: order.orderBookError,
+              orderBookStatusCode: order.orderBookStatusCode,
             }),
           },
         });
@@ -205,12 +223,22 @@ export class OrdersService {
 
   private loadPreviewOrderBook(
     tokenId: string,
-    orderBookByTokenId: Map<string, Promise<OrderBookSnapshot | null>>,
-  ): Promise<OrderBookSnapshot | null> {
+    orderBookByTokenId: Map<string, Promise<PreviewOrderBookResult>>,
+  ): Promise<PreviewOrderBookResult> {
     const cached = orderBookByTokenId.get(tokenId);
     if (cached) return cached;
 
-    const pending = this.clobClient.getOrderBook(tokenId).catch(() => null);
+    const pending: Promise<PreviewOrderBookResult> = this.clobClient.getOrderBook(tokenId)
+      .then((snapshot) => ({
+        snapshot,
+        error: null,
+        statusCode: null,
+      }))
+      .catch((error: unknown) => ({
+        snapshot: null,
+        error: resolveOrderBookError(error),
+        statusCode: resolveApiExceptionStatusCode(error),
+      }));
     orderBookByTokenId.set(tokenId, pending);
     return pending;
   }
@@ -293,7 +321,7 @@ export class OrdersService {
     return result;
   }
 
-  async submit(user: CurrentUser, dto: SubmitOrderDto) {
+  async submit(user: CurrentUser, dto: SubmitOrderDto, context: SubmitOrderContext = {}) {
     const requestHash = hashJson({
       intentId: dto.intentId,
       executionMode: dto.executionMode,
@@ -331,7 +359,16 @@ export class OrdersService {
           tradingAccountType: lockedTradingAccountType,
           capability,
         });
-        return await this.submitReal(user.id, user.requestId, intent, normalizeSignedOrders(dto.signedOrders), dto.idempotencyKey, requestHash, orderAuth.credentials);
+        const signedOrders = this.normalizeSignedOrdersForSubmit(user, dto, intent, context);
+        return await this.submitReal(
+          user.id,
+          user.requestId,
+          intent,
+          signedOrders,
+          dto.idempotencyKey,
+          requestHash,
+          orderAuth.credentials,
+        );
       }
 
       return await this.submitDryRun(user.id, user.requestId, intent, dto.idempotencyKey, requestHash);
@@ -351,6 +388,42 @@ export class OrdersService {
       }
       throw error;
     }
+  }
+
+  private normalizeSignedOrdersForSubmit(
+    user: CurrentUser,
+    dto: SubmitOrderDto,
+    intent: LoadedOrderIntent,
+    context: SubmitOrderContext,
+  ): SignedClobOrderInput[] {
+    try {
+      return normalizeSignedOrders(dto.signedOrders, intent.orders.map((order) => order.id));
+    } catch (error) {
+      this.logSignedOrdersValidationFailure(user, dto, intent, context, error);
+      throw error;
+    }
+  }
+
+  private logSignedOrdersValidationFailure(
+    user: CurrentUser,
+    dto: SubmitOrderDto,
+    intent: LoadedOrderIntent,
+    context: SubmitOrderContext,
+    error: unknown,
+  ): void {
+    this.logger.warn({
+      event: 'order_signed_orders_validation_failed',
+      clientVersion: context.clientVersion ?? null,
+      clientSignedOrdersShape: context.clientSignedOrdersShape ?? null,
+      requestId: user.requestId ?? null,
+      userId: user.id,
+      intentId: dto.intentId,
+      executionMode: dto.executionMode,
+      expectedOrderCount: intent.orders.length,
+      signedOrdersCount: dto.signedOrders.length,
+      signedOrdersShape: summarizeSignedOrders(dto.signedOrders),
+      validationDetails: readApiExceptionDetails(error),
+    });
   }
 
   async getIntent(user: CurrentUser, intentId: string) {
@@ -763,6 +836,46 @@ function auditRequestId(user: CurrentUser): { requestId: string } | Record<strin
   return user.requestId ? { requestId: user.requestId } : {};
 }
 
+function isMarketLocallyTradable(market: {
+  active: boolean;
+  closed: boolean;
+  archived?: boolean | null;
+  staleDetectedAt?: Date | string | null;
+  acceptingOrders: boolean;
+  enableOrderBook: boolean;
+}): boolean {
+  return market.active
+    && !market.closed
+    && !market.archived
+    && !market.staleDetectedAt
+    && market.acceptingOrders
+    && market.enableOrderBook;
+}
+
+function resolveOrderBookError(error: unknown): 'not_found' | 'unavailable' {
+  return resolveApiExceptionStatusCode(error) === 404 ? 'not_found' : 'unavailable';
+}
+
+function resolveApiExceptionStatusCode(error: unknown): number | null {
+  if (!(error instanceof ApiException)) return null;
+  const response = error.getResponse();
+  if (!isApiExceptionBody(response)) return null;
+  const details = response.details;
+  if (!isRecord(details) || typeof details.status !== 'number') return null;
+  return details.status;
+}
+
+function isApiExceptionBody(value: unknown): value is { details?: unknown } {
+  return isRecord(value);
+}
+
+function readApiExceptionDetails(error: unknown): unknown {
+  if (!(error instanceof ApiException)) return null;
+  const response = error.getResponse();
+  if (!isRecord(response)) return null;
+  return response.details ?? null;
+}
+
 type LoadedOrderIntent = Prisma.OrderIntentGetPayload<{
   include: {
     orders: {
@@ -966,17 +1079,21 @@ function toClobSignaturePayloadInput(
   };
 }
 
-function normalizeSignedOrders(value: unknown[]): SignedClobOrderInput[] {
-  const seen = new Set<string>();
-  return value.map((item) => {
-    if (!isRecord(item)) {
-      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'signedOrders must contain objects');
-    }
+function normalizeSignedOrders(value: unknown[], orderedIntentOrderIds: string[]): SignedClobOrderInput[] {
+  if (value.length !== orderedIntentOrderIds.length) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Every order in the intent must have exactly one signature', {
+      expected: orderedIntentOrderIds.length,
+      actual: value.length,
+    });
+  }
 
-    const orderId = typeof item.orderId === 'string' ? item.orderId.trim() : '';
-    const signature = typeof item.signature === 'string' ? item.signature.trim() : '';
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    const { orderId, signature } = normalizeSignedOrderItem(item, index, orderedIntentOrderIds);
     if (!orderId) {
-      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'signed order orderId is required');
+      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'signed order orderId is required', {
+        index,
+      });
     }
     if (seen.has(orderId)) {
       throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Duplicate signed order ids are not allowed', {
@@ -992,6 +1109,160 @@ function normalizeSignedOrders(value: unknown[]): SignedClobOrderInput[] {
 
     return { orderId, signature };
   });
+}
+
+function normalizeSignedOrderItem(item: unknown, index: number, orderedIntentOrderIds: string[]): SignedClobOrderInput {
+  if (typeof item === 'string') {
+    return {
+      orderId: readPositionalOrderId(index, orderedIntentOrderIds),
+      signature: normalizeSignatureValue(item),
+    };
+  }
+
+  if (Array.isArray(item)) {
+    if (isByteArray(item)) {
+      return {
+        orderId: readPositionalOrderId(index, orderedIntentOrderIds),
+        signature: byteArrayToHex(item),
+      };
+    }
+    if (item.length === 1) {
+      return {
+        orderId: readPositionalOrderId(index, orderedIntentOrderIds),
+        signature: normalizeSignatureValue(item[0]),
+      };
+    }
+    if (item.length >= 2 && typeof item[0] === 'string') {
+      return {
+        orderId: item[0].trim(),
+        signature: normalizeSignatureValue(item[1]),
+      };
+    }
+    throw invalidSignedOrderShape(index, item);
+  }
+
+  if (!isRecord(item)) {
+    throw invalidSignedOrderShape(index, item);
+  }
+
+  return {
+    orderId: readFirstString(item, ['orderId', 'id', 'order_id']).trim(),
+    signature: normalizeSignatureValue(readFirstValue(item, ['signature', 'sig'])),
+  };
+}
+
+function readPositionalOrderId(index: number, orderedIntentOrderIds: string[]): string {
+  const orderId = orderedIntentOrderIds[index];
+  if (!orderId) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'signedOrders contains more signatures than order rows', {
+      index,
+    });
+  }
+  return orderId;
+}
+
+function invalidSignedOrderShape(index: number, item: unknown): ApiException {
+  return new ApiException(
+    HttpStatus.UNPROCESSABLE_ENTITY,
+    'REQUEST_VALIDATION_FAILED',
+    'signedOrders must contain { orderId, signature } objects, [orderId, signature] tuples, or hex signature strings',
+    {
+      index,
+      receivedType: describeSignedOrderItemType(item),
+    },
+  );
+}
+
+function summarizeSignedOrders(value: unknown[]): Record<string, unknown> {
+  return {
+    total: value.length,
+    truncated: value.length > 20,
+    items: value.slice(0, 20).map((item, index) => ({
+      index,
+      ...summarizeSignedOrderItem(item),
+    })),
+  };
+}
+
+function summarizeSignedOrderItem(item: unknown): Record<string, unknown> {
+  if (Array.isArray(item)) {
+    return {
+      type: 'array',
+      length: item.length,
+      itemTypes: item.slice(0, 5).map(describeSignedOrderItemType),
+      isByteArray: isByteArray(item),
+      tupleLike: item.length >= 2 && typeof item[0] === 'string',
+    };
+  }
+
+  if (isRecord(item)) {
+    return {
+      type: 'object',
+      keys: Object.keys(item).slice(0, 10),
+      hasOrderId: Boolean(readFirstString(item, ['orderId', 'id', 'order_id']).trim()),
+      signatureShape: summarizeSignatureValue(readFirstValue(item, ['signature', 'sig'])),
+    };
+  }
+
+  return summarizeSignatureValue(item);
+}
+
+function summarizeSignatureValue(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return {
+      type: 'string',
+      length: trimmed.length,
+      isHexSignature: isHexSignature(trimmed),
+    };
+  }
+
+  if (Array.isArray(value)) {
+    return {
+      type: 'array',
+      length: value.length,
+      itemTypes: value.slice(0, 5).map(describeSignedOrderItemType),
+      isByteArray: isByteArray(value),
+    };
+  }
+
+  if (value === null) return { type: 'null' };
+  return { type: typeof value };
+}
+
+function readFirstString(record: Record<string, unknown>, keys: string[]): string {
+  const value = readFirstValue(record, keys);
+  return typeof value === 'string' ? value : '';
+}
+
+function readFirstValue(record: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = record[key];
+    if (value != null) return value;
+  }
+  return '';
+}
+
+function describeSignedOrderItemType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) {
+    return `array(length=${value.length},items=${value.slice(0, 3).map(describeSignedOrderItemType).join(',')})`;
+  }
+  return typeof value;
+}
+
+function normalizeSignatureValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value) && isByteArray(value)) return byteArrayToHex(value);
+  return '';
+}
+
+function isByteArray(value: unknown[]): value is number[] {
+  return value.length > 0 && value.every((item) => typeof item === 'number' && Number.isInteger(item) && item >= 0 && item <= 255);
+}
+
+function byteArrayToHex(value: number[]): string {
+  return `0x${value.map((item) => item.toString(16).padStart(2, '0')).join('')}`;
 }
 
 function resolveSignedPreparedOrders(intent: LoadedOrderIntent, signedOrders: SignedClobOrderInput[]) {

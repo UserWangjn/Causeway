@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Param, Post } from '@nestjs/common';
 import { CurrentUser, type CurrentUser as CurrentUserType } from '../../common/decorators/current-user.decorator';
 import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
 import { OrderIntentParamDto } from './dto/order-intent-param.dto';
@@ -22,8 +22,16 @@ export class OrdersController {
   }
 
   @Post('submit')
-  submit(@CurrentUser() user: CurrentUserType, @Body(createDtoValidationPipe(SubmitOrderDto)) dto: SubmitOrderDto) {
-    return this.ordersService.submit(user, dto);
+  submit(
+    @CurrentUser() user: CurrentUserType,
+    @Body(createDtoValidationPipe(SubmitOrderDto)) dto: SubmitOrderDto,
+    @Headers('x-causeway-client-version') clientVersion?: string | string[],
+    @Headers('x-causeway-signed-orders-shape') clientSignedOrdersShape?: string | string[],
+  ) {
+    return this.ordersService.submit(user, dto, {
+      clientVersion: Array.isArray(clientVersion) ? clientVersion[0] : clientVersion,
+      clientSignedOrdersShape: Array.isArray(clientSignedOrdersShape) ? clientSignedOrdersShape[0] : clientSignedOrdersShape,
+    });
   }
 
   @Get('intents/:intentId')

@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import { HttpStatus, Inject, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { orderToJsonV2, Side as SdkSide, type OrderType as SdkOrderType } from '@polymarket/clob-client-v2';
 import { encodeAbiParameters, getAddress, keccak256, toHex } from 'viem';
 import { ApiException } from '../../../common/errors/api.exception';
 import type { OrderBookSnapshot } from '../types';
@@ -19,6 +20,7 @@ const CLOB_NAME_HASH = keccak256(toHex(CLOB_ORDER_DOMAIN_NAME));
 const CLOB_VERSION_HASH = keccak256(toHex(CLOB_ORDER_DOMAIN_VERSION));
 const ZERO_BYTES32 = `0x${'0'.repeat(64)}`;
 const COLLATERAL_DECIMALS = 6;
+const CLOB_JSON_SAFE_SALT_BYTES = 6;
 const CLOB_TICK_SIZES = new Set(['0.1', '0.01', '0.001', '0.0001']);
 const POLYGON_CLOB_CONTRACTS = {
   exchangeV2: '0xE111180000d2663C0091e4f400237545B87B996B',
@@ -147,6 +149,8 @@ export type ClobPostOrderResult = {
   response: unknown;
 };
 
+type SdkSignedOrderV2 = Parameters<typeof orderToJsonV2>[0];
+
 export type ClobPriceHistoryInput = {
   tokenIds: string[];
   interval: '1h' | '6h' | '1d' | '1w' | '1m' | 'all';
@@ -161,6 +165,7 @@ export type ClobPriceHistory = {
 
 @Injectable()
 export class ClobClient {
+  private readonly logger = new Logger(ClobClient.name);
   private readonly baseUrl: string;
   private readonly relayerBaseUrl: string;
   private readonly timeoutMs: number;
@@ -388,16 +393,14 @@ export class ClobClient {
       throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'At least one signed order is required');
     }
 
-    const payload = orders.map((order) => ({
-      order: {
-        ...order.preparedOrder.order,
-        signature: buildSubmittedOrderSignature(order.preparedOrder, order.signature),
-      },
-      owner: credentials?.key ?? this.apiKey,
-      orderType: order.preparedOrder.orderType,
-      postOnly: order.preparedOrder.postOnly,
-      deferExec: order.preparedOrder.deferExec,
-    }));
+    const owner = credentials?.key ?? this.apiKey ?? '';
+    const payload = orders.map((order) => orderToJsonV2(
+      buildSdkSignedOrder(order),
+      owner,
+      order.preparedOrder.orderType as SdkOrderType,
+      order.preparedOrder.postOnly,
+      order.preparedOrder.deferExec,
+    ));
     const body = JSON.stringify(payload);
     const responseBody = await this.postJson(POST_ORDERS_PATH, body, credentials);
     const responses: unknown[] = Array.isArray(responseBody) ? responseBody as unknown[] : orders.length === 1 ? [responseBody] : [];
@@ -446,7 +449,7 @@ export class ClobClient {
     const exchange = resolveExchangeContract(input.chainId, input.negRisk);
     const orderAmounts = buildClobOrderAmounts(input);
     const orderType = resolveOrderType(input);
-    const salt = randomUint256String();
+    const salt = randomJsonSafeSaltString();
     const timestamp = Date.now().toString();
     const builder = normalizeBuilderCode(input.builderCode ?? options.builderCode);
 
@@ -567,6 +570,14 @@ export class ClobClient {
       const text = await response.text();
       const parsed = parseJson(text);
       if (!response.ok) {
+        this.logger.warn({
+          event: 'clob_request_failed',
+          method,
+          endpoint: path,
+          status: response.status,
+          responseBody: parsed,
+          requestBodyShape: summarizeClobRequestBody(body),
+        });
         throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB request failed', {
           status: response.status,
           endpoint: path,
@@ -669,6 +680,35 @@ function buildSignatureTypedData(
       salt: ZERO_BYTES32,
     },
   };
+}
+
+function buildSdkSignedOrder(input: ClobPostOrderInput): SdkSignedOrderV2 {
+  assertJsonSafeSalt(input.preparedOrder.order.salt, input.preparedOrder.orderId);
+  return {
+    ...input.preparedOrder.order,
+    side: input.preparedOrder.order.side === 'BUY' ? SdkSide.BUY : SdkSide.SELL,
+    signature: buildSubmittedOrderSignature(input.preparedOrder, input.signature),
+  };
+}
+
+function assertJsonSafeSalt(salt: string, orderId: string): void {
+  const parsed = Number(salt);
+  if (
+    !/^\d+$/.test(salt)
+    || !Number.isSafeInteger(parsed)
+    || parsed < 0
+    || parsed.toString() !== salt
+  ) {
+    throw new ApiException(
+      HttpStatus.CONFLICT,
+      'ORDER_INTENT_NOT_SUBMITTABLE',
+      'Prepared CLOB order uses an obsolete salt format; refresh the order preview and sign again',
+      {
+        orderId,
+        saltLength: salt.length,
+      },
+    );
+  }
 }
 
 function buildSubmittedOrderSignature(preparedOrder: PreparedClobOrder, walletSignature: string): string {
@@ -833,8 +873,9 @@ function trimOptional(value: string | null | undefined): string | undefined {
   return trimmed || undefined;
 }
 
-function randomUint256String(): string {
-  return BigInt(`0x${randomBytes(32).toString('hex')}`).toString();
+function randomJsonSafeSaltString(): string {
+  const salt = randomBytes(CLOB_JSON_SAFE_SALT_BYTES).readUIntBE(0, CLOB_JSON_SAFE_SALT_BYTES);
+  return (salt === 0 ? 1 : salt).toString();
 }
 
 function toCollateralUnits(value: number): string {
@@ -856,6 +897,54 @@ function parseJson(text: string): unknown {
   } catch {
     return text;
   }
+}
+
+function summarizeClobRequestBody(body: string): unknown {
+  const parsed = parseJson(body);
+  if (Array.isArray(parsed)) {
+    return {
+      orderCount: parsed.length,
+      orders: parsed.map(summarizeClobOrderPayload),
+    };
+  }
+  if (isRecord(parsed)) {
+    return summarizeClobOrderPayload(parsed);
+  }
+  return typeof parsed;
+}
+
+function summarizeClobOrderPayload(value: unknown): unknown {
+  if (!isRecord(value)) return typeof value;
+  const order = isRecord(value.order) ? value.order : {};
+  const signature = typeof order.signature === 'string' ? order.signature : '';
+  return {
+    ownerSet: typeof value.owner === 'string' && value.owner.length > 0,
+    orderType: typeof value.orderType === 'string' ? value.orderType : null,
+    postOnly: typeof value.postOnly === 'boolean' ? value.postOnly : null,
+    deferExec: typeof value.deferExec === 'boolean' ? value.deferExec : null,
+    order: {
+      saltType: typeof order.salt,
+      saltLength: scalarLength(order.salt),
+      makerSet: typeof order.maker === 'string' && order.maker.length > 0,
+      signerSet: typeof order.signer === 'string' && order.signer.length > 0,
+      tokenIdLength: scalarLength(order.tokenId),
+      makerAmount: typeof order.makerAmount === 'string' ? order.makerAmount : null,
+      takerAmount: typeof order.takerAmount === 'string' ? order.takerAmount : null,
+      side: typeof order.side === 'string' ? order.side : null,
+      signatureType: typeof order.signatureType === 'number' ? order.signatureType : null,
+      timestampLength: scalarLength(order.timestamp),
+      expiration: typeof order.expiration === 'string' ? order.expiration : null,
+      metadataSet: typeof order.metadata === 'string' && order.metadata.length > 0,
+      builderSet: typeof order.builder === 'string' && !/^0x0+$/i.test(order.builder),
+      signatureLength: signature.length,
+    },
+  };
+}
+
+function scalarLength(value: unknown): number {
+  if (typeof value === 'string') return value.length;
+  if (typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean') return value.toString().length;
+  return 0;
 }
 
 function readClobSuccess(value: unknown): boolean {

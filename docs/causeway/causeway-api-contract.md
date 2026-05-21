@@ -454,7 +454,7 @@ fidelity
 }
 ```
 
-说明：`POST /inference-runs` 始终只创建 `queued` 任务，前端通过 `GET /inference-runs/:runId` 轮询 `completed` 后再读取 `scriptId`。`mock-causeway-v1` 也走同一套异步任务语义。配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 后，非 mock 模型通过 OpenAI-compatible `POST /chat/completions` JSON 输出通道执行；`AI_BASE_URL` 必须是纯 base URL，生产环境必须使用 HTTPS，且请求中的 `model` 必须等于当前 `AI_MODEL`。真实 AI provider 未配置、请求模型不匹配或 provider 输出不能通过后端 schema 校验时，任务应进入 `failed` 并写入 `errorMessage`。
+说明：`POST /inference-runs` 始终只创建 `queued` 任务，前端通过 `GET /inference-runs/:runId` 轮询 `completed` 后再读取 `scriptId`。`mock-causeway-v1` 也走同一套异步任务语义。配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 后，非 mock 模型通过 OpenAI-compatible `POST /chat/completions` JSON 输出通道执行；`AI_BASE_URL` 必须是纯 base URL，生产环境必须使用 HTTPS。请求中的 `model="auto"` 会解析为当前 `AI_MODEL`；显式模型必须存在于 `AI_ALLOWED_MODELS`，该列表始终自动包含 `AI_MODEL`。真实 AI provider 未配置、请求模型不匹配或 provider 输出不能通过后端 schema 校验时，任务应进入 `failed` 并写入 `errorMessage`。
 
 ### `GET /inference-runs/:runId`
 

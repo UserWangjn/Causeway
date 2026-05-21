@@ -19,6 +19,12 @@ describe('ScriptsService', () => {
           {
             market: {
               question: 'Will real market resolve Yes?',
+              eventId: 'event_1',
+              event: {
+                id: 'event_1',
+                slug: 'fixture-event',
+                title: 'Fixture Event',
+              },
               icon: 'icon.png',
               image: 'image.png',
               bestAsk: '0.42',
@@ -77,6 +83,9 @@ describe('ScriptsService', () => {
         {
           id: 'script_1',
           title: 'Will real market resolve Yes?',
+          rootEventId: 'event_1',
+          rootEventSlug: 'fixture-event',
+          rootEventTitle: 'Fixture Event',
           status: 'draft',
           summary: 'summary',
           rootMarketId: 'market_1',
@@ -202,6 +211,18 @@ describe('ScriptsService', () => {
           reason: 'market reason',
           market: {
             question: 'Will market one resolve Yes?',
+            eventId: 'event_1',
+            event: {
+              id: 'event_1',
+              slug: 'fixture-event',
+              title: 'Fixture Event',
+            },
+            active: true,
+            closed: false,
+            archived: false,
+            staleDetectedAt: null,
+            acceptingOrders: true,
+            enableOrderBook: true,
             icon: 'icon.png',
             image: 'image.png',
             orderMinSize: '5',
@@ -295,6 +316,20 @@ describe('ScriptsService', () => {
             market: {
               select: {
                 question: true,
+                eventId: true,
+                event: {
+                  select: {
+                    id: true,
+                    slug: true,
+                    title: true,
+                  },
+                },
+                active: true,
+                closed: true,
+                archived: true,
+                staleDetectedAt: true,
+                acceptingOrders: true,
+                enableOrderBook: true,
                 icon: true,
                 image: true,
                 orderMinSize: true,
@@ -389,8 +424,17 @@ describe('ScriptsService', () => {
         {
           scriptMarketId: 'script_market_1',
           marketId: 'market_1',
-          title: 'Will market one resolve Yes?',
-          orderMinSize: 5,
+            title: 'Will market one resolve Yes?',
+            eventId: 'event_1',
+            eventSlug: 'fixture-event',
+            eventTitle: 'Fixture Event',
+            active: true,
+            closed: false,
+            archived: false,
+            staleDetectedAt: null,
+            acceptingOrders: true,
+            enableOrderBook: true,
+            orderMinSize: 5,
           tickSize: 0.01,
           impactDirection: 'supports',
           reason: 'market reason',

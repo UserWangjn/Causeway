@@ -111,10 +111,11 @@ $env:SMOKE_AI_ENABLED="true"
 $env:AI_BASE_URL="https://provider.example.com/v1"
 $env:AI_API_KEY="<provider-key>"
 $env:AI_MODEL="<model>"
+$env:AI_ALLOWED_MODELS="<model>,<optional-second-model>"
 npm run smoke:api:ai
 ```
 
-The AI inference path supports OpenAI-compatible `POST /chat/completions` providers when `AI_BASE_URL`, `AI_API_KEY`, and `AI_MODEL` are configured. `AI_BASE_URL` must be a plain base URL without credentials, query parameters, or fragments; production requires HTTPS, while development/test may use HTTP only for localhost or loopback providers. Non-mock inference requests must use the configured `AI_MODEL`; otherwise the API returns `503 CAPABILITY_UNAVAILABLE`. `AI_HTTP_TIMEOUT_MS` and `AI_MAX_OUTPUT_TOKENS` control provider request bounds.
+The AI inference path supports OpenAI-compatible `POST /chat/completions` providers when `AI_BASE_URL`, `AI_API_KEY`, and `AI_MODEL` are configured. `AI_BASE_URL` must be a plain base URL without credentials, query parameters, or fragments; production requires HTTPS, while development/test may use HTTP only for localhost or loopback providers. Non-mock inference requests should send `model="auto"` so the API resolves the current `AI_MODEL`; explicit model requests must be present in `AI_ALLOWED_MODELS` when that list is configured. `AI_ALLOWED_MODELS` always includes `AI_MODEL` even when omitted. Unsupported model requests return `503 CAPABILITY_UNAVAILABLE`. `AI_HTTP_TIMEOUT_MS` and `AI_MAX_OUTPUT_TOKENS` control provider request bounds.
 
 For providers that expose an OpenAI-compatible thinking toggle, set `AI_THINKING_MODE=disabled` or `AI_THINKING_MODE=enabled`. DeepSeek V4 should use `AI_THINKING_MODE=disabled` for Causeway structured JSON inference so the provider returns final `message.content` reliably.
 

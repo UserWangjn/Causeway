@@ -112,6 +112,40 @@ describe('InferenceService', () => {
     expect(providerOptions.prompt?.systemPrompt).toContain('structured market data provided by the backend');
   });
 
+  it('resolves auto model requests to the configured AI provider model', async () => {
+    const aiClient = {
+      getCapability: vi.fn().mockReturnValue({
+        status: 'available',
+        reason: null,
+        model: 'gpt-test',
+      }),
+      runStructuredInference: vi.fn(),
+      runStructuredInferenceContent: vi.fn(),
+    };
+    let createdInputJson: unknown;
+    const inferenceRunCreate = vi.fn((args: InferenceRunCreateArgs) => {
+      createdInputJson = args.data.inputJson;
+      return Promise.resolve({ id: 'run_1' });
+    });
+    const service = createService({
+      polymarketMarket: {
+        findUnique: vi.fn().mockResolvedValue(rootMarket()),
+        findMany: vi.fn().mockResolvedValue([candidateMarket()]),
+      },
+      inferenceRun: {
+        create: inferenceRunCreate,
+      },
+    }, aiClient);
+
+    await service.createRun(currentUser(), createRunDto('auto'));
+
+    expect(inferenceRunCreate).toHaveBeenCalledTimes(1);
+    expect(inferenceRunCreate.mock.calls[0]?.[0].data.model).toBe('gpt-test');
+    const storedInput = readRecord(createdInputJson, 'createdInputJson');
+    expect(readStringProperty(storedInput, 'model')).toBe('gpt-test');
+    expect(readStringProperty(storedInput, 'requestedModel')).toBe('auto');
+  });
+
   it('repairs invalid provider output once before completing the run', async () => {
     const tx = createPersistTransactionClient();
     let providerCallCount = 0;

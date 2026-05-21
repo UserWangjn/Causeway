@@ -48,7 +48,7 @@ import {
   WalletCards,
 } from 'lucide-react'
 import { ConnectButton, useConnectModal } from '@rainbow-me/rainbowkit'
-import { useAccount, useDisconnect, useSignMessage, useSignTypedData, useSwitchChain } from 'wagmi'
+import { useAccount, useDisconnect, useSignMessage, useSignTypedData, useSwitchChain, useWalletClient } from 'wagmi'
 import { supportedChain } from './wallet-config'
 
 type View = 'network' | 'detail' | 'infer' | 'progress' | 'script' | 'scripts'
@@ -242,6 +242,7 @@ type InferenceCausalLink = {
 type InferenceScriptLeg = {
   marketId: string
   marketTitle: string
+  eventTitle?: string | null
   side: string
   probability?: number | null
   direction: 'positive' | 'negative' | 'conditional' | 'unknown' | string
@@ -271,6 +272,7 @@ type ScriptOrderCandidate = {
   selectionId: string
   marketId: string
   marketTitle: string
+  eventTitle?: string | null
   layer: number
   outcomeId: string
   outcomeLabel: string
@@ -287,6 +289,8 @@ type ScriptOrderCandidate = {
   price: number | null
   tickSize: number | null
   minOrderSize: number | null
+  isTradable: boolean
+  marketStatus: string | null
 }
 
 type OrderDraftSelection = ScriptOrderCandidate & {
@@ -311,6 +315,8 @@ type OrderPreviewOrder = {
   tickSize: number | null
   minOrderSize: number | null
   orderBookRefreshedAt: string | null
+  orderBookError?: string | null
+  orderBookStatusCode?: number | null
   valid: boolean
   warnings: string[]
   error: string | null
@@ -462,6 +468,14 @@ type BackendInferenceStatus = {
   completedAt?: string | null
 }
 
+type BackendInferenceCapability = {
+  status: 'available' | 'unavailable'
+  reason: string | null
+  defaultModel: string | null
+  models: string[]
+  mockModel: 'mock-causeway-v1'
+}
+
 type TypedDataPayload = {
   primaryType: string
   domain: {
@@ -521,6 +535,9 @@ type BackendScript = {
       nodeId: string
       marketId: string
       title: string
+      eventId?: string | null
+      eventSlug?: string | null
+      eventTitle?: string | null
       layer: number
       confidence: number
       direction: string
@@ -544,10 +561,19 @@ type BackendScript = {
     scriptMarketId?: string
     marketId: string
     title: string
+    eventId?: string | null
+    eventSlug?: string | null
+    eventTitle?: string | null
     layer: number
     impactDirection?: string
     confidence: number | null
     reason?: string
+    active?: boolean
+    closed?: boolean
+    archived?: boolean
+    staleDetectedAt?: string | null
+    acceptingOrders?: boolean
+    enableOrderBook?: boolean
     icon?: string | null
     image?: string | null
     orderMinSize?: number | null
@@ -585,6 +611,9 @@ type BackendScriptListItem = {
   summary: string | null
   rootMarketId: string
   rootOutcomeId: string
+  rootEventId?: string | null
+  rootEventSlug?: string | null
+  rootEventTitle?: string | null
   rootOutcomeLabel: string | null
   rootPrice: number | null
   rootVolume: number | null
@@ -625,7 +654,7 @@ type InferenceSettingsState = {
 const defaultInferenceSettings: InferenceSettingsState = {
   scope: 'all',
   timeRange: 'until_close',
-  modelPreference: 'mock-causeway-v1',
+  modelPreference: 'auto',
   confidenceMode: 'balanced',
   depth: 2,
   confidenceThreshold: 0.55,
@@ -752,6 +781,17 @@ type CausewayAuth = {
 }
 
 type SignTypedDataVariables = Parameters<ReturnType<typeof useSignTypedData>['signTypedDataAsync']>[0]
+type HexAddress = `0x${string}`
+type SignTypedDataAsync = (variables: SignTypedDataVariables) => Promise<unknown>
+type TypedDataWalletClient = {
+  signTypedData: (variables: SignTypedDataVariables & { account?: HexAddress }) => Promise<unknown>
+}
+type EthereumProvider = {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>
+}
+
+const ORDER_SUBMIT_CLIENT_VERSION = 'order-submit-v4-wallet-fallback'
+const ORDER_DEBUG_STORAGE_KEY = 'causeway.orderDebug'
 
 type BackendMarketNetwork = {
   nodes: Array<{
@@ -952,7 +992,9 @@ function invalidOrderPreviewMessage(preview: OrderPreview) {
 }
 
 function orderPreviewErrorText(order: OrderPreviewOrder, draft?: OrderDraftSelection | null) {
-  const label = draft?.outcomeLabel || order.outcomeLabel || draft?.marketTitle || order.marketId
+  const label = draft
+    ? `${orderDraftContextLabel(draft)} / ${draft.outcomeLabel || order.outcomeLabel}`
+    : order.outcomeLabel || order.marketId
   const rawError = order.error || ''
   if (rawError.includes('BELOW_MIN_ORDER_SIZE')) {
     const minimum = order.minOrderSize != null ? formatUsd(order.minOrderSize) : '市场最小下单金额'
@@ -969,6 +1011,9 @@ function orderPreviewErrorText(order: OrderPreviewOrder, draft?: OrderDraftSelec
     return `${label} 盘口暂不可用，请等待市场数据刷新后重试`
   }
   if (rawError.includes('MARKET_NOT_TRADABLE')) {
+    if (order.orderBookStatusCode === 404 || order.orderBookError === 'not_found') {
+      return `${label} 官方盘口已关闭或已下架，不能真实下单`
+    }
     return `${label} 市场暂不可交易，可能已关闭、暂停接单或盘口未开放`
   }
   if (rawError.includes('REQUEST_VALIDATION_FAILED')) {
@@ -1116,7 +1161,8 @@ function useCausewayAuth(): CausewayAuth {
 function inferenceModel(settings: InferenceSettingsState) {
   if (settings.modelPreference === 'mock-causeway-v1') return 'mock-causeway-v1'
   if (settings.modelPreference === 'deepseek-v4-pro') return 'deepseek-v4-pro'
-  return 'deepseek-v4-flash'
+  if (settings.modelPreference === 'deepseek-v4-flash') return 'deepseek-v4-flash'
+  return 'auto'
 }
 
 function authHeaders(token: string) {
@@ -1124,6 +1170,16 @@ function authHeaders(token: string) {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${token}`,
   }
+}
+
+function orderDebugEnabled() {
+  const viteImportMeta = import.meta as ImportMeta & { env?: { DEV?: boolean } }
+  return Boolean(viteImportMeta.env?.DEV) || window.localStorage.getItem(ORDER_DEBUG_STORAGE_KEY) === '1'
+}
+
+function orderDebugLog(event: string, data: Record<string, unknown> = {}) {
+  if (!orderDebugEnabled()) return
+  console.warn('[CausewayOrderDebug]', event, data)
 }
 
 function createIdempotencyKey() {
@@ -1174,6 +1230,188 @@ function toSignTypedDataVariables(payload: PreparedOrderPayload): SignTypedDataV
   return typedDataToSignVariables(payload.eip712)
 }
 
+function isHexSignature(value: unknown): value is string {
+  return typeof value === 'string' && /^0x[0-9a-fA-F]{130}$/.test(value.trim())
+}
+
+function isHexAddress(value: string): value is HexAddress {
+  return /^0x[0-9a-fA-F]{40}$/.test(value)
+}
+
+function normalizeSignatureValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value) && value.length > 0 && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
+    return `0x${value.map((item) => Number(item).toString(16).padStart(2, '0')).join('')}`
+  }
+  return ''
+}
+
+function signatureValueShape(value: unknown): string {
+  if (typeof value === 'string') return `string(length=${value.trim().length})`
+  if (Array.isArray(value)) return `array(length=${value.length})`
+  if (value === null) return 'null'
+  return typeof value
+}
+
+function injectedEthereumProvider(): EthereumProvider | null {
+  const provider = (window as typeof window & { ethereum?: unknown }).ethereum
+  if (!provider || typeof provider !== 'object') return null
+  const request = (provider as { request?: unknown }).request
+  return typeof request === 'function' ? { request: request.bind(provider) as EthereumProvider['request'] } : null
+}
+
+function serializeTypedDataForRpc(variables: SignTypedDataVariables) {
+  return JSON.parse(JSON.stringify({
+    domain: variables.domain,
+    types: variables.types,
+    primaryType: variables.primaryType,
+    message: variables.message,
+  }, (_key, value) => (typeof value === 'bigint' ? value.toString() : value))) as Record<string, unknown>
+}
+
+async function signTypedDataWithFallback(input: {
+  variables: SignTypedDataVariables
+  walletAddress: string
+  signTypedDataAsync: SignTypedDataAsync
+  walletClient?: TypedDataWalletClient | null
+}) {
+  const attempts: string[] = []
+  orderDebugLog('sign_typed_data_start', {
+    primaryType: String(input.variables.primaryType),
+    walletAddress: shortAddress(input.walletAddress),
+    hasWalletClient: Boolean(input.walletClient?.signTypedData),
+    hasInjectedProvider: Boolean(injectedEthereumProvider()),
+  })
+  const primarySignature = await input.signTypedDataAsync(input.variables)
+  const normalizedPrimarySignature = normalizeSignatureValue(primarySignature)
+  orderDebugLog('sign_typed_data_attempt', {
+    method: 'wagmi',
+    returned: signatureValueShape(primarySignature),
+    normalizedLength: normalizedPrimarySignature.length,
+    valid: isHexSignature(normalizedPrimarySignature),
+  })
+  if (isHexSignature(normalizedPrimarySignature)) return normalizedPrimarySignature
+  attempts.push(`wagmi returned ${signatureValueShape(primarySignature)}`)
+
+  if (input.walletClient?.signTypedData && isHexAddress(input.walletAddress)) {
+    try {
+      const walletClientSignature = await input.walletClient.signTypedData({
+        ...input.variables,
+        account: input.walletAddress,
+      })
+      const normalizedWalletClientSignature = normalizeSignatureValue(walletClientSignature)
+      orderDebugLog('sign_typed_data_attempt', {
+        method: 'walletClient',
+        returned: signatureValueShape(walletClientSignature),
+        normalizedLength: normalizedWalletClientSignature.length,
+        valid: isHexSignature(normalizedWalletClientSignature),
+      })
+      if (isHexSignature(normalizedWalletClientSignature)) return normalizedWalletClientSignature
+      attempts.push(`wallet client returned ${signatureValueShape(walletClientSignature)}`)
+    } catch (error) {
+      orderDebugLog('sign_typed_data_attempt_error', {
+        method: 'walletClient',
+        message: errorMessage(error),
+      })
+      attempts.push(`wallet client failed: ${errorMessage(error)}`)
+    }
+  }
+
+  const provider = injectedEthereumProvider()
+  if (provider) {
+    try {
+      const providerSignature = await provider.request({
+        method: 'eth_signTypedData_v4',
+        params: [input.walletAddress, JSON.stringify(serializeTypedDataForRpc(input.variables))],
+      })
+      const normalizedProviderSignature = normalizeSignatureValue(providerSignature)
+      orderDebugLog('sign_typed_data_attempt', {
+        method: 'injectedProvider',
+        returned: signatureValueShape(providerSignature),
+        normalizedLength: normalizedProviderSignature.length,
+        valid: isHexSignature(normalizedProviderSignature),
+      })
+      if (isHexSignature(normalizedProviderSignature)) return normalizedProviderSignature
+      attempts.push(`injected provider returned ${signatureValueShape(providerSignature)}`)
+    } catch (error) {
+      orderDebugLog('sign_typed_data_attempt_error', {
+        method: 'injectedProvider',
+        message: errorMessage(error),
+      })
+      attempts.push(`injected provider failed: ${errorMessage(error)}`)
+    }
+  }
+
+  throw new Error(`钱包没有返回有效 EIP-712 签名。账户 ${shortAddress(input.walletAddress)}，返回：${attempts.join('；')}。请确认当前钱包支持 Polygon typed data 签名后重试。`)
+}
+
+function assertSignedOrderPayloads(value: Array<{ orderId: string; signature: unknown }>): { orderId: string; signature: string }[] {
+  return value.map((item, index) => {
+    const orderId = item.orderId.trim()
+    const signature = normalizeSignatureValue(item.signature)
+    if (!orderId) {
+      throw new Error(`第 ${index + 1} 笔订单缺少 orderId，无法提交签名。`)
+    }
+    if (!isHexSignature(signature)) {
+      throw new Error(`第 ${index + 1} 笔订单签名无效，请重新签名后提交。`)
+    }
+    return { orderId, signature }
+  })
+}
+
+function validatedSignedOrdersForSubmit(
+  preview: OrderPreview,
+  value: Array<{ orderId: string; signature: unknown }>,
+): { orderId: string; signature: string }[] {
+  if (preview.executionMode !== 'real') return []
+  if (value.length !== preview.orders.length) {
+    throw new Error(`订单签名数量不一致：需要 ${preview.orders.length} 笔，实际 ${value.length} 笔。请重新预览并签名。`)
+  }
+  return assertSignedOrderPayloads(value)
+}
+
+function orderSubmitPayload(
+  preview: OrderPreview,
+  signedOrders: Array<{ orderId: string; signature: unknown }>,
+) {
+  const normalizedSignedOrders = validatedSignedOrdersForSubmit(preview, signedOrders)
+    .map((order) => ({
+      orderId: String(order.orderId),
+      signature: String(order.signature),
+    }))
+
+  const invalidSignedOrder = normalizedSignedOrders.find((order) => !order.orderId || !isHexSignature(order.signature))
+  if (invalidSignedOrder) {
+    throw new Error('订单签名提交体无效，请重新预览并签名后再提交。')
+  }
+
+  const body = {
+    intentId: String(preview.intentId),
+    executionMode: preview.executionMode,
+    idempotencyKey: createIdempotencyKey(),
+    signedOrders: normalizedSignedOrders,
+  }
+  const bodyText = JSON.stringify(body)
+  if (bodyText.includes('"signedOrders":[[]]') || bodyText.includes('"signedOrders":[[')) {
+    throw new Error('订单签名提交体被异常序列化为空数组，请刷新页面后重新签名。')
+  }
+  const signedOrdersShape = normalizedSignedOrders.map((order) => `object:${order.orderId}:${order.signature.length}`).join('|')
+  orderDebugLog('order_submit_payload_built', {
+    clientVersion: ORDER_SUBMIT_CLIENT_VERSION,
+    intentId: preview.intentId,
+    executionMode: preview.executionMode,
+    expectedOrderCount: preview.orders.length,
+    signedOrdersCount: normalizedSignedOrders.length,
+    signedOrdersShape,
+    bodyLength: bodyText.length,
+    bodyHasNestedArray: bodyText.includes('"signedOrders":[['),
+  })
+  return {
+    bodyText,
+    signedOrdersShape,
+  }
+}
+
 function positiveNumberOrNull(value: number | null | undefined) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
 }
@@ -1191,6 +1429,29 @@ function estimateDraftAmountUsd(draft: Pick<ScriptOrderCandidate, 'amountUsd' | 
   const size = positiveNumberOrNull(draft.size)
   const price = positiveNumberOrNull(draft.limitPrice) ?? positiveNumberOrNull(draft.price)
   return size != null && price != null ? Number((size * price).toFixed(2)) : null
+}
+
+function scriptMarketTradable(market: Pick<BackendScript['markets'][number], 'active' | 'closed' | 'archived' | 'staleDetectedAt' | 'acceptingOrders' | 'enableOrderBook'>) {
+  return market.active !== false
+    && market.closed !== true
+    && market.archived !== true
+    && !market.staleDetectedAt
+    && market.acceptingOrders !== false
+    && market.enableOrderBook !== false
+}
+
+function scriptMarketStatusLabel(market: Pick<BackendScript['markets'][number], 'active' | 'closed' | 'archived' | 'staleDetectedAt' | 'acceptingOrders' | 'enableOrderBook'>) {
+  if (market.closed) return '市场已关闭'
+  if (market.archived) return '市场已归档'
+  if (market.staleDetectedAt) return '市场数据已过期'
+  if (market.active === false) return '市场未激活'
+  if (market.acceptingOrders === false) return '暂停接单'
+  if (market.enableOrderBook === false) return '盘口未开放'
+  return null
+}
+
+function orderDraftContextLabel(draft: Pick<ScriptOrderCandidate, 'marketTitle' | 'eventTitle'>) {
+  return draft.eventTitle ? `${draft.eventTitle} / ${draft.marketTitle}` : draft.marketTitle
 }
 
 function roundDraftPrice(value: number, tickSize?: number | null) {
@@ -1232,7 +1493,7 @@ function buildDefaultOrderDrafts(candidates: ScriptOrderCandidate[]): OrderDraft
     const size = positiveNumberOrNull(candidate.size)
     return {
       ...candidate,
-      enabled: candidate.userAction === 'buy' || candidate.aiAction === 'buy',
+      enabled: candidate.isTradable && (candidate.userAction === 'buy' || candidate.aiAction === 'buy'),
       orderMode,
       limitPrice: orderMode === 'limit' ? defaultLimitPrice(candidate.limitPrice ?? candidate.price, candidate.tickSize) : null,
       amountUsd,
@@ -1270,6 +1531,7 @@ function scriptOrderCandidates(script: BackendScript): ScriptOrderCandidate[] {
       selectionId: outcome.selectionId,
       marketId: scriptMarket.marketId,
       marketTitle: scriptMarket.title,
+      eventTitle: scriptMarket.eventTitle ?? null,
       layer: scriptMarket.layer,
       outcomeId: outcome.outcomeId,
       outcomeLabel: outcome.label,
@@ -1286,6 +1548,8 @@ function scriptOrderCandidates(script: BackendScript): ScriptOrderCandidate[] {
       price: outcome.price ?? scriptMarket.bestAsk ?? scriptMarket.lastTradePrice ?? null,
       tickSize: scriptMarket.tickSize ?? null,
       minOrderSize: scriptMarket.orderMinSize ?? null,
+      isTradable: scriptMarketTradable(scriptMarket),
+      marketStatus: scriptMarketStatusLabel(scriptMarket),
     })),
   )
 }
@@ -1306,6 +1570,7 @@ function scriptOrderChains(script: BackendScript, rootMarketId: string): Inferen
           return {
             marketId: scriptMarket.marketId,
             marketTitle: scriptMarket.title,
+            eventTitle: scriptMarket.eventTitle ?? null,
             side: `Buy ${outcome.label}`,
             probability: unitPriceToPercent(outcome.limitPrice ?? outcome.price ?? scriptMarket.bestAsk ?? scriptMarket.lastTradePrice),
             direction,
@@ -1386,18 +1651,18 @@ async function getOrderIntent(intentId: string, token: string) {
 
 async function submitOrderIntent(
   preview: OrderPreview,
-  signedOrders: { orderId: string; signature: string }[],
+  signedOrders: Array<{ orderId: string; signature: unknown }>,
   token: string,
 ) {
+  const submitPayload = orderSubmitPayload(preview, signedOrders)
   return fetch(`${API_PREFIX}/orders/submit`, {
     method: 'POST',
-    headers: authHeaders(token),
-    body: JSON.stringify({
-      intentId: preview.intentId,
-      executionMode: preview.executionMode,
-      idempotencyKey: createIdempotencyKey(),
-      signedOrders,
-    }),
+    headers: {
+      ...authHeaders(token),
+      'X-Causeway-Client-Version': ORDER_SUBMIT_CLIENT_VERSION,
+      'X-Causeway-Signed-Orders-Shape': submitPayload.signedOrdersShape,
+    },
+    body: submitPayload.bodyText,
   }).then((response) => readApiData<OrderSubmitResult>(response))
 }
 
@@ -1528,6 +1793,11 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
   return scriptToInferenceResult(script, status, inferenceMarket, settings)
 }
 
+async function fetchInferenceCapability(signal: AbortSignal): Promise<BackendInferenceCapability> {
+  return fetch(`${API_PREFIX}/inference-runs/capability`, { signal })
+    .then((response) => readApiData<BackendInferenceCapability>(response))
+}
+
 async function fetchUserScripts(
   token: string,
   signal: AbortSignal,
@@ -1620,6 +1890,9 @@ function scriptListItemMarket(item: BackendScriptListItem, index = 0): Market {
   return {
     id: item.rootMarketId,
     title: item.title,
+    eventId: item.rootEventId,
+    eventSlug: item.rootEventSlug,
+    eventTitle: item.rootEventTitle,
     category: 'Polymarket',
     icon: 'globe',
     iconUrl: item.icon || item.image,
@@ -1657,6 +1930,9 @@ function scriptRootMarket(script: BackendScript, fallback?: BackendScriptListIte
   return {
     id: rootMarketId,
     title: rootScriptMarket?.title ?? fallback?.title ?? script.title,
+    eventId: rootScriptMarket?.eventId ?? fallback?.rootEventId ?? null,
+    eventSlug: rootScriptMarket?.eventSlug ?? fallback?.rootEventSlug ?? null,
+    eventTitle: rootScriptMarket?.eventTitle ?? fallback?.rootEventTitle ?? null,
     category: 'Polymarket',
     icon: 'globe',
     iconUrl: rootScriptMarket?.icon || rootScriptMarket?.image || fallback?.icon || fallback?.image || null,
@@ -1704,6 +1980,7 @@ function scriptToInferenceResult(script: BackendScript, run: BackendInferenceSta
     .map<InferenceRelatedMarket>((item) => ({
       id: item.marketId,
       title: item.title,
+      eventTitle: item.eventTitle ?? null,
       category: 'Polymarket',
       price: scriptMarketPricePercent(item),
       volume: scriptMarketVolumeLabel(item),
@@ -3293,7 +3570,7 @@ function timeRangeLabel(range: InferenceSettingsState['timeRange'], market: Mark
 function modelPreferenceLabel(model: InferenceModelPreference) {
   return {
     'mock-causeway-v1': 'Mock Causeway v1',
-    auto: 'DeepSeek v4 Pro / Flash',
+    auto: 'DeepSeek（默认）',
     'deepseek-v4-pro': 'DeepSeek v4 Pro',
     'deepseek-v4-flash': 'DeepSeek v4 Flash',
   }[model]
@@ -3302,10 +3579,25 @@ function modelPreferenceLabel(model: InferenceModelPreference) {
 function modelPreferenceHint(model: InferenceModelPreference) {
   return {
     'mock-causeway-v1': '使用本地 demo 推演，适合验证前后端流程',
-    auto: '优先使用已配置的推理模型',
-    'deepseek-v4-pro': '适合正式推演，需要后端配置 AI provider',
-    'deepseek-v4-flash': '速度更快，需要后端配置 AI provider',
+    auto: '使用后端默认模型，适合稳定推演',
+    'deepseek-v4-pro': '高质量推演，速度和成本高于 Flash',
+    'deepseek-v4-flash': '快速推演，适合日常分析和联调',
   }[model]
+}
+
+function modelPreferenceFromProviderModel(model: string): InferenceModelPreference | null {
+  if (model === 'deepseek-v4-pro' || model === 'deepseek-v4-flash') return model
+  return null
+}
+
+function inferenceModelOptions(capability: BackendInferenceCapability | null): InferenceModelPreference[] {
+  const options: InferenceModelPreference[] = ['auto']
+  for (const model of capability?.models ?? []) {
+    const preference = modelPreferenceFromProviderModel(model)
+    if (preference && !options.includes(preference)) options.push(preference)
+  }
+  options.push('mock-causeway-v1')
+  return options
 }
 
 function confidenceModeLabel(mode: ConfidenceMode) {
@@ -3319,8 +3611,12 @@ function confidenceModeLabel(mode: ConfidenceMode) {
 function estimateInference(settings: InferenceSettingsState) {
   const scopeCost = settings.scope === 'all' ? 12 : settings.scope === 'markets' ? 5 : 8
   const depthCost = settings.depth * 5
-  const modelCost = settings.modelPreference === 'mock-causeway-v1' ? 1 : settings.modelPreference === 'deepseek-v4-flash' ? 3 : 8
-  const minutes = settings.modelPreference === 'mock-causeway-v1' ? '<1 分钟' : settings.modelPreference === 'deepseek-v4-flash' ? '1-2 分钟' : settings.depth === 3 ? '3-5 分钟' : '2-3 分钟'
+  const modelCost = settings.modelPreference === 'mock-causeway-v1' ? 1 : settings.modelPreference === 'deepseek-v4-pro' ? 8 : 4
+  const minutes = settings.modelPreference === 'mock-causeway-v1'
+    ? '<1 分钟'
+    : settings.modelPreference === 'deepseek-v4-pro'
+      ? settings.depth === 3 ? '3-6 分钟' : '2-4 分钟'
+      : settings.depth === 3 ? '2-5 分钟' : '1-3 分钟'
   return { minutes, points: scopeCost + depthCost + modelCost }
 }
 
@@ -3339,8 +3635,27 @@ function InferenceSettings({
 }) {
   const { openConnectModal } = useConnectModal()
   const [settings, setSettings] = useState<InferenceSettingsState>(initialSettings)
+  const [capability, setCapability] = useState<BackendInferenceCapability | null>(null)
+  const [capabilityError, setCapabilityError] = useState<string | null>(null)
   const updateSettings = useCallback((patch: Partial<InferenceSettingsState>) => {
     setSettings((current) => ({ ...current, ...patch }))
+  }, [])
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchInferenceCapability(controller.signal)
+      .then((nextCapability) => {
+        setCapability(nextCapability)
+        setCapabilityError(null)
+        setSettings((current) => {
+          const options = inferenceModelOptions(nextCapability)
+          return options.includes(current.modelPreference) ? current : { ...current, modelPreference: 'auto' }
+        })
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        setCapabilityError(errorMessage(error))
+      })
+    return () => controller.abort()
   }, [])
   const selectConfidenceMode = useCallback((mode: ConfidenceMode) => {
     updateSettings({
@@ -3368,6 +3683,12 @@ function InferenceSettings({
     ['social', '社交媒体', '社交讨论和情绪'],
     ['all', '全部', '所有可用数据源'],
   ]
+  const modelOptions = inferenceModelOptions(capability)
+  const capabilityHint = capabilityError
+    ? `模型能力读取失败：${capabilityError}`
+    : capability?.status === 'available'
+      ? `默认 ${capability.defaultModel ?? '未配置'}`
+      : capability?.reason ?? modelPreferenceHint(settings.modelPreference)
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId) ?? market.outcomes?.find((outcome) => outcome.outcomeId)
   return (
     <section className="page">
@@ -3425,12 +3746,11 @@ function InferenceSettings({
             <label className="field">
               <span>AI 模型</span>
               <select value={settings.modelPreference} onChange={(event) => updateSettings({ modelPreference: event.target.value as InferenceModelPreference })}>
-                <option value="mock-causeway-v1">Mock Causeway v1</option>
-                <option value="auto">自动：v4 Pro 优先，Flash 兜底</option>
-                <option value="deepseek-v4-pro">DeepSeek v4 Pro</option>
-                <option value="deepseek-v4-flash">DeepSeek v4 Flash</option>
+                {modelOptions.map((model) => (
+                  <option key={model} value={model}>{modelPreferenceLabel(model)}</option>
+                ))}
               </select>
-              <small>{modelPreferenceHint(settings.modelPreference)}</small>
+              <small>{modelPreferenceHint(settings.modelPreference)} · {capabilityHint}</small>
             </label>
             <label className="field">
               <span>置信度偏好</span>
@@ -3752,6 +4072,7 @@ function ScriptOrderPanelState({
   scriptId: string | null
 }) {
   const { signTypedDataAsync } = useSignTypedData()
+  const { data: walletClient } = useWalletClient({ chainId: supportedChain.id })
   const [executionMode, setExecutionMode] = useState<OrderExecutionMode>('dry_run')
   const [tradingAccountType, setTradingAccountType] = useState<TradingAccountType>('auto')
   const [drafts, setDrafts] = useState<OrderDraftSelection[]>(() => buildDefaultOrderDrafts(candidates))
@@ -3826,6 +4147,9 @@ function ScriptOrderPanelState({
     if (!scriptId) return '当前脚本缺少 scriptId，请先完成一次后端 AI 推演。'
     if (!activeDrafts.length) return '至少选择一个要买入的 outcome。'
     for (const draft of activeDrafts) {
+      if (!draft.isTradable) {
+        return `${orderDraftContextLabel(draft)} ${draft.marketStatus || '市场暂不可交易'}，请从脚本中移除或等待数据刷新。`
+      }
       const sizingValue = draft.sizingMode === 'size' ? positiveNumberOrNull(draft.size) : positiveNumberOrNull(draft.amountUsd)
       if (sizingValue == null) return `${draft.outcomeLabel} 缺少有效的${draft.sizingMode === 'size' ? '数量' : '金额'}。`
       const minOrderAmount = positiveNumberOrNull(draft.minOrderSize)
@@ -3887,7 +4211,12 @@ function ScriptOrderPanelState({
     let readiness = await fetchTradingReadiness(token, tradingAccountType)
     if (!readiness.clobApiKeyConfigured) {
       const authPayload = await prepareClobAuth(token)
-      const signature = await signTypedDataAsync(typedDataToSignVariables(authPayload.eip712))
+      const signature = await signTypedDataWithFallback({
+        variables: typedDataToSignVariables(authPayload.eip712),
+        walletAddress: authPayload.walletAddress,
+        signTypedDataAsync,
+        walletClient: walletClient as TypedDataWalletClient | null | undefined,
+      })
       await completeClobAuth(token, authPayload, signature)
       readiness = await fetchTradingReadiness(token, tradingAccountType)
     }
@@ -3902,7 +4231,7 @@ function ScriptOrderPanelState({
       throw new Error(readiness.reason || readiness.steps[0]?.message || 'Polymarket trading is not ready for this wallet.')
     }
     return readiness
-  }, [signTypedDataAsync, tradingAccountType])
+  }, [signTypedDataAsync, tradingAccountType, walletClient])
 
   const handleSubmit = useCallback(async () => {
     if (executionMode === 'real') {
@@ -3942,23 +4271,54 @@ function ScriptOrderPanelState({
         if (!walletAddress) throw new Error('真实下单缺少已认证的钱包地址。')
         setStatus('signing')
         const prepared = await prepareOrderSignatures(nextPreview, walletAddress, chainId, token)
+        orderDebugLog('prepare_order_signatures_result', {
+          intentId: prepared.intentId,
+          signingStatus: prepared.signingStatus,
+          payloadCount: prepared.payloads.length,
+          previewOrderCount: nextPreview.orders.length,
+          payloads: prepared.payloads.map((payload) => ({
+            orderId: payload.orderId,
+            primaryType: payload.eip712.primaryType,
+            signatureType: payload.signatureType,
+            signerAddress: shortAddress(payload.signerAddress),
+            makerAddress: shortAddress(payload.makerAddress),
+          })),
+        })
         if (prepared.signingStatus !== 'ready') {
           throw new Error(prepared.error || '订单签名 payload 尚不可用。')
         }
-        signedOrders = await Promise.all(prepared.payloads.map(async (payload) => ({
+        const rawSignedOrders = await Promise.all(prepared.payloads.map(async (payload) => ({
           orderId: payload.orderId,
-          signature: await signTypedDataAsync(toSignTypedDataVariables(payload)),
+          signature: await signTypedDataWithFallback({
+            variables: toSignTypedDataVariables(payload),
+            walletAddress,
+            signTypedDataAsync,
+            walletClient: walletClient as TypedDataWalletClient | null | undefined,
+          }),
         })))
+        orderDebugLog('raw_signed_orders_result', {
+          signedOrdersCount: rawSignedOrders.length,
+          signedOrders: rawSignedOrders.map((order) => ({
+            orderId: order.orderId,
+            signatureShape: signatureValueShape(order.signature),
+            normalizedLength: normalizeSignatureValue(order.signature).length,
+            valid: isHexSignature(normalizeSignatureValue(order.signature)),
+          })),
+        })
+        signedOrders = validatedSignedOrdersForSubmit(nextPreview, rawSignedOrders)
       }
       setStatus('submitting')
       const submitted = await submitOrderIntent(nextPreview, signedOrders, token)
       setSubmitResult(submitted)
     } catch (submitError) {
+      orderDebugLog('order_submit_error', {
+        message: errorMessage(submitError),
+      })
       setError(errorMessage(submitError))
     } finally {
       setStatus('idle')
     }
-  }, [auth.chainId, auth.walletAddress, buildPreview, ensureAuthToken, ensureRealTradingReady, executionMode, preview, signTypedDataAsync])
+  }, [auth.chainId, auth.walletAddress, buildPreview, ensureAuthToken, ensureRealTradingReady, executionMode, preview, signTypedDataAsync, walletClient])
 
   const refreshIntent = useCallback(async () => {
     if (!currentIntentId) return
@@ -4034,32 +4394,33 @@ function ScriptOrderPanelState({
 
           <div className="order-draft-list">
             {drafts.map((draft) => (
-              <div className={draft.enabled ? 'order-draft-row enabled' : 'order-draft-row'} key={draft.selectionId}>
+              <div className={[draft.enabled ? 'enabled' : '', !draft.isTradable ? 'disabled-market' : '', 'order-draft-row'].filter(Boolean).join(' ')} key={draft.selectionId}>
                 <label className="order-draft-toggle">
                   <input
                     checked={draft.enabled}
+                    disabled={!draft.isTradable}
                     onChange={(event) => updateDraft(draft.selectionId, { enabled: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>{draft.enabled ? '买入' : '跳过'}</span>
+                  <span>{!draft.isTradable ? '不可交易' : draft.enabled ? '买入' : '跳过'}</span>
                 </label>
                 <div className="order-draft-main">
                   <b>{draft.marketTitle}</b>
-                  <small>{draft.outcomeLabel} · {draft.aiAction === 'buy' ? 'AI 推荐' : 'AI 避免'} · {formatConfidence(draft.confidence)}</small>
+                  <small>{[draft.eventTitle, draft.outcomeLabel, draft.aiAction === 'buy' ? 'AI 推荐' : 'AI 避免', formatConfidence(draft.confidence), draft.marketStatus].filter(Boolean).join(' · ')}</small>
                   <p>{draft.reason || '暂无推荐原因。'}</p>
                 </div>
                 <div className="order-draft-controls">
                   <div className="order-toggle-group">
-                    <button className={draft.orderMode === 'market' ? 'active' : ''} disabled={!draft.enabled} type="button" onClick={() => setDraftOrderMode(draft, 'market')}>
+                    <button className={draft.orderMode === 'market' ? 'active' : ''} disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => setDraftOrderMode(draft, 'market')}>
                       市价
                     </button>
-                    <button className={draft.orderMode === 'limit' ? 'active' : ''} disabled={!draft.enabled} type="button" onClick={() => setDraftOrderMode(draft, 'limit')}>
+                    <button className={draft.orderMode === 'limit' ? 'active' : ''} disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => setDraftOrderMode(draft, 'limit')}>
                       限价
                     </button>
                   </div>
                   <label>
                     <span>数量类型</span>
-                    <select disabled={!draft.enabled} value={draft.sizingMode} onChange={(event) => setDraftSizingMode(draft, event.target.value as OrderSizingMode)}>
+                    <select disabled={!draft.enabled || !draft.isTradable} value={draft.sizingMode} onChange={(event) => setDraftSizingMode(draft, event.target.value as OrderSizingMode)}>
                       <option value="amountUsd">金额 USD</option>
                       <option value="size">数量 Shares</option>
                     </select>
@@ -4067,7 +4428,7 @@ function ScriptOrderPanelState({
                   <label>
                     <span>{draft.sizingMode === 'size' ? '数量' : '金额'}</span>
                     <input
-                      disabled={!draft.enabled}
+                      disabled={!draft.enabled || !draft.isTradable}
                       min={draft.sizingMode === 'size' ? '0.000001' : '0.01'}
                       step={draft.sizingMode === 'size' ? '0.000001' : '0.01'}
                       type="number"
@@ -4080,7 +4441,7 @@ function ScriptOrderPanelState({
                   </label>
                   <div className="order-step-row" aria-label="调整金额或数量">
                     {[-100, -10, 10, 100].map((delta) => (
-                      <button disabled={!draft.enabled} key={delta} type="button" onClick={() => adjustDraftSizing(draft, delta)}>
+                        <button disabled={!draft.enabled || !draft.isTradable} key={delta} type="button" onClick={() => adjustDraftSizing(draft, delta)}>
                         {delta > 0 ? `+${delta}` : delta}
                       </button>
                     ))}
@@ -4089,9 +4450,9 @@ function ScriptOrderPanelState({
                     <label>
                       <span>限价</span>
                       <div className="order-price-input">
-                        <button disabled={!draft.enabled} type="button" onClick={() => adjustLimitPrice(draft, -1)}>-</button>
+                        <button disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => adjustLimitPrice(draft, -1)}>-</button>
                         <input
-                          disabled={!draft.enabled}
+                          disabled={!draft.enabled || !draft.isTradable}
                           max="1"
                           min="0.0001"
                           step={draftTickSize(draft)}
@@ -4102,14 +4463,14 @@ function ScriptOrderPanelState({
                             updateDraft(draft.selectionId, { limitPrice: parsed == null ? null : roundDraftPrice(parsed, draftTickSize(draft)) })
                           }}
                         />
-                        <button disabled={!draft.enabled} type="button" onClick={() => adjustLimitPrice(draft, 1)}>+</button>
+                        <button disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => adjustLimitPrice(draft, 1)}>+</button>
                       </div>
                     </label>
                   ) : null}
                   {draft.orderMode === 'limit' ? (
                     <label>
                       <span>订单类型</span>
-                      <select disabled={!draft.enabled} value={draft.orderType} onChange={(event) => updateDraft(draft.selectionId, { orderType: event.target.value as LimitOrderType })}>
+                      <select disabled={!draft.enabled || !draft.isTradable} value={draft.orderType} onChange={(event) => updateDraft(draft.selectionId, { orderType: event.target.value as LimitOrderType })}>
                         <option value="GTC">GTC</option>
                         <option value="GTD">GTD</option>
                         <option value="FOK">FOK</option>
@@ -4166,6 +4527,7 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
             <div className={order.valid ? 'order-preview-row' : 'order-preview-row invalid'} key={order.selectionId}>
               <div>
                 <b>{draft?.marketTitle || order.marketId}</b>
+                {draft?.eventTitle ? <small>{draft.eventTitle}</small> : null}
                 <span>{order.outcomeLabel} · {order.orderMode === 'market' ? '市价' : `限价 ${formatCents(order.limitPrice)}`}</span>
               </div>
               <strong>{formatUsd(order.amountUsd)}</strong>
@@ -4407,6 +4769,7 @@ function MyScripts({
             <MarketIcon market={scriptListItemMarket(item, index)} size="small" />
             <div className="script-row-title">
               <b>{item.title}</b>
+              {item.rootEventTitle ? <small>{item.rootEventTitle}</small> : null}
               <span>
                 创建时间：{formatDateTime(item.createdAt)}
                 {item.rootOutcomeLabel ? ` · 根结果：${item.rootOutcomeLabel}` : ''}
@@ -4748,6 +5111,7 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
         legs: [{
           marketId: target.id,
           marketTitle: target.title,
+          eventTitle: target.eventTitle ?? null,
           side: defaultOrderHintForDirection(link.direction),
           probability: target.price,
           direction: link.direction,
@@ -4771,6 +5135,7 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
       legs: [{
         marketId: item.id,
         marketTitle: item.title,
+        eventTitle: item.eventTitle ?? null,
         side: defaultOrderHintForDirection(item.direction),
         probability: item.price,
         direction: item.direction || 'unknown',
@@ -4828,6 +5193,7 @@ function CausalMap({
         <div>
           <small>根节点市场</small>
           <b>{market.title}</b>
+          {market.eventTitle ? <small>{market.eventTitle}</small> : null}
           <strong>{market.price}% <span>{formatConfidence(result?.confidence)}</span></strong>
           <em>同步于 {formatDate(market.syncedAt)}</em>
         </div>
@@ -4886,7 +5252,7 @@ function CausalMap({
                       />
                       <div>
                         <b>{trimNodeTitle(leg.marketTitle, 56)}</b>
-                        <small>{directionLabel(leg.direction)} · {leg.impact || inferenceImpactSummary(leg.direction)}</small>
+                        <small>{[leg.eventTitle, directionLabel(leg.direction), leg.impact || inferenceImpactSummary(leg.direction)].filter(Boolean).join(' · ')}</small>
                         <p>{leg.rationale}</p>
                       </div>
                       <strong>{formatMarketPercent(leg.probability)}</strong>

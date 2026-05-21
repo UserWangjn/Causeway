@@ -1,7 +1,9 @@
+import type { ArgumentMetadata } from '@nestjs/common';
 import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { describe, expect, it } from 'vitest';
+import { createDtoValidationPipe } from '../../src/common/pipes/dto-validation.pipe';
 import { AuthVerifyDto } from '../../src/modules/auth/dto/auth-verify.dto';
 import { CreateInferenceRunDto } from '../../src/modules/inference/dto/create-inference-run.dto';
 import { InferenceRunParamDto } from '../../src/modules/inference/dto/inference-run-param.dto';
@@ -110,6 +112,19 @@ describe('DTO validation boundaries', () => {
       idempotencyKey: '00000000-0000-4000-8000-000000000001',
       signedOrders: Array.from({ length: 51 }, (_value, index) => ({ index })),
     });
+  });
+
+  it('preserves signed order objects through Nest request validation', async () => {
+    const signature = `0x${'a'.repeat(130)}`;
+    const result = await transformDto(SubmitOrderDto, {
+      intentId: 'intent_1',
+      executionMode: 'real',
+      idempotencyKey: '00000000-0000-4000-8000-000000000001',
+      signedOrders: [{ orderId: 'order_1', signature }],
+    });
+
+    expect(result.signedOrders).toEqual([{ orderId: 'order_1', signature }]);
+    expect(Array.isArray(result.signedOrders[0])).toBe(false);
   });
 
   it('rejects oversized route params and token query values', async () => {
@@ -223,6 +238,12 @@ async function validateDto<T extends object>(dto: DtoConstructor<T>, payload: Re
     whitelist: true,
     forbidNonWhitelisted: true,
   });
+}
+
+async function transformDto<T extends object>(dto: DtoConstructor<T>, payload: Record<string, unknown>): Promise<T> {
+  const pipe = createDtoValidationPipe(dto);
+  const metadata: ArgumentMetadata = { type: 'body', metatype: dto };
+  return pipe.transform(payload, metadata) as Promise<T>;
 }
 
 async function expectTrimmedValue<T extends object>(

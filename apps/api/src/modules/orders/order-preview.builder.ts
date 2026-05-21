@@ -28,6 +28,8 @@ export type OrderPreviewContext = {
   };
   orderBook?: OrderBookSnapshot | null;
   requireFreshOrderBook?: boolean;
+  orderBookError?: 'not_found' | 'unavailable' | null;
+  orderBookStatusCode?: number | null;
 };
 
 export type BuiltPreviewOrder = {
@@ -46,6 +48,8 @@ export type BuiltPreviewOrder = {
   tickSize: number | null;
   minOrderSize: number | null;
   orderBookRefreshedAt: string | null;
+  orderBookError: string | null;
+  orderBookStatusCode: number | null;
   valid: boolean;
   warnings: string[];
   error: string | null;
@@ -71,24 +75,26 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
     : marketFill?.filled === true ? marketFill.averagePrice : (context.requireFreshOrderBook ? null : localEstimatedPrice);
   const tickSize = context.orderBook?.tickSize ?? toNullableNumber(context.market.orderPriceMinTickSize);
   const minOrderSize = context.orderBook?.minOrderSize ?? toNullableNumber(context.market.orderMinSize);
+  const marketTradable = context.market.active
+    && !context.market.closed
+    && !context.market.archived
+    && !context.market.staleDetectedAt
+    && context.market.acceptingOrders
+    && context.market.enableOrderBook;
 
-  if (!context.market.active || context.market.closed || context.market.archived || context.market.staleDetectedAt) {
+  if (!marketTradable) {
     errors.push('MARKET_NOT_TRADABLE');
   }
 
-  if (!context.market.acceptingOrders || !context.market.enableOrderBook) {
-    errors.push('MARKET_NOT_TRADABLE');
+  if (marketTradable && context.requireFreshOrderBook && !context.orderBook) {
+    errors.push(context.orderBookError === 'not_found' ? 'MARKET_NOT_TRADABLE' : 'ORDERBOOK_UNAVAILABLE');
   }
 
-  if (context.requireFreshOrderBook && !context.orderBook) {
+  if (marketTradable && orderMode === 'market' && estimatedFillPrice == null && !context.orderBook) {
     errors.push('ORDERBOOK_UNAVAILABLE');
   }
 
-  if (orderMode === 'market' && estimatedFillPrice == null && !context.orderBook) {
-    errors.push('ORDERBOOK_UNAVAILABLE');
-  }
-
-  if (orderMode === 'market' && marketFill?.filled === false) {
+  if (marketTradable && orderMode === 'market' && marketFill?.filled === false) {
     errors.push('ORDERBOOK_DEPTH_UNAVAILABLE');
   }
 
@@ -155,6 +161,8 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
     tickSize,
     minOrderSize,
     orderBookRefreshedAt: context.orderBook?.refreshedAt ?? null,
+    orderBookError: context.orderBookError ?? null,
+    orderBookStatusCode: context.orderBookStatusCode ?? null,
     valid: errors.length === 0,
     warnings,
     error: errors[0] ?? null,
