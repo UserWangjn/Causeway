@@ -445,8 +445,7 @@ describe('ClobClient', () => {
       .update(`${timestamp}GET/balance-allowance/update`)
       .digest('base64')
       .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+      .replace(/\//g, '_');
     expect(updateOptions.headers.POLY_ADDRESS).toBe('0x1111111111111111111111111111111111111111');
     expect(updateOptions.headers.POLY_API_KEY).toBe('user-api-key');
     expect(updateOptions.headers.POLY_SIGNATURE).toBe(expectedUpdateSignature);

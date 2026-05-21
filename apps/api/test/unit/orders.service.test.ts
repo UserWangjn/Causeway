@@ -274,14 +274,14 @@ describe('OrdersService', () => {
       totalAmountUsd: 10,
       requiresSignature: false,
       submitMode: 'unavailable',
-      tradingCapabilityReason: 'Insufficient deposit wallet balance: $10.00 required, $5.00 available.',
+      tradingCapabilityReason: 'Insufficient Polymarket Safe wallet balance: $10.00 required, $5.00 available.',
     });
     expect(tx.orderIntent.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         tradingCapability: 'unavailable',
-        tradingCapabilityReason: 'Insufficient deposit wallet balance: $10.00 required, $5.00 available.',
+        tradingCapabilityReason: 'Insufficient Polymarket Safe wallet balance: $10.00 required, $5.00 available.',
         balanceCapability: 'unavailable',
-        balanceCapabilityReason: 'Insufficient deposit wallet balance: $10.00 required, $5.00 available.',
+        balanceCapabilityReason: 'Insufficient Polymarket Safe wallet balance: $10.00 required, $5.00 available.',
         cashAvailable: 5,
         totalAmountUsd: 10,
       }) as unknown,
@@ -495,7 +495,7 @@ describe('OrdersService', () => {
       }),
     ], expect.any(Date), expect.objectContaining({
       credentials: testClobCredentials(),
-      signatureType: 3,
+      signatureType: 2,
     }));
     expect(tx.causewayOrder.update).toHaveBeenCalledWith({
       where: { id: 'order_1' },
@@ -816,18 +816,23 @@ function createService(
   const tradingService = {
     getOrderCapability: vi.fn().mockResolvedValue({
       ...capability,
-      signatureType: 3,
+      signatureType: 2,
+      requestedTradingAccountType: 'auto',
+      tradingAccountType: 'gnosis_safe',
+      tradingAccountLabel: 'Polymarket Safe wallet',
       funderAddress: '0x2222222222222222222222222222222222222222',
       clobApiKeyPreview: 'test...key',
       cashAvailable: capability.cashAvailable ?? defaultFunding,
       collateralAvailable: capability.collateralAvailable ?? defaultFunding,
       balanceCapability: capability.balanceCapability ?? (capability.status === 'available' ? 'available' : 'degraded'),
       balanceCapabilityReason: capability.balanceCapabilityReason ?? null,
+      accountOptions: [],
     }),
     getOrderAuth: vi.fn().mockResolvedValue({
       credentials: testClobCredentials(),
-      signatureType: 3,
+      signatureType: 2,
       funderAddress: '0x2222222222222222222222222222222222222222',
+      tradingAccountType: 'gnosis_safe',
     }),
   };
   return new OrdersService(clobClient, prisma as PrismaService, tradingService as unknown as TradingService);

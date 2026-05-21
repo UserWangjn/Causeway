@@ -15,6 +15,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator';
+import { TRADING_ACCOUNT_TYPES, type TradingAccountType } from '../../trading/trading-account-type';
 
 export class OrderPreviewSelectionDto {
   @TrimString()
@@ -59,6 +60,10 @@ export class OrderPreviewDto {
 
   @IsIn(['dry_run', 'real'])
   executionMode!: string;
+
+  @IsOptional()
+  @IsIn(TRADING_ACCOUNT_TYPES)
+  tradingAccountType?: TradingAccountType;
 
   @IsArray()
   @ArrayMinSize(1)

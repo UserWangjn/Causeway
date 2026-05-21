@@ -1009,7 +1009,7 @@ button {
   position: relative;
   display: grid;
   width: 168px;
-  min-height: 94px;
+  min-height: 108px;
   align-content: start;
   justify-items: center;
   gap: 5px;
@@ -1039,7 +1039,7 @@ button {
 
 .flow-market-node.focus {
   width: 260px;
-  min-height: 122px;
+  min-height: 138px;
 }
 
 .flow-market-node:has(.flow-node-icon-target:hover) {
@@ -2206,6 +2206,39 @@ button {
   gap: 12px;
 }
 
+.orderbook-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  margin-bottom: 10px;
+  padding: 0 12px;
+  border: 1px solid #e2eaf5;
+  border-radius: 8px;
+  color: #64748b;
+  background: #fff;
+}
+
+.orderbook-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #0f172a;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.orderbook-empty {
+  padding: 22px 16px;
+  color: #64748b;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .orderbook-list {
   display: grid;
   overflow: hidden;
@@ -2861,6 +2894,20 @@ button {
   background: #e9fbf4;
   font-size: 12px;
   font-style: normal;
+}
+
+.flow-node-kind {
+  display: inline-flex;
+  align-items: center;
+  min-height: 17px;
+  padding: 0 7px;
+  border: 1px solid #dce7f6;
+  border-radius: 999px;
+  color: #52637c;
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 10px;
+  font-weight: 760;
+  line-height: 1;
 }
 
 .segmented,
@@ -3940,6 +3987,34 @@ button {
   font-weight: 720;
 }
 
+.trading-account-selector {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid #edf2f8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.trading-account-selector > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.trading-account-selector span {
+  color: #1f2c40;
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.trading-account-selector small {
+  color: #65748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .order-address-field {
   display: grid;
   gap: 8px;
@@ -4618,6 +4693,7 @@ button {
 
   .order-panel-head,
   .order-panel-actions,
+  .trading-account-selector,
   .order-submit-block {
     align-items: stretch;
     flex-direction: column;

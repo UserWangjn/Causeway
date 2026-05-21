@@ -55,6 +55,8 @@ type View = 'network' | 'detail' | 'infer' | 'progress' | 'script' | 'scripts'
 
 type Market = {
   id: string
+  nodeType?: 'event' | 'market'
+  marketId?: string | null
   slug?: string | null
   title: string
   groupItemTitle?: string | null
@@ -78,6 +80,8 @@ type Market = {
   lastTradePrice?: number | null
   orderMinSize?: number | null
   tickSize?: number | null
+  marketsCount?: number | null
+  topMarkets?: { marketId: string; title: string; groupItemTitle?: string | null; price: number | null; volume: number | null }[]
   price: number
   change: number
   volume: string
@@ -93,6 +97,8 @@ type MarketOutcome = NonNullable<Market['outcomes']>[number]
 
 type ApiMarketNode = {
   id: string
+  nodeType?: 'event' | 'market'
+  marketId?: string | null
   slug?: string | null
   title: string
   groupItemTitle?: string | null
@@ -119,6 +125,8 @@ type ApiMarketNode = {
   lastTradePrice?: number | null
   orderMinSize?: number | null
   tickSize?: number | null
+  marketsCount?: number | null
+  topMarkets?: { marketId: string; title: string; groupItemTitle?: string | null; price: number | null; volume: number | null }[]
   syncedAt?: string | null
   x?: number
   y?: number
@@ -160,6 +168,8 @@ type EventDetail = {
     description: string | null
     rules: string | null
     marketsCount: number | null
+    marketsReturned?: number | null
+    hasMoreMarkets?: boolean
     syncedAt: string | null
   } | null
   selectedMarket?: ApiMarketNode | null
@@ -252,6 +262,7 @@ type InferenceScriptChain = {
 }
 
 type OrderExecutionMode = 'dry_run' | 'real'
+type TradingAccountType = 'auto' | 'gnosis_safe' | 'proxy' | 'deposit_wallet'
 type OrderMode = 'market' | 'limit'
 type LimitOrderType = 'GTC' | 'GTD' | 'FOK' | 'FAK'
 type OrderSizingMode = 'amountUsd' | 'size'
@@ -310,6 +321,12 @@ type OrderPreview = {
   executionMode: OrderExecutionMode
   tradingCapability: 'available' | 'degraded' | 'unavailable'
   balanceCapability: 'available' | 'degraded' | 'unavailable'
+  requestedTradingAccountType?: TradingAccountType
+  tradingAccountType?: Exclude<TradingAccountType, 'auto'> | null
+  tradingAccountLabel?: string | null
+  signatureType?: 0 | 1 | 2 | 3 | null
+  funderAddress?: string | null
+  accountOptions?: TradingAccountOption[]
   tradingCapabilityReason: string | null
   balanceCapabilityReason: string | null
   cashAvailable: number | null
@@ -333,6 +350,18 @@ type PreparedOrderPayload = {
   funderAddress: string | null
   expiresAt?: string
   eip712: TypedDataPayload
+}
+
+type TradingAccountOption = {
+  type: Exclude<TradingAccountType, 'auto'>
+  label: string
+  signatureType: 0 | 1 | 2 | 3
+  funderAddress: string | null
+  status: TradingReadiness['status']
+  canTrade: boolean
+  reason: string | null
+  cashAvailable: number | null
+  collateralAvailable: number | null
 }
 
 type PrepareSignatureResult = {
@@ -452,6 +481,10 @@ type TradingReadiness = {
   walletAddress: string
   chainId: number
   signatureType: 0 | 1 | 2 | 3
+  requestedTradingAccountType?: TradingAccountType
+  tradingAccountType: Exclude<TradingAccountType, 'auto'>
+  tradingAccountLabel: string
+  funderAddress: string | null
   clobApiKeyConfigured: boolean
   clobApiKeyPreview: string | null
   depositWalletAddress: string | null
@@ -460,6 +493,7 @@ type TradingReadiness = {
   depositWalletTxState: string | null
   builderConfigured: boolean
   steps: { code: string; message: string; action: string }[]
+  accountOptions?: TradingAccountOption[]
 }
 
 type ClobAuthPrepareResult = {
@@ -722,14 +756,31 @@ type SignTypedDataVariables = Parameters<ReturnType<typeof useSignTypedData>['si
 type BackendMarketNetwork = {
   nodes: Array<{
     id: string
-    marketId: string
+    nodeType?: 'event' | 'market'
+    marketId?: string | null
+    eventId?: string | null
+    slug?: string | null
+    eventSlug?: string | null
+    eventTitle?: string | null
     title: string
+    groupItemTitle?: string | null
     icon: string | null
+    image?: string | null
     price: number | null
     volume: number | null
     volume24hr?: number | null
     liquidity?: number | null
+    endDate?: string | null
+    description?: string | null
+    rules?: string | null
+    acceptingOrders?: boolean
     category: string | null
+    categoryKey?: string | null
+    officialCategory?: string | null
+    tags?: string[]
+    marketsCount?: number | null
+    topMarkets?: { marketId: string; title: string; groupItemTitle?: string | null; price: number | null; volume: number | null }[]
+    syncedAt?: string | null
   }>
   edges: Array<{
     id: string
@@ -739,29 +790,43 @@ type BackendMarketNetwork = {
     weight: number
   }>
   total?: number
+  totalEvents?: number
+  totalMarkets?: number
   returned?: number
   limit?: number
   hasMore?: boolean
   category?: string
   source?: string
   topologySource?: string
+  nodeType?: 'event' | 'market'
   generatedAt?: string
 }
 
 type NetworkSummary = {
   total: number
+  totalEvents: number | null
+  totalMarkets: number | null
   returned: number
   limit: number
   hasMore: boolean
   category: string
   topologySource: string
+  nodeType: 'event' | 'market'
 }
 
 const API_PREFIX = '/api/v1'
+const DEPOSIT_WALLET_POLL_INTERVAL_MS = 2_500
+const DEPOSIT_WALLET_POLL_ATTEMPTS = 20
 const ACCESS_TOKEN_STORAGE_KEY = 'causeway.accessToken'
 const ACCESS_WALLET_STORAGE_KEY = 'causeway.walletAddress'
 const ACCESS_CHAIN_STORAGE_KEY = 'causeway.chainId'
 const ACCESS_EXPIRES_STORAGE_KEY = 'causeway.expiresAt'
+const TRADING_ACCOUNT_CHOICES: Array<{ type: TradingAccountType; label: string; description: string }> = [
+  { type: 'auto', label: 'Auto', description: 'Prefer Safe, then Proxy, then Deposit Wallet' },
+  { type: 'gnosis_safe', label: 'Safe', description: 'Use the user Polymarket Safe wallet balance' },
+  { type: 'proxy', label: 'Proxy', description: 'Use the user Polymarket Proxy wallet' },
+  { type: 'deposit_wallet', label: 'Deposit', description: 'Use the Builder Deposit Wallet' },
+]
 
 async function readApiData<T>(response: Response): Promise<T> {
   const payload = await response.json() as ApiEnvelope<T>
@@ -778,25 +843,35 @@ async function readApiData<T>(response: Response): Promise<T> {
 }
 
 function backendNetworkToApiNode(node: BackendMarketNetwork['nodes'][number], index: number): ApiMarketNode {
+  const nodeType = node.nodeType ?? 'market'
   return {
-    id: node.marketId || node.id,
+    id: node.id,
+    nodeType,
+    marketId: node.marketId ?? (nodeType === 'market' ? node.id : null),
+    slug: node.slug ?? null,
     title: node.title,
+    groupItemTitle: node.groupItemTitle ?? null,
+    eventId: node.eventId ?? (nodeType === 'event' ? node.id : null),
+    eventSlug: node.eventSlug ?? null,
+    eventTitle: node.eventTitle ?? (nodeType === 'event' ? node.title : null),
     category: node.category,
-    categoryKey: node.category,
-    officialCategory: node.category,
-    tags: node.category ? [node.category] : [],
+    categoryKey: node.categoryKey ?? node.category,
+    officialCategory: node.officialCategory ?? node.category,
+    tags: node.tags ?? (node.category ? [node.category] : []),
     icon: node.icon,
-    image: node.icon,
+    image: node.image ?? node.icon,
     price: node.price,
     volume: node.volume,
     volume24hr: node.volume24hr ?? null,
     liquidity: node.liquidity ?? null,
-    endDate: null,
-    description: null,
-    rules: null,
-    acceptingOrders: true,
+    endDate: node.endDate ?? null,
+    description: node.description ?? null,
+    rules: node.rules ?? null,
+    acceptingOrders: node.acceptingOrders ?? true,
     outcomes: [],
-    syncedAt: null,
+    marketsCount: node.marketsCount ?? null,
+    topMarkets: node.topMarkets ?? [],
+    syncedAt: node.syncedAt ?? null,
     x: 50 + (index % 5) * 8,
     y: 50 + Math.floor(index / 5) * 8,
   }
@@ -809,8 +884,8 @@ function backendNetworkToResponse(data: BackendMarketNetwork): MarketNetworkResp
       ...edge,
       reason: edge.relationType,
     })),
-    source: 'database',
-    generatedAt: new Date().toISOString(),
+    source: data.source ?? 'database',
+    generatedAt: data.generatedAt ?? new Date().toISOString(),
   }
 }
 
@@ -869,6 +944,54 @@ function walletInitials(address?: string | null) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function invalidOrderPreviewMessage(preview: OrderPreview) {
+  const invalidOrder = preview.orders.find((order) => !order.valid)
+  return invalidOrder ? orderPreviewErrorText(invalidOrder) : null
+}
+
+function orderPreviewErrorText(order: OrderPreviewOrder, draft?: OrderDraftSelection | null) {
+  const label = draft?.outcomeLabel || order.outcomeLabel || draft?.marketTitle || order.marketId
+  const rawError = order.error || ''
+  if (rawError.includes('BELOW_MIN_ORDER_SIZE')) {
+    const minimum = order.minOrderSize != null ? formatUsd(order.minOrderSize) : '市场最小下单金额'
+    return `${label} 低于最小下单金额 ${minimum}（当前 ${formatUsd(order.amountUsd)}）`
+  }
+  if (rawError.includes('INVALID_TICK_SIZE')) {
+    const currentPrice = order.limitPrice != null ? `（当前限价 ${formatCents(order.limitPrice)}）` : ''
+    return `${label} 限价不符合报价精度，最小变动单位 ${formatTickSize(order.tickSize)}${currentPrice}`
+  }
+  if (rawError.includes('ORDERBOOK_DEPTH_UNAVAILABLE')) {
+    return `${label} 盘口深度不足，当前金额无法完全成交，请降低金额或改用限价`
+  }
+  if (rawError.includes('ORDERBOOK_UNAVAILABLE')) {
+    return `${label} 盘口暂不可用，请等待市场数据刷新后重试`
+  }
+  if (rawError.includes('MARKET_NOT_TRADABLE')) {
+    return `${label} 市场暂不可交易，可能已关闭、暂停接单或盘口未开放`
+  }
+  if (rawError.includes('REQUEST_VALIDATION_FAILED')) {
+    if (order.orderMode === 'limit' && order.limitPrice == null) {
+      return `${label} 限价单缺少限价`
+    }
+    return `${label} 金额、数量或限价不合法，请修正后重试`
+  }
+  return rawError ? `${label} 下单参数无效：${rawError}` : `${label} 下单参数无效，请修正金额、数量、限价或盘口状态`
+}
+
+function orderPreviewWarningText(warnings: string[]) {
+  if (warnings.length === 0) return '可提交'
+  return warnings.map((warning) => {
+    if (warning.includes('MARKET_ORDER_ESTIMATE_CAN_CHANGE')) return '市价单成交价格会随盘口变化'
+    if (warning.includes('ORDERBOOK_REFRESH_UNAVAILABLE_USING_LOCAL_CACHE')) return '盘口刷新失败，使用本地缓存估算'
+    return warning
+  }).join('、')
+}
+
+function formatTickSize(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '市场要求'
+  return `$${value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`
 }
 
 function useCausewayAuth(): CausewayAuth {
@@ -1063,6 +1186,13 @@ function defaultLimitPrice(price: number | null | undefined, tickSize?: number |
   return roundDraftPrice(positiveNumberOrNull(price) ?? 0.5, tickSize)
 }
 
+function estimateDraftAmountUsd(draft: Pick<ScriptOrderCandidate, 'amountUsd' | 'limitPrice' | 'price' | 'size'> & { sizingMode: OrderSizingMode }) {
+  if (draft.sizingMode === 'amountUsd') return positiveNumberOrNull(draft.amountUsd)
+  const size = positiveNumberOrNull(draft.size)
+  const price = positiveNumberOrNull(draft.limitPrice) ?? positiveNumberOrNull(draft.price)
+  return size != null && price != null ? Number((size * price).toFixed(2)) : null
+}
+
 function roundDraftPrice(value: number, tickSize?: number | null) {
   const step = positiveNumberOrNull(tickSize) ?? 0.01
   const minPrice = Math.max(0.0001, step)
@@ -1210,13 +1340,20 @@ async function patchScriptSelection(scriptId: string, draft: OrderDraftSelection
   }).then((response) => readApiData<unknown>(response))
 }
 
-async function createOrderPreview(scriptId: string, executionMode: OrderExecutionMode, activeDrafts: OrderDraftSelection[], token: string) {
+async function createOrderPreview(
+  scriptId: string,
+  executionMode: OrderExecutionMode,
+  activeDrafts: OrderDraftSelection[],
+  token: string,
+  tradingAccountType: TradingAccountType,
+) {
   return fetch(`${API_PREFIX}/orders/preview`, {
     method: 'POST',
     headers: authHeaders(token),
     body: JSON.stringify({
       scriptId,
       executionMode,
+      tradingAccountType,
       selections: activeDrafts.map(activeOrderSelectionPayload),
     }),
   }).then((response) => readApiData<OrderPreview>(response))
@@ -1236,6 +1373,7 @@ async function prepareOrderSignatures(
       executionMode: preview.executionMode,
       walletAddress,
       chainId,
+      tradingAccountType: preview.tradingAccountType ?? preview.requestedTradingAccountType ?? 'auto',
     }),
   }).then((response) => readApiData<PrepareSignatureResult>(response))
 }
@@ -1263,8 +1401,9 @@ async function submitOrderIntent(
   }).then((response) => readApiData<OrderSubmitResult>(response))
 }
 
-async function fetchTradingReadiness(token: string) {
-  return fetch(`${API_PREFIX}/trading/readiness`, {
+async function fetchTradingReadiness(token: string, tradingAccountType: TradingAccountType = 'auto') {
+  const params = new URLSearchParams({ tradingAccountType })
+  return fetch(`${API_PREFIX}/trading/readiness?${params.toString()}`, {
     headers: authHeaders(token),
   }).then((response) => readApiData<TradingReadiness>(response))
 }
@@ -1294,6 +1433,21 @@ async function ensureDepositWallet(token: string) {
     method: 'POST',
     headers: authHeaders(token),
   }).then((response) => readApiData<TradingReadiness>(response))
+}
+
+async function waitForDepositWalletReadiness(token: string, initial: TradingReadiness, tradingAccountType: TradingAccountType = 'deposit_wallet') {
+  let readiness = initial
+  for (let attempt = 0; readiness.status === 'deposit_wallet_pending' && attempt < DEPOSIT_WALLET_POLL_ATTEMPTS; attempt += 1) {
+    await sleep(DEPOSIT_WALLET_POLL_INTERVAL_MS)
+    readiness = await fetchTradingReadiness(token, tradingAccountType)
+  }
+  return readiness
+}
+
+async function sleep(ms: number) {
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
 }
 
 async function sleepWithAbort(ms: number, signal: AbortSignal) {
@@ -1402,14 +1556,33 @@ async function fetchSavedScript(token: string, scriptId: string, signal: AbortSi
 async function loadMarketForInference(market: Market, signal: AbortSignal): Promise<Market> {
   if (marketInferenceOutcome(market)) return market
 
-  const params = new URLSearchParams({ marketId: market.id })
+  const params = eventDetailParamsForMarket(market)
   const detail = await fetch(`${API_PREFIX}/events/detail?${params.toString()}`, { signal })
     .then((response) => readApiData<EventDetailResponse['data']>(response))
   const selectedMarket = detail.selectedMarket ? apiNodeToMarket(detail.selectedMarket, 0) : null
   if (selectedMarket && marketInferenceOutcome(selectedMarket)) return selectedMarket
 
-  const relatedMarket = detail.markets.map(apiNodeToMarket).find((item) => item.id === market.id && marketInferenceOutcome(item))
-  return relatedMarket ?? market
+  const relatedMarkets = detail.markets.map(apiNodeToMarket)
+  const relatedMarket = relatedMarkets.find((item) => item.id === (market.marketId ?? market.id) && marketInferenceOutcome(item))
+  return relatedMarket ?? relatedMarkets.find(marketInferenceOutcome) ?? market
+}
+
+function eventDetailParamsForMarket(market: Market) {
+  const params = new URLSearchParams()
+  if (market.nodeType === 'event' && (market.eventId || market.id)) {
+    params.set('eventId', market.eventId || market.id)
+    return params
+  }
+  if (market.marketId) {
+    params.set('marketId', market.marketId)
+    return params
+  }
+  if (market.eventId && !market.outcomes?.length) {
+    params.set('eventId', market.eventId)
+    return params
+  }
+  params.set('marketId', market.id)
+  return params
 }
 
 function scriptCompletedRun(script: BackendScript): BackendInferenceStatus {
@@ -1911,6 +2084,7 @@ function marketDisplayLabel(market: Market) {
   if (market.groupItemTitle) return market.groupItemTitle
   let label = market.title
   label = label.replace(/^Will\s+/i, '')
+  label = label.replace(/\s+win\s+the\s+\d{4}\s+FIFA\s+World\s+Cup\??$/i, '')
   label = label.replace(/\s+be\s+the\s+top\s+grossing\s+movie\s+of\s+2026\??$/i, '')
   label = label.replace(/\s+win\s+on\s+\d{4}-\d{2}-\d{2}\??$/i, '')
   label = label.replace(/\?$/, '')
@@ -1924,6 +2098,8 @@ function eventToMarket(event: EventDetail['event'], fallback: Market): Market {
   return {
     ...fallback,
     id: event.id || fallback.eventId || fallback.id,
+    nodeType: 'event',
+    marketId: fallback.marketId ?? null,
     slug: event.slug || fallback.eventSlug || fallback.slug,
     title: event.title || fallback.eventTitle || fallback.title,
     category,
@@ -1937,6 +2113,7 @@ function eventToMarket(event: EventDetail['event'], fallback: Market): Market {
     endDate: event.endDate || fallback.endDate,
     description: event.description || fallback.description,
     rules: event.rules || fallback.rules,
+    marketsCount: event.marketsCount ?? fallback.marketsCount,
     syncedAt: event.syncedAt || fallback.syncedAt,
     price: fallback.price,
     volume: formatCompactMoney(event.volume),
@@ -1948,9 +2125,9 @@ function eventToMarket(event: EventDetail['event'], fallback: Market): Market {
 }
 
 const FLOW_NODE_WIDTH = 168
-const FLOW_NODE_HEIGHT = 94
+const FLOW_NODE_HEIGHT = 108
 const FLOW_FOCUS_WIDTH = 260
-const FLOW_FOCUS_HEIGHT = 122
+const FLOW_FOCUS_HEIGHT = 138
 const FLOW_CANVAS_WIDTH = 1600
 const FLOW_CANVAS_HEIGHT = 760
 const FLOW_CENTER = { x: FLOW_CANVAS_WIDTH / 2, y: 382 }
@@ -2397,6 +2574,8 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
   const price = node.price == null ? 0 : Math.round(node.price <= 1 ? node.price * 100 : node.price)
   return {
     id: node.id,
+    nodeType: node.nodeType ?? 'market',
+    marketId: node.marketId ?? (node.nodeType === 'event' ? null : node.id),
     slug: node.slug,
     title: node.title,
     groupItemTitle: node.groupItemTitle,
@@ -2426,6 +2605,8 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
     lastTradePrice: node.lastTradePrice,
     orderMinSize: node.orderMinSize,
     tickSize: node.tickSize,
+    marketsCount: node.marketsCount ?? null,
+    topMarkets: node.topMarkets || [],
     price,
     change: 0,
     volume: formatCompactMoney(node.volume),
@@ -2689,11 +2870,14 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
   const [networkEdges, setNetworkEdges] = useState<ApiMarketEdge[]>([])
   const [networkSummary, setNetworkSummary] = useState<NetworkSummary>({
     total: markets.length,
+    totalEvents: null,
+    totalMarkets: markets.length,
     returned: markets.length,
     limit: 25,
     hasMore: false,
     category: 'hot',
     topologySource: 'local',
+    nodeType: 'event',
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -2774,7 +2958,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       timedOut = true
       controller.abort()
     }, 12000)
-    const params = new URLSearchParams({ limit: '25' })
+    const params = new URLSearchParams({ limit: '25', nodeType: 'event' })
     const trimmedQuery = searchQuery.trim()
     if (selectedSearch?.type === 'market' && selectedSearch.marketId) {
       params.set('q', selectedSearch.title)
@@ -2798,11 +2982,14 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
         setNetworkEdges(nodes.length ? payload.edges : [])
         setNetworkSummary({
           total: data.total ?? nodes.length,
+          totalEvents: data.totalEvents ?? null,
+          totalMarkets: data.totalMarkets ?? data.total ?? null,
           returned: data.returned ?? nodes.length,
           limit: data.limit ?? 25,
           hasMore: data.hasMore ?? false,
           category: data.category ?? activeCategory,
           topologySource: data.topologySource ?? data.source ?? 'database',
+          nodeType: data.nodeType ?? 'event',
         })
         setError(null)
       })
@@ -2899,7 +3086,14 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       />
       <div className="network-summary">
         <strong>{activeCategoryLabel}</strong>
-        <span>{formatCompactCount(networkSummary.returned)} / {formatCompactCount(networkSummary.total)} markets</span>
+        {networkSummary.nodeType === 'event' ? (
+          <>
+            <span>{formatCompactCount(networkSummary.returned)} / {formatCompactCount(networkSummary.totalEvents ?? networkSummary.returned)} events</span>
+            <span>{formatCompactCount(networkSummary.totalMarkets ?? networkSummary.total)} source markets</span>
+          </>
+        ) : (
+          <span>{formatCompactCount(networkSummary.returned)} / {formatCompactCount(networkSummary.total)} markets</span>
+        )}
         {networkSummary.hasMore ? <span>limit {formatCompactCount(networkSummary.limit)}</span> : null}
       </div>
       <div className="network-stage">
@@ -2928,11 +3122,23 @@ function MarketDetail({
 }) {
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null)
   const [selectedOutcome, setSelectedOutcome] = useState<SelectedInferenceOutcome | null>(null)
+  const detailParams = useMemo(() => {
+    const params = new URLSearchParams()
+    if (market.nodeType === 'event' && (market.eventId || market.id)) {
+      params.set('eventId', market.eventId || market.id)
+    } else if (market.marketId) {
+      params.set('marketId', market.marketId)
+    } else if (market.eventId && !market.outcomes?.length) {
+      params.set('eventId', market.eventId)
+    } else {
+      params.set('marketId', market.id)
+    }
+    return params.toString()
+  }, [market.eventId, market.id, market.marketId, market.nodeType, market.outcomes?.length])
 
   useEffect(() => {
     const controller = new AbortController()
-    const params = new URLSearchParams({ marketId: market.id })
-    fetch(`${API_PREFIX}/events/detail?${params.toString()}`, { signal: controller.signal })
+    fetch(`${API_PREFIX}/events/detail?${detailParams}`, { signal: controller.signal })
       .then((response) => {
         return readApiData<EventDetailResponse['data']>(response)
       })
@@ -2941,7 +3147,7 @@ function MarketDetail({
         if (error.name !== 'AbortError') setEventDetail(null)
       })
     return () => controller.abort()
-  }, [market.id])
+  }, [detailParams])
 
   const eventMarkets = useMemo(
     () => eventDetail?.markets.map(apiNodeToMarket) || [],
@@ -2949,10 +3155,10 @@ function MarketDetail({
   )
   const selectedEventMarket = useMemo(() => {
     if (eventDetail?.selectedMarket) return apiNodeToMarket(eventDetail.selectedMarket, 0)
-    return eventMarkets.find((item) => item.id === market.id) || market
+    return eventMarkets.find((item) => item.id === (market.marketId ?? market.id)) || market
   }, [eventDetail, eventMarkets, market])
   const eventSummaryMarket = eventMarkets.length > 1 ? eventToMarket(eventDetail?.event || null, market) : selectedEventMarket
-  const displayMarket = selectedEventMarket
+  const displayMarket = eventMarkets.length > 1 ? eventSummaryMarket : selectedEventMarket
   const detailMarkets = eventMarkets.length > 1 ? eventMarkets : [selectedEventMarket]
   const ruleCopy = marketRuleCopy(displayMarket)
   const descriptionCopy = marketDescriptionCopy(displayMarket)
@@ -3018,10 +3224,12 @@ function MarketDetail({
             <MarketPriceChart eventMarkets={detailMarkets} market={displayMarket} />
             <MarketOrderBook
               eventMarkets={detailMarkets}
+              hasMoreMarkets={Boolean(eventDetail?.event?.hasMoreMarkets)}
               loading={!eventDetail}
               market={displayMarket}
               onSelectOutcome={handleSelectOutcome}
               selectedOutcomeId={activeSelectedOutcome?.outcomeId ?? null}
+              totalMarkets={eventDetail?.event?.marketsCount ?? detailMarkets.length}
             />
           </Card>
         </div>
@@ -3545,6 +3753,7 @@ function ScriptOrderPanelState({
 }) {
   const { signTypedDataAsync } = useSignTypedData()
   const [executionMode, setExecutionMode] = useState<OrderExecutionMode>('dry_run')
+  const [tradingAccountType, setTradingAccountType] = useState<TradingAccountType>('auto')
   const [drafts, setDrafts] = useState<OrderDraftSelection[]>(() => buildDefaultOrderDrafts(candidates))
   const [preview, setPreview] = useState<OrderPreview | null>(null)
   const [submitResult, setSubmitResult] = useState<OrderSubmitResult | null>(null)
@@ -3573,6 +3782,13 @@ function ScriptOrderPanelState({
     setError(null)
   }, [])
 
+  const setTradingAccountSelection = useCallback((type: TradingAccountType) => {
+    setTradingAccountType(type)
+    setPreview(null)
+    setSubmitResult(null)
+    setError(null)
+  }, [])
+
   const setDraftOrderMode = useCallback((draft: OrderDraftSelection, orderMode: OrderMode) => {
     updateDraft(draft.selectionId, {
       orderMode,
@@ -3584,8 +3800,7 @@ function ScriptOrderPanelState({
   const setDraftSizingMode = useCallback((draft: OrderDraftSelection, sizingMode: OrderSizingMode) => {
     if (sizingMode === 'size') {
       const price = positiveNumberOrNull(draft.limitPrice) ?? 0.5
-      const minSize = positiveNumberOrNull(draft.minOrderSize) ?? 0.000001
-      const fallbackSize = positiveNumberOrNull(draft.size) ?? roundDraftSize((positiveNumberOrNull(draft.amountUsd) ?? 10) / price, minSize)
+      const fallbackSize = positiveNumberOrNull(draft.size) ?? roundDraftSize((positiveNumberOrNull(draft.amountUsd) ?? 10) / price)
       updateDraft(draft.selectionId, { sizingMode, size: fallbackSize })
       return
     }
@@ -3596,7 +3811,7 @@ function ScriptOrderPanelState({
 
   const adjustDraftSizing = useCallback((draft: OrderDraftSelection, delta: number) => {
     if (draft.sizingMode === 'size') {
-      updateDraft(draft.selectionId, { size: roundDraftSize((positiveNumberOrNull(draft.size) ?? 0) + delta, positiveNumberOrNull(draft.minOrderSize) ?? 0.000001) })
+      updateDraft(draft.selectionId, { size: roundDraftSize((positiveNumberOrNull(draft.size) ?? 0) + delta) })
       return
     }
     updateDraft(draft.selectionId, { amountUsd: roundDraftAmount((positiveNumberOrNull(draft.amountUsd) ?? 0) + delta) })
@@ -3613,8 +3828,10 @@ function ScriptOrderPanelState({
     for (const draft of activeDrafts) {
       const sizingValue = draft.sizingMode === 'size' ? positiveNumberOrNull(draft.size) : positiveNumberOrNull(draft.amountUsd)
       if (sizingValue == null) return `${draft.outcomeLabel} 缺少有效的${draft.sizingMode === 'size' ? '数量' : '金额'}。`
-      if (draft.sizingMode === 'size' && draft.minOrderSize != null && sizingValue < draft.minOrderSize) {
-        return `${draft.outcomeLabel} size is below the market minimum of ${draft.minOrderSize}.`
+      const minOrderAmount = positiveNumberOrNull(draft.minOrderSize)
+      const estimatedAmount = estimateDraftAmountUsd(draft)
+      if (minOrderAmount != null && estimatedAmount != null && estimatedAmount < minOrderAmount) {
+        return `${draft.outcomeLabel} 低于最小下单金额 ${formatUsd(minOrderAmount)}（当前 ${formatUsd(estimatedAmount)}）。`
       }
       if (draft.orderMode === 'limit' && positiveNumberOrNull(draft.limitPrice) == null) {
         return `${draft.outcomeLabel} 缺少有效限价。`
@@ -3650,7 +3867,7 @@ function ScriptOrderPanelState({
       setStatus('saving')
       await Promise.all(drafts.map((draft) => patchScriptSelection(scriptId, draft, token)))
       setStatus('previewing')
-      const nextPreview = await createOrderPreview(scriptId, executionMode, activeDrafts, token)
+      const nextPreview = await createOrderPreview(scriptId, executionMode, activeDrafts, token, tradingAccountType)
       setPreview(nextPreview)
       return nextPreview
     } catch (orderError) {
@@ -3659,7 +3876,7 @@ function ScriptOrderPanelState({
     } finally {
       setStatus('idle')
     }
-  }, [activeDrafts, drafts, ensureAuthToken, executionMode, scriptId, validateDrafts])
+  }, [activeDrafts, drafts, ensureAuthToken, executionMode, scriptId, tradingAccountType, validateDrafts])
 
   const handlePreview = useCallback(async () => {
     await buildPreview()
@@ -3667,14 +3884,16 @@ function ScriptOrderPanelState({
 
   const ensureRealTradingReady = useCallback(async (token: string) => {
     setStatus('signing')
-    let readiness = await fetchTradingReadiness(token)
+    let readiness = await fetchTradingReadiness(token, tradingAccountType)
     if (!readiness.clobApiKeyConfigured) {
       const authPayload = await prepareClobAuth(token)
       const signature = await signTypedDataAsync(typedDataToSignVariables(authPayload.eip712))
-      readiness = await completeClobAuth(token, authPayload, signature)
+      await completeClobAuth(token, authPayload, signature)
+      readiness = await fetchTradingReadiness(token, tradingAccountType)
     }
-    if (!readiness.depositWalletDeployed) {
+    if (readiness.tradingAccountType === 'deposit_wallet' && !readiness.depositWalletDeployed) {
       readiness = await ensureDepositWallet(token)
+      readiness = await waitForDepositWalletReadiness(token, readiness, tradingAccountType)
     }
     if (readiness.status === 'deposit_wallet_pending') {
       throw new Error(readiness.reason || 'Polymarket deposit wallet is being created. Please retry after it is confirmed.')
@@ -3683,7 +3902,7 @@ function ScriptOrderPanelState({
       throw new Error(readiness.reason || readiness.steps[0]?.message || 'Polymarket trading is not ready for this wallet.')
     }
     return readiness
-  }, [signTypedDataAsync])
+  }, [signTypedDataAsync, tradingAccountType])
 
   const handleSubmit = useCallback(async () => {
     if (executionMode === 'real') {
@@ -3701,7 +3920,7 @@ function ScriptOrderPanelState({
     const nextPreview = executionMode === 'real' ? await buildPreview() : preview ?? await buildPreview()
     if (!nextPreview) return
     if (!nextPreview.orders.every((order) => order.valid)) {
-      setError('预览中存在无效订单，请先修正金额、数量、限价或盘口状态。')
+      setError(invalidOrderPreviewMessage(nextPreview) || '预览中存在无效订单，请修正金额、数量、限价或盘口状态。')
       return
     }
     if (nextPreview.executionMode === 'real') {
@@ -3793,7 +4012,24 @@ function ScriptOrderPanelState({
           </div>
 
           {executionMode === 'real' ? (
-            <div className="soft-note">Backend prepares user-level Polymarket trading credentials and a POLY_1271 deposit wallet after wallet login.</div>
+            <div className="trading-account-selector">
+              <div>
+                <span>交易账户</span>
+                <small>{TRADING_ACCOUNT_CHOICES.find((choice) => choice.type === tradingAccountType)?.description}</small>
+              </div>
+              <div className="order-execution-toggle" aria-label="Polymarket 交易账户类型">
+                {TRADING_ACCOUNT_CHOICES.map((choice) => (
+                  <button
+                    className={tradingAccountType === choice.type ? 'active' : ''}
+                    key={choice.type}
+                    type="button"
+                    onClick={() => setTradingAccountSelection(choice.type)}
+                  >
+                    {choice.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           ) : null}
 
           <div className="order-draft-list">
@@ -3925,6 +4161,7 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
       <div className="order-preview-list">
         {preview.orders.map((order) => {
           const draft = draftBySelectionId.get(order.selectionId)
+          const statusText = order.valid ? orderPreviewWarningText(order.warnings) : orderPreviewErrorText(order, draft)
           return (
             <div className={order.valid ? 'order-preview-row' : 'order-preview-row invalid'} key={order.selectionId}>
               <div>
@@ -3933,7 +4170,7 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
               </div>
               <strong>{formatUsd(order.amountUsd)}</strong>
               <span>{formatShares(order.size)} shares</span>
-              <em>{order.valid ? (order.warnings.join('、') || '可提交') : order.error || '无效'}</em>
+              <em>{statusText}</em>
             </div>
           )
         })}
@@ -4226,6 +4463,7 @@ function MarketFlowNodeView({ data }: NodeProps<MarketFlowNode>) {
       </span>
       <div className="flow-node-copy">
         <b>{trimNodeTitle(market.title, isFocus ? 76 : 46)}</b>
+        <span className="flow-node-kind">{market.nodeType === 'event' ? `${market.marketsCount ?? market.topMarkets?.length ?? 0} markets` : 'Market'}</span>
         <em>{market.price}%</em>
       </div>
     </div>
@@ -4729,10 +4967,16 @@ function MarketHoverCard({
   onMouseEnter?: () => void
   onMouseLeave?: () => void
 }) {
+  const isEventNode = market.nodeType === 'event'
   const topOutcome = market.outcomes?.[0]
+  const topMarket = market.topMarkets?.[0]
   const description = market.description?.trim() || ''
   const rules = market.rules?.trim() || ''
   const hasDistinctSummary = Boolean(description && rules && description !== rules)
+  const subtitle = isEventNode
+    ? `${market.marketsCount ?? market.topMarkets?.length ?? 0} markets - ${market.category}`
+    : market.eventTitle || market.category
+  const topMarketLabel = topMarket?.groupItemTitle || topMarket?.title
   const rulesText = rules || description || 'Polymarket 未提供详细规则说明。'
   return (
     <aside
@@ -4747,7 +4991,7 @@ function MarketHoverCard({
         <MarketIcon market={market} size="small" />
         <div>
           <b>{market.title}</b>
-          <span>{market.eventTitle || market.category}</span>
+          <span>{subtitle}</span>
         </div>
       </div>
       <div className="hover-card-stats">
@@ -4770,7 +5014,7 @@ function MarketHoverCard({
       </div>
       <div className="hover-card-footer">
         <span className={market.acceptingOrders === false ? 'closed' : 'open'}>{market.acceptingOrders === false ? '暂停接单' : '可交易'}</span>
-        {topOutcome ? <span>{topOutcome.label}: {formatUnitPercent(topOutcome.price)}</span> : null}
+        {topMarket ? <span>{topMarketLabel}: {formatUnitPercent(topMarket.price)}</span> : topOutcome ? <span>{topOutcome.label}: {formatUnitPercent(topOutcome.price)}</span> : null}
       </div>
     </aside>
   )
@@ -5108,22 +5352,41 @@ function firstValidUnitPrice(...values: Array<number | null | undefined>) {
 
 function MarketOrderBook({
   eventMarkets,
+  hasMoreMarkets = false,
   loading,
   market,
   onSelectOutcome,
   selectedOutcomeId,
+  totalMarkets,
 }: {
   eventMarkets: Market[]
+  hasMoreMarkets?: boolean
   loading: boolean
   market: Market
   onSelectOutcome: (market: Market, action: OrderbookOutcomeAction) => void
   selectedOutcomeId: string | null
+  totalMarkets?: number | null
 }) {
   const [orderError, setOrderError] = useState<string | null>(null)
+  const [marketQuery, setMarketQuery] = useState('')
+  const normalizedMarketQuery = marketQuery.trim().toLowerCase()
+  const sortedEventMarkets = eventMarkets.length > 1
+    ? [...eventMarkets].sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))
+    : eventMarkets
+  const visibleEventMarkets = normalizedMarketQuery
+    ? sortedEventMarkets.filter((item) => {
+        const haystack = [
+          marketDisplayLabel(item),
+          item.title,
+          item.eventTitle,
+          item.slug,
+        ].filter(Boolean).join(' ').toLowerCase()
+        return haystack.includes(normalizedMarketQuery)
+      })
+    : sortedEventMarkets
   const outcomeRows =
     eventMarkets.length > 1
-      ? [...eventMarkets]
-          .sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))
+      ? visibleEventMarkets
           .map((item, index) => ({
             id: item.id,
             market: item,
@@ -5137,6 +5400,10 @@ function MarketOrderBook({
             actions: marketOutcomeActions(item),
           }))
       : marketOutcomeRows(market)
+  const loadedMarketCount = eventMarkets.length > 1 ? eventMarkets.length : outcomeRows.length
+  const orderbookCountText = eventMarkets.length > 1
+    ? `${outcomeRows.length}${normalizedMarketQuery ? ` / ${loadedMarketCount}` : ''} 个盘口${hasMoreMarkets && totalMarkets ? `（已加载 ${loadedMarketCount} / ${formatCompactCount(totalMarkets)}）` : ''}`
+    : `${outcomeRows.length} 个盘口`
   const handleOutcomeSelect = useCallback((row: typeof outcomeRows[number], action: OrderbookOutcomeAction) => {
     if (!action.outcomeId) {
       setOrderError('Selected outcome is missing an outcomeId.')
@@ -5150,15 +5417,27 @@ function MarketOrderBook({
       <div className="orderbook-head">
         <div>
           <b>盘口</b>
-          <span>{loading ? '正在同步 event 盘口...' : `${outcomeRows.length} 个盘口 · ${market.acceptingOrders === false ? '暂停接单' : '可交易'}`}</span>
+          <span>{loading ? '正在同步 event 盘口...' : `${orderbookCountText} · ${market.acceptingOrders === false ? '暂停接单' : '可交易'}`}</span>
         </div>
         <div className="orderbook-meta">
           <span>Vol. {market.volume}</span>
           {market.lastTradePrice != null ? <span>Last {formatCents(market.lastTradePrice)}</span> : null}
         </div>
       </div>
+      {eventMarkets.length > 8 ? (
+        <label className="orderbook-search">
+          <Search size={16} />
+          <input
+            aria-label="Search event markets"
+            onChange={(event) => setMarketQuery(event.target.value)}
+            placeholder="Search markets in this event"
+            type="search"
+            value={marketQuery}
+          />
+        </label>
+      ) : null}
       <div className="orderbook-list">
-        {outcomeRows.map((outcome) => {
+        {outcomeRows.length ? outcomeRows.map((outcome) => {
           return (
             <div className="orderbook-row" key={outcome.id}>
               <div className="orderbook-title">
@@ -5194,7 +5473,9 @@ function MarketOrderBook({
               </div>
             </div>
           )
-        })}
+        }) : (
+          <div className="orderbook-empty">{hasMoreMarkets ? '当前已加载盘口中没有匹配结果，请换个关键词或打开 Polymarket 原事件确认。' : 'No markets match this search.'}</div>
+        )}
       </div>
       {orderError ? <div className="status-note error">{orderError}</div> : null}
     </div>
@@ -5254,7 +5535,7 @@ function PreviewList({ market, settings }: { market: Market; settings: Inference
     ['根节点市场', market.title],
     ['推演范围', scopeLabel(settings.scope)],
     ['时间周期', timeRangeLabel(settings.timeRange, market)],
-    ['推演层数', `${settings.depth} 层`],
+    ['Depth', `${settings.depth} layers`],
     ['AI 模型', modelPreferenceLabel(settings.modelPreference)],
     ['置信度偏好', `${confidenceModeLabel(settings.confidenceMode)} · ${settings.confidenceThreshold.toFixed(2)}`],
   ]
@@ -5382,7 +5663,7 @@ function SummaryList({ market, result }: { market: Market; result: InferenceResu
   const items = [
     [market.title, `市场当前价格为 ${market.price}%，成交量为 ${market.volume}，这是本次推演的根节点。`],
     ['同事件市场联动', market.eventTitle ? `优先检索「${market.eventTitle}」事件下的其他盘口，判断同事件内概率迁移。` : '优先检索同主题和同分类市场，判断相近盘口的概率迁移。'],
-    ['流动性与定价强度', `当前流动性为 ${formatCompactMoney(market.liquidity)}，将作为评估信号强弱和噪声水平的输入。`],
+    ['Liquidity', `This market has ${formatCompactMoney(market.liquidity)} liquidity; review live depth before trading.`],
     ['时间约束', `市场结束时间为 ${formatDate(market.endDate)}，推演将优先关注结束前的关键触发因素。`],
     ['风险提示', '该脚本为基于市场数据和 AI 推理的情景分析，不构成交易建议。'],
   ]

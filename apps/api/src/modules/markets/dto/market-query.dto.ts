@@ -25,6 +25,10 @@ export class MarketQueryDto {
   sort?: string;
 
   @IsOptional()
+  @IsIn(['event', 'market'])
+  nodeType?: string;
+
+  @IsOptional()
   @IsString()
   @MaxLength(2048)
   cursor?: string;

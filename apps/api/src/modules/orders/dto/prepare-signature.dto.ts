@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import { IsEthereumAddress, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator';
+import { TRADING_ACCOUNT_TYPES, type TradingAccountType } from '../../trading/trading-account-type';
 
 export class PrepareSignatureDto {
   @TrimString()
@@ -23,4 +24,8 @@ export class PrepareSignatureDto {
   @IsOptional()
   @IsEthereumAddress()
   funderAddress?: string;
+
+  @IsOptional()
+  @IsIn(TRADING_ACCOUNT_TYPES)
+  tradingAccountType?: TradingAccountType;
 }

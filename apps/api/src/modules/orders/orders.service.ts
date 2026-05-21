@@ -9,6 +9,7 @@ import { PrismaService } from '../../database/prisma.service';
 import { ClobApiCredentials, ClobClient, PreparedClobOrder, SignedClobOrderInput } from '../../integrations/polymarket/services/clob.client';
 import type { OrderBookSnapshot } from '../../integrations/polymarket/types';
 import { TradingService } from '../trading/trading.service';
+import { type ConcreteTradingAccountType, type TradingAccountType, normalizeTradingAccountType } from '../trading/trading-account-type';
 import { OrderPreviewDto } from './dto/order-preview.dto';
 import { PrepareSignatureDto } from './dto/prepare-signature.dto';
 import { SubmitOrderDto } from './dto/submit-order.dto';
@@ -18,12 +19,16 @@ type OrderCapability = {
   status: 'available' | 'degraded' | 'unavailable';
   reason: string | null;
   signatureType?: number;
+  requestedTradingAccountType?: TradingAccountType;
+  tradingAccountType?: ConcreteTradingAccountType | null;
+  tradingAccountLabel?: string | null;
   funderAddress?: string | null;
   clobApiKeyPreview?: string | null;
   cashAvailable: number | null;
   collateralAvailable: number | null;
   balanceCapability: 'available' | 'degraded' | 'unavailable';
   balanceCapabilityReason: string | null;
+  accountOptions?: unknown[];
 };
 
 @Injectable()
@@ -48,8 +53,9 @@ export class OrdersService {
       });
     }
 
+    const requestedTradingAccountType = normalizeTradingAccountType(dto.tradingAccountType);
     const baseCapability: OrderCapability = dto.executionMode === 'real'
-      ? await this.tradingService.getOrderCapability(user)
+      ? await this.tradingService.getOrderCapability(user, { tradingAccountType: requestedTradingAccountType })
       : dryRunOrderCapability();
     const expiresAt = new Date(Date.now() + 60 * 1000);
     const requireFreshOrderBook = dto.executionMode === 'real' && baseCapability.status === 'available';
@@ -147,6 +153,10 @@ export class OrdersService {
           after: toJson({
             scriptId: dto.scriptId,
             executionMode: dto.executionMode,
+            requestedTradingAccountType,
+            tradingAccountType: capability.tradingAccountType ?? null,
+            signatureType: capability.signatureType ?? null,
+            funderAddress: capability.funderAddress ?? null,
             totalAmountUsd,
             orderCount: previewOrders.length,
             allOrdersValid,
@@ -162,6 +172,12 @@ export class OrdersService {
       executionMode: dto.executionMode,
       tradingCapability: dto.executionMode === 'real' ? capability.status : 'degraded',
       balanceCapability: capability.balanceCapability,
+      requestedTradingAccountType,
+      tradingAccountType: capability.tradingAccountType ?? null,
+      tradingAccountLabel: capability.tradingAccountLabel ?? null,
+      signatureType: capability.signatureType ?? null,
+      funderAddress: capability.funderAddress ?? null,
+      accountOptions: capability.accountOptions ?? [],
       tradingCapabilityReason: dto.executionMode === 'real' ? capability.reason : 'dry_run does not submit CLOB orders',
       balanceCapabilityReason: capability.balanceCapabilityReason,
       cashAvailable: capability.cashAvailable,
@@ -213,8 +229,9 @@ export class OrdersService {
     assertPreviewNotExpired(intent);
     assertIntentHasNoFailedOrders(intent);
 
+    const lockedTradingAccountType = resolveIntentTradingAccountType(intent, dto.tradingAccountType);
     const baseCapability: OrderCapability = dto.executionMode === 'real'
-      ? await this.tradingService.getOrderCapability(user)
+      ? await this.tradingService.getOrderCapability(user, { tradingAccountType: lockedTradingAccountType })
       : dryRunOrderCapability();
     const capability = dto.executionMode === 'real'
       ? applyOrderFundingRequirement(baseCapability, toNullableNumber(intent.totalAmountUsd) ?? 0)
@@ -238,7 +255,10 @@ export class OrdersService {
     };
 
     if (result.signingStatus === 'ready') {
-      const orderAuth = await this.tradingService.getOrderAuth(user);
+      const orderAuth = await this.tradingService.getOrderAuth(user, {
+        tradingAccountType: lockedTradingAccountType,
+        capability,
+      });
       result.payloads = this.clobClient.prepareSignaturePayloads(
         intent.orders.map((order) => toClobSignaturePayloadInput(order, dto.walletAddress, orderAuth.funderAddress, dto.chainId, orderAuth.builderCode)),
         intent.previewExpiresAt ?? new Date(Date.now() + 60_000),
@@ -299,14 +319,18 @@ export class OrdersService {
 
     try {
       if (dto.executionMode === 'real') {
+        const lockedTradingAccountType = resolveIntentTradingAccountType(intent);
         const capability = applyOrderFundingRequirement(
-          await this.tradingService.getOrderCapability(user),
+          await this.tradingService.getOrderCapability(user, { tradingAccountType: lockedTradingAccountType }),
           toNullableNumber(intent.totalAmountUsd) ?? 0,
         );
         if (capability.status !== 'available') {
           throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', capability.reason ?? 'CLOB real trading is unavailable');
         }
-        const orderAuth = await this.tradingService.getOrderAuth(user);
+        const orderAuth = await this.tradingService.getOrderAuth(user, {
+          tradingAccountType: lockedTradingAccountType,
+          capability,
+        });
         return await this.submitReal(user.id, user.requestId, intent, normalizeSignedOrders(dto.signedOrders), dto.idempotencyKey, requestHash, orderAuth.credentials);
       }
 
@@ -830,6 +854,27 @@ function dryRunOrderCapability() {
   };
 }
 
+function resolveIntentTradingAccountType(
+  intent: Pick<LoadedOrderIntent, 'previewJson'>,
+  requested?: TradingAccountType,
+): TradingAccountType {
+  const locked = readTradingAccountType(intent.previewJson);
+  const normalizedRequested = normalizeTradingAccountType(requested);
+  if (locked && normalizedRequested !== 'auto' && locked !== normalizedRequested) {
+    throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Trading account type does not match the order intent', {
+      expected: locked,
+      actual: normalizedRequested,
+    });
+  }
+  return locked ?? normalizedRequested;
+}
+
+function readTradingAccountType(value: Prisma.JsonValue): TradingAccountType | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.tradingAccountType !== 'string') return null;
+  return normalizeTradingAccountType(value.tradingAccountType);
+}
+
 function applyOrderFundingRequirement(capability: OrderCapability, totalAmountUsd: number): OrderCapability {
   if (capability.status !== 'available' || totalAmountUsd <= 0) return capability;
 
@@ -840,7 +885,7 @@ function applyOrderFundingRequirement(capability: OrderCapability, totalAmountUs
   if (capability.cashAvailable + Number.EPSILON < requiredAmountUsd) {
     return withFundingUnavailable(
       capability,
-      `Insufficient deposit wallet balance: ${formatUsd(requiredAmountUsd)} required, ${formatUsd(capability.cashAvailable)} available.`,
+      `Insufficient ${capability.tradingAccountLabel ?? 'Polymarket trading wallet'} balance: ${formatUsd(requiredAmountUsd)} required, ${formatUsd(capability.cashAvailable)} available.`,
     );
   }
   if (capability.collateralAvailable == null) {

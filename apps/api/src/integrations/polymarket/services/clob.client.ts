@@ -599,8 +599,7 @@ export class ClobClient {
       .update(`${timestamp}${method}${path}${body}`)
       .digest('base64')
       .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+      .replace(/\//g, '_');
 
     return {
       accept: 'application/json',

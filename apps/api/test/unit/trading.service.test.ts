@@ -29,12 +29,20 @@ describe('TradingService', () => {
     });
     const prisma = prismaMock({
       upsert: vi.fn().mockResolvedValue(account),
+      update: vi.fn().mockResolvedValue({
+        ...account,
+        readinessStatus: 'needs_funding',
+        readinessReason: 'Deposit wallet is ready, but funds or allowance are missing.',
+      }),
       findUnique: vi.fn().mockResolvedValue(account),
     });
     const crypto = cryptoMock();
-    const service = createService(prisma, crypto);
+    stubTradingAccountFetch();
+    const service = createService(prisma, crypto, {
+      getBalanceAllowance: vi.fn().mockResolvedValue({ balance: '0', allowances: { collateral: '0' } }),
+    });
 
-    const capability = await service.getOrderCapability(user);
+    const capability = await service.getOrderCapability(user, { tradingAccountType: 'deposit_wallet' });
 
     expect(capability).toMatchObject({
       status: 'unavailable',
@@ -42,8 +50,7 @@ describe('TradingService', () => {
       balanceCapability: 'unavailable',
       cashAvailable: 0,
     });
-    await expect(service.getOrderAuth(user)).rejects.toThrow('Deposit wallet is ready, but funds or allowance are missing.');
-    expect(crypto.decrypt).not.toHaveBeenCalled();
+    await expect(service.getOrderAuth(user, { tradingAccountType: 'deposit_wallet' })).rejects.toThrow('Deposit wallet is ready, but funds or allowance are missing.');
   });
 
   it('does not treat non-collateral allowances as ready for real trading', async () => {
@@ -56,17 +63,101 @@ describe('TradingService', () => {
     });
     const prisma = prismaMock({
       upsert: vi.fn().mockResolvedValue(account),
+      update: vi.fn().mockResolvedValue({
+        ...account,
+        readinessStatus: 'needs_funding',
+        readinessReason: 'Deposit wallet is ready, but funds or allowance are missing.',
+      }),
       findUnique: vi.fn().mockResolvedValue(account),
     });
-    const service = createService(prisma, cryptoMock());
+    stubTradingAccountFetch();
+    const service = createService(prisma, cryptoMock(), {
+      getBalanceAllowance: vi.fn().mockResolvedValue({ balance: '100000000', allowances: { conditional: '100000000' } }),
+    });
 
-    const capability = await service.getOrderCapability(user);
+    const capability = await service.getOrderCapability(user, { tradingAccountType: 'deposit_wallet' });
 
     expect(capability).toMatchObject({
       status: 'unavailable',
       reason: 'Deposit wallet is ready, but funds or allowance are missing.',
       cashAvailable: 100,
       collateralAvailable: null,
+    });
+  });
+
+  it('treats Polymarket exchange-address collateral allowances as ready for real trading', async () => {
+    const user = currentUser();
+    const account = accountFixture(user, {
+      depositWalletDeployed: true,
+      balanceRaw: '100000000',
+      allowanceJson: { '0xE111180000d2663C0091e4f400237545B87B996B': '100000000' },
+      lastReadinessCheckedAt: new Date(),
+    });
+    const prisma = prismaMock({
+      upsert: vi.fn().mockResolvedValue(account),
+      update: vi.fn().mockResolvedValue({
+        ...account,
+        readinessStatus: 'ready',
+        readinessReason: null,
+      }),
+      findUnique: vi.fn().mockResolvedValue(account),
+    });
+    stubTradingAccountFetch();
+    const service = createService(prisma, cryptoMock(), {
+      getBalanceAllowance: vi.fn().mockResolvedValue({
+        balance: '100000000',
+        allowances: { '0xE111180000d2663C0091e4f400237545B87B996B': '100000000' },
+      }),
+    });
+
+    const capability = await service.getOrderCapability(user, { tradingAccountType: 'deposit_wallet' });
+
+    expect(capability).toMatchObject({
+      status: 'available',
+      cashAvailable: 100,
+      collateralAvailable: 100,
+    });
+  });
+
+  it('selects the Polymarket Safe wallet first when automatic trading account selection is ready', async () => {
+    const user = currentUser();
+    const account = accountFixture(user);
+    const refreshedAccount = {
+      ...account,
+      signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
+      balanceRaw: '100000000',
+      allowanceJson: { collateral: '100000000' },
+      readinessStatus: 'ready',
+      readinessReason: null,
+      lastReadinessCheckedAt: new Date(),
+    };
+    const prisma = prismaMock({
+      upsert: vi.fn().mockResolvedValue(account),
+      update: vi.fn().mockResolvedValue(refreshedAccount),
+      findUnique: vi.fn().mockResolvedValue(refreshedAccount),
+    });
+    stubTradingAccountFetch();
+    const service = createService(prisma, cryptoMock(), {
+      getBalanceAllowance: vi.fn().mockResolvedValue({ balance: '100000000', allowances: { collateral: '100000000' } }),
+    });
+
+    const readiness = await service.getReadiness(user, { refreshExternal: true, tradingAccountType: 'auto' });
+    const auth = await service.getOrderAuth(user, { tradingAccountType: 'auto' });
+
+    expect(readiness).toMatchObject({
+      status: 'ready',
+      canTrade: true,
+      requestedTradingAccountType: 'auto',
+      tradingAccountType: 'gnosis_safe',
+      tradingAccountLabel: 'Polymarket Safe wallet',
+      signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
+      funderAddress: '0x2222222222222222222222222222222222222222',
+    });
+    expect(readiness.accountOptions.map((option) => option.type)).toEqual(['gnosis_safe', 'proxy', 'deposit_wallet']);
+    expect(auth).toMatchObject({
+      signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
+      funderAddress: '0x2222222222222222222222222222222222222222',
+      tradingAccountType: 'gnosis_safe',
     });
   });
 
@@ -161,7 +252,7 @@ describe('TradingService', () => {
       getBalanceAllowance: vi.fn().mockRejectedValue(new Error('CLOB unavailable')),
     });
 
-    const capability = await service.getOrderCapability(user);
+    const capability = await service.getOrderCapability(user, { tradingAccountType: 'deposit_wallet' });
 
     expect(capability).toMatchObject({
       status: 'unavailable',
@@ -176,7 +267,7 @@ describe('TradingService', () => {
     expect(updatePayload.data.balanceRaw).toBeNull();
     expect(updatePayload.data.allowanceJson).toEqual(Prisma.JsonNull);
     expect(updatePayload.data.readinessStatus).toBe('degraded');
-    await expect(service.getOrderAuth(user)).rejects.toThrow('Polymarket balance and allowance refresh failed; retry before real trading.');
+    await expect(service.getOrderAuth(user, { tradingAccountType: 'deposit_wallet' })).rejects.toThrow('Polymarket balance and allowance refresh failed; retry before real trading.');
   });
 
   it('does not submit duplicate deposit wallet creation while an existing relayer transaction is active', async () => {
@@ -224,6 +315,53 @@ describe('TradingService', () => {
     expect(updatePayload.where).toEqual({ userId: user.id });
     expect(updatePayload.data.depositWalletTxState).toBe('STATE_EXECUTED');
     expect(updatePayload.data.readinessStatus).toBe('deposit_wallet_pending');
+    expect(fetchMock.mock.calls.map((call) => new URL(String(call[0])).pathname)).toEqual(['/deployed', '/transaction']);
+  });
+
+  it('does not keep a confirmed deposit wallet transaction in pending state when deployment is not yet observable', async () => {
+    const user = currentUser();
+    const account = accountFixture(user, {
+      depositWalletDeployed: false,
+      depositWalletTxId: 'tx_1',
+      depositWalletTxState: 'STATE_NEW',
+    });
+    const updatedAccount = {
+      ...account,
+      depositWalletTxState: 'STATE_CONFIRMED',
+      readinessStatus: 'degraded',
+      readinessReason: 'Deposit wallet creation is confirmed by Polymarket relayer, but deployment is not yet observable. Refresh readiness shortly.',
+      lastReadinessCheckedAt: new Date(),
+    };
+    const prisma = prismaMock({
+      upsert: vi.fn()
+        .mockResolvedValueOnce(account)
+        .mockResolvedValueOnce(updatedAccount),
+      update: vi.fn().mockResolvedValue(updatedAccount),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        text: vi.fn().mockResolvedValue(JSON.stringify({ deployed: false })),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: vi.fn().mockResolvedValue(JSON.stringify([
+          { transactionID: 'tx_1', state: 'STATE_CONFIRMED' },
+        ])),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const service = createService(prisma, cryptoMock());
+    const readiness = await service.ensureDepositWallet(user);
+
+    expect(readiness.status).toBe('degraded');
+    expect(readiness.reason).toBe('Deposit wallet creation is confirmed by Polymarket relayer, but deployment is not yet observable. Refresh readiness shortly.');
+    const updatePayload = prisma.userPolymarketAccount.update.mock.calls[0]?.[0] as {
+      data: { depositWalletTxState?: string; readinessStatus?: string };
+    };
+    expect(updatePayload.data.depositWalletTxState).toBe('STATE_CONFIRMED');
+    expect(updatePayload.data.readinessStatus).toBe('degraded');
     expect(fetchMock.mock.calls.map((call) => new URL(String(call[0])).pathname)).toEqual(['/deployed', '/transaction']);
   });
 
@@ -455,6 +593,29 @@ function accountFixture(
     updatedAt: now,
     ...overrides,
   };
+}
+
+function stubTradingAccountFetch(options: { depositDeployed?: boolean } = {}) {
+  const safeAddress = '0x2222222222222222222222222222222222222222';
+  const proxyAddress = '0x3333333333333333333333333333333333333333';
+  const fetchMock = vi.fn((input: string | URL | Request) => {
+    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(rawUrl);
+    let body: unknown = {};
+    if (url.pathname === '/relay-payload') {
+      body = url.searchParams.get('type') === 'PROXY'
+        ? { proxyAddress }
+        : { safeAddress };
+    } else if (url.pathname === '/deployed') {
+      body = { deployed: options.depositDeployed ?? true };
+    }
+    return Promise.resolve({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+    });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
 }
 
 function deriveDepositWalletAddress(walletAddress: string, chainId: number): string {

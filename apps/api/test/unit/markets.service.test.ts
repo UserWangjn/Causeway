@@ -179,69 +179,21 @@ describe('MarketsService', () => {
   });
 
   it('builds market categories from normalized persisted event tags without loading every market', async () => {
-    const count = vi.fn()
-      .mockResolvedValueOnce(3)
-      .mockResolvedValueOnce(2)
-      .mockResolvedValueOnce(1);
     const queryRaw = vi.fn().mockResolvedValue([
       { category: 'macro', count: 1n },
       { category: 'sports', count: 1n },
       { category: 'politics', count: 1n },
+      { category: '__all__', count: 3n },
+      { category: '__hot__', count: 2n },
+      { category: '__new__', count: 1n },
     ]);
     const service = createService({
       $queryRaw: queryRaw,
-      polymarketMarket: {
-        count,
-      },
     });
 
     const result = await service.getMarketCategories();
 
     expect(queryRaw).toHaveBeenCalledTimes(1);
-    expect(count).toHaveBeenNthCalledWith(1, {
-      where: {
-        active: true,
-        closed: false,
-        archived: false,
-        staleDetectedAt: null,
-      },
-    });
-    expect(count).toHaveBeenNthCalledWith(2, {
-      where: {
-        AND: [
-          {
-            active: true,
-            closed: false,
-            archived: false,
-            staleDetectedAt: null,
-          },
-          {
-            OR: [
-              { volume24hr: { gt: 0 } },
-              { volume: { gt: 0 } },
-              { liquidity: { gt: 0 } },
-            ],
-          },
-        ],
-      },
-    });
-    expect(count).toHaveBeenNthCalledWith(3, {
-      where: {
-        AND: [
-          {
-            active: true,
-            closed: false,
-            archived: false,
-            staleDetectedAt: null,
-          },
-          {
-            discoveredAt: {
-              gte: expect.any(Date) as Date,
-            },
-          },
-        ],
-      },
-    });
     expect(result.categories).toEqual([
       { key: 'all', label: 'All', count: 3 },
       { key: 'hot', label: 'Hot', count: 2 },
@@ -546,6 +498,9 @@ describe('MarketsService', () => {
       volume: '100',
       liquidity: '50',
       syncedAt: new Date('2026-05-18T00:00:00.000Z'),
+      _count: {
+        markets: 2,
+      },
       markets: [
         selectedMarket,
         {
@@ -574,7 +529,10 @@ describe('MarketsService', () => {
         id: 'event_1',
         title: 'Parent Event Title',
         description: 'Parent event description',
-        rules: 'Parent event description',
+        rules: 'Selected market description',
+        marketsCount: 2,
+        marketsReturned: 2,
+        hasMoreMarkets: false,
       },
       selectedMarket: {
         id: 'market_1',
@@ -629,7 +587,7 @@ describe('MarketsService', () => {
       },
     });
 
-    const result = await service.getMarketNetwork({ limit: 10 });
+    const result = await service.getMarketNetwork({ limit: 10, nodeType: 'market' });
 
     expect(networkNodeFindMany).toHaveBeenCalledWith({
       where: {
@@ -668,7 +626,7 @@ describe('MarketsService', () => {
       take: 80,
       select: expect.any(Object) as object,
     });
-    expect(result.nodes).toEqual([
+    expect(result.nodes).toMatchObject([
       {
         id: 'market_1',
         marketId: 'market_1',
@@ -729,6 +687,74 @@ describe('MarketsService', () => {
     });
   });
 
+  it('returns event-first network nodes by default', async () => {
+    const networkNodeFindMany = vi.fn().mockResolvedValue([]);
+    const marketCount = vi.fn()
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(0);
+    const marketGroupBy = vi.fn().mockResolvedValue([{ eventId: 'event_1' }, { eventId: 'event_2' }]);
+    const marketFindMany = vi.fn().mockResolvedValue([
+      networkMarket('market_1', 'event_1', 'Will Ecuador win the 2026 FIFA World Cup?', '0.55', ['sports'], {
+        eventTitle: '2026 FIFA World Cup Winner',
+        eventMarketsCount: 2,
+      }),
+      networkMarket('market_2', 'event_1', 'Will Brazil win the 2026 FIFA World Cup?', '0.35', ['sports'], {
+        eventTitle: '2026 FIFA World Cup Winner',
+        eventMarketsCount: 2,
+      }),
+      networkMarket('market_3', 'event_2', 'Will selected market resolve?', '0.15', ['politics'], {
+        eventTitle: 'Fixture Election',
+      }),
+    ]);
+    const service = createService({
+      marketNetworkNode: {
+        findMany: networkNodeFindMany,
+      },
+      polymarketMarket: {
+        count: marketCount,
+        groupBy: marketGroupBy,
+        findMany: marketFindMany,
+      },
+    });
+
+    const result = await service.getMarketNetwork({ limit: 10 });
+
+    expect(result.nodes).toHaveLength(2);
+    expect(result.nodes[0]).toMatchObject({
+      nodeType: 'event',
+      id: 'event_1',
+      marketId: 'market_1',
+      eventId: 'event_1',
+      title: '2026 FIFA World Cup Winner',
+      groupItemTitle: 'Ecuador',
+      category: 'sports',
+      marketsCount: 2,
+      topMarkets: [
+        {
+          marketId: 'market_1',
+          groupItemTitle: 'Ecuador',
+          price: 0.55,
+        },
+        {
+          marketId: 'market_2',
+          groupItemTitle: 'Brazil',
+          price: 0.35,
+        },
+      ],
+    });
+    expect(result.edges).toHaveLength(1);
+    expect(result).toMatchObject({
+      total: 3,
+      totalEvents: 2,
+      totalMarkets: 3,
+      returned: 2,
+      limit: 10,
+      hasMore: false,
+      nodeType: 'event',
+      topologySource: 'deterministic',
+    });
+  });
+
   it('returns bounded network node copy for market hover cards', async () => {
     const longRules = `${'Resolution rules '.repeat(120)}Final sentence.`;
     const networkNodeFindMany = vi.fn().mockResolvedValue([]);
@@ -749,7 +775,7 @@ describe('MarketsService', () => {
       },
     });
 
-    const result = await service.getMarketNetwork({ limit: 10 });
+    const result = await service.getMarketNetwork({ limit: 10, nodeType: 'market' });
 
     expect(result.nodes[0]).toMatchObject({
       id: 'market_1',
@@ -776,7 +802,7 @@ describe('MarketsService', () => {
       },
     });
 
-    const result = await service.getMarketNetwork({ category: 'hot', limit: 10 });
+    const result = await service.getMarketNetwork({ category: 'hot', limit: 10, nodeType: 'market' });
 
     const hotWhere = {
       active: true,
@@ -840,7 +866,7 @@ describe('MarketsService', () => {
       },
     });
 
-    const result = await service.getMarketNetwork({ category: 'new', limit: 10 });
+    const result = await service.getMarketNetwork({ category: 'new', limit: 10, nodeType: 'market' });
 
     expect(marketCount).toHaveBeenCalledWith({
       where: {
@@ -916,7 +942,7 @@ describe('MarketsService', () => {
       },
     });
 
-    const result = await service.getMarketNetwork({ limit: 5 });
+    const result = await service.getMarketNetwork({ limit: 5, nodeType: 'market' });
 
     expect(marketFindMany).toHaveBeenCalledWith(expect.objectContaining({
       take: 80,
@@ -1052,8 +1078,12 @@ function networkMarket(
     discoveredAt?: Date;
     description?: string | null;
     rules?: string | null;
+    eventTitle?: string;
+    eventDescription?: string | null;
+    eventMarketsCount?: number;
   } = {},
 ) {
+  const eventTitle = options.eventTitle ?? eventId;
   return {
     id,
     eventId,
@@ -1071,12 +1101,24 @@ function networkMarket(
     volume: options.volume ?? '100',
     volume24hr: options.volume24hr ?? '10',
     liquidity: options.liquidity ?? '50',
+    endDate: new Date('2026-12-31T00:00:00.000Z'),
     discoveredAt: options.discoveredAt ?? new Date('2026-05-18T00:00:00.000Z'),
     syncedAt: new Date('2026-05-18T00:00:00.000Z'),
     event: {
+      id: eventId,
       slug: eventId,
-      title: eventId,
+      title: eventTitle,
+      description: options.eventDescription ?? `${eventTitle} description`,
+      icon: null,
+      image: null,
       tags,
+      volume: '1000',
+      liquidity: '500',
+      endDate: new Date('2026-12-31T00:00:00.000Z'),
+      syncedAt: new Date('2026-05-18T00:00:00.000Z'),
+      _count: {
+        markets: options.eventMarketsCount ?? 1,
+      },
     },
   };
 }
