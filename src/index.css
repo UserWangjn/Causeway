@@ -434,6 +434,396 @@ button {
   background: #fffbeb;
 }
 
+.trading-wallet-shell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trading-wallet-pill,
+.deposit-button,
+.activity-pill {
+  display: inline-flex;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 780;
+  white-space: nowrap;
+}
+
+.trading-wallet-pill {
+  padding: 0 10px;
+  color: #24364f;
+  background: #fff;
+}
+
+.trading-wallet-pill b {
+  color: #071327;
+  font-size: 14px;
+}
+
+.trading-wallet-pill small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.trading-wallet-pill.ready {
+  border-color: rgba(20, 184, 122, 0.34);
+  background: #f0fdf8;
+}
+
+.deposit-button {
+  padding: 0 14px;
+  border-color: #16a34a;
+  color: #fff;
+  background: #16a34a;
+  box-shadow: 0 8px 20px rgba(22, 163, 74, 0.18);
+}
+
+.activity-pill {
+  padding: 0 12px;
+  color: #475569;
+  background: #fff;
+}
+
+.wallet-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  padding: clamp(18px, 6vh, 48px) 24px 24px;
+  overflow-y: auto;
+  background: rgba(15, 23, 42, 0.34);
+  backdrop-filter: blur(8px);
+  overscroll-behavior: contain;
+}
+
+.wallet-modal {
+  display: grid;
+  width: min(520px, 100%);
+  max-height: min(760px, calc(100dvh - clamp(42px, 10vh, 72px)));
+  gap: 14px;
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.22);
+  overscroll-behavior: contain;
+}
+
+.activity-modal {
+  width: min(460px, 100%);
+}
+
+.open-orders-modal {
+  width: min(760px, 100%);
+}
+
+.wallet-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wallet-modal-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.wallet-modal-head span,
+.deposit-path-head span,
+.trading-wallet-card-title span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #071327;
+  font-size: 16px;
+  font-weight: 820;
+}
+
+.wallet-modal-head small,
+.deposit-path-head small,
+.trading-wallet-card-title small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.modal-close-button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #64748b;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.modal-close-button:hover {
+  border-color: var(--border);
+  background: var(--soft);
+}
+
+.wallet-balance-grid,
+.trading-wallet-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wallet-balance-grid div,
+.trading-wallet-card-metrics div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #edf2f8;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.wallet-balance-grid span,
+.trading-wallet-card-metrics span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.wallet-balance-grid b,
+.trading-wallet-card-metrics b {
+  overflow: hidden;
+  color: #071327;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallet-status-note {
+  margin: 0;
+}
+
+.deposit-path-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #e6eef8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.deposit-path-card.recommended {
+  border-color: rgba(22, 119, 255, 0.34);
+  background: #f8fbff;
+}
+
+.deposit-path-head {
+  display: grid;
+  gap: 5px;
+}
+
+.deposit-path-card ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 20px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.deposit-address-box {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dbe6f3;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.deposit-address-box span {
+  overflow-wrap: anywhere;
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.wallet-inline-warning {
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.wallet-activity-list {
+  display: grid;
+  gap: 10px;
+}
+
+.wallet-activity-row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e6eef8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.wallet-activity-row > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.wallet-activity-row.done > span {
+  color: #0f8f62;
+  background: #ecfdf5;
+}
+
+.wallet-activity-row.error > span {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.wallet-activity-row div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.wallet-activity-row b {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.wallet-activity-row small,
+.wallet-activity-row em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.open-orders-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.open-orders-toolbar > span,
+.open-orders-refreshed {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.open-orders-list {
+  display: grid;
+  gap: 10px;
+}
+
+.open-order-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #e6eef8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.open-order-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.open-order-main b,
+.open-order-main span,
+.open-order-main small,
+.open-order-main em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.open-order-main b {
+  color: #071327;
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.open-order-main span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.open-order-main small,
+.open-order-main em,
+.open-order-side small {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.open-order-side {
+  display: grid;
+  min-width: 120px;
+  justify-items: end;
+  gap: 6px;
+}
+
+.open-order-side b {
+  color: #071327;
+  font-size: 14px;
+  font-weight: 820;
+}
+
+.order-cancel-button {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px solid rgba(220, 38, 38, 0.24);
+  border-radius: 8px;
+  color: #b91c1c;
+  background: #fff5f5;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.order-cancel-button:hover:not(:disabled) {
+  border-color: rgba(220, 38, 38, 0.42);
+  background: #fee2e2;
+}
+
+.order-cancel-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .account-menu {
   position: relative;
   display: inline-flex;
@@ -4015,6 +4405,27 @@ button {
   line-height: 1.4;
 }
 
+.trading-wallet-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(22, 119, 255, 0.24);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.trading-wallet-card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.trading-wallet-card-title > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--blue);
+}
+
 .order-address-field {
   display: grid;
   gap: 8px;
@@ -4530,6 +4941,10 @@ button {
     overflow-x: auto;
   }
 
+  .trading-wallet-shell {
+    flex: 0 0 auto;
+  }
+
   .span-8,
   .side-stack,
   .market-detail-layout,
@@ -4721,9 +5136,42 @@ button {
   .order-panel-head,
   .order-panel-actions,
   .trading-account-selector,
+  .trading-wallet-card-title,
   .order-submit-block {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .trading-wallet-shell {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .trading-wallet-pill,
+  .deposit-button,
+  .activity-pill {
+    width: 100%;
+  }
+
+  .open-order-row {
+    grid-template-columns: 1fr;
+  }
+
+  .open-order-side {
+    grid-template-columns: 1fr auto;
+    justify-items: start;
+    align-items: center;
+  }
+
+  .open-order-side .order-cancel-button {
+    justify-self: end;
+    grid-row: span 2;
+  }
+
+  .wallet-balance-grid,
+  .trading-wallet-card-metrics {
+    grid-template-columns: 1fr;
   }
 
   .order-execution-toggle,

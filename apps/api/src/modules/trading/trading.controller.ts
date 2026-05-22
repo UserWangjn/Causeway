@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Inject, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query } from '@nestjs/common';
 import { CurrentUser, type CurrentUser as CurrentUserType } from '../../common/decorators/current-user.decorator';
 import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
 import { CompleteClobAuthDto } from './dto/complete-clob-auth.dto';
+import { CompleteDepositWalletApprovalDto, CompleteDepositWalletFundingDto } from './dto/deposit-wallet-approval.dto';
 import { TradingService } from './trading.service';
 import { normalizeTradingAccountType } from './trading-account-type';
 
@@ -33,5 +34,36 @@ export class TradingController {
   @Post('deposit-wallet/ensure')
   ensureDepositWallet(@CurrentUser() user: CurrentUserType) {
     return this.tradingService.ensureDepositWallet(user);
+  }
+
+  @Post('deposit-wallet/approve/prepare')
+  prepareDepositWalletApproval(@CurrentUser() user: CurrentUserType) {
+    return this.tradingService.prepareDepositWalletApproval(user);
+  }
+
+  @Post('deposit-wallet/approve/complete')
+  completeDepositWalletApproval(
+    @CurrentUser() user: CurrentUserType,
+    @Body(createDtoValidationPipe(CompleteDepositWalletApprovalDto)) dto: CompleteDepositWalletApprovalDto,
+  ) {
+    return this.tradingService.completeDepositWalletApproval(user, dto);
+  }
+
+  @Post('deposit-wallet/fund-safe/prepare')
+  prepareSafeDepositWalletFunding(@CurrentUser() user: CurrentUserType, @Body('amountMicroUsd') amountMicroUsd?: number) {
+    return this.tradingService.prepareSafeDepositWalletFunding(user, amountMicroUsd);
+  }
+
+  @Post('deposit-wallet/fund-safe/complete')
+  completeSafeDepositWalletFunding(
+    @CurrentUser() user: CurrentUserType,
+    @Body(createDtoValidationPipe(CompleteDepositWalletFundingDto)) dto: CompleteDepositWalletFundingDto,
+  ) {
+    return this.tradingService.completeSafeDepositWalletFunding(user, dto);
+  }
+
+  @Get('relayer-transactions/:transactionId')
+  relayerTransaction(@CurrentUser() user: CurrentUserType, @Param('transactionId') transactionId: string) {
+    return this.tradingService.getRelayerTransactionStatus(user, transactionId);
   }
 }

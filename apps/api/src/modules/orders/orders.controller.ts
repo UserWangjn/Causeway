@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Headers, Inject, Param, Post } from '@nestjs/common';
 import { CurrentUser, type CurrentUser as CurrentUserType } from '../../common/decorators/current-user.decorator';
 import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
+import { OrderIdParamDto } from './dto/order-id-param.dto';
 import { OrderIntentParamDto } from './dto/order-intent-param.dto';
 import { OrderPreviewDto } from './dto/order-preview.dto';
 import { PrepareSignatureDto } from './dto/prepare-signature.dto';
@@ -32,6 +33,16 @@ export class OrdersController {
       clientVersion: Array.isArray(clientVersion) ? clientVersion[0] : clientVersion,
       clientSignedOrdersShape: Array.isArray(clientSignedOrdersShape) ? clientSignedOrdersShape[0] : clientSignedOrdersShape,
     });
+  }
+
+  @Get('open')
+  openOrders(@CurrentUser() user: CurrentUserType) {
+    return this.ordersService.listOpenOrders(user);
+  }
+
+  @Post(':orderId/cancel')
+  cancel(@CurrentUser() user: CurrentUserType, @Param(createDtoValidationPipe(OrderIdParamDto)) params: OrderIdParamDto) {
+    return this.ordersService.cancelOrder(user, params.orderId);
   }
 
   @Get('intents/:intentId')

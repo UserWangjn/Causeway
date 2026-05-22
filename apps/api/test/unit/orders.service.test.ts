@@ -892,6 +892,157 @@ describe('OrdersService', () => {
     });
   });
 
+  it('lists live CLOB orders enriched with local market metadata', async () => {
+    const getOpenOrders = vi.fn().mockResolvedValue([
+      {
+        id: '0x1111111111111111111111111111111111111111111111111111111111111111',
+        status: 'LIVE',
+        owner: 'api-key',
+        makerAddress: '0x2222222222222222222222222222222222222222',
+        market: 'condition_1',
+        assetId: 'token_1',
+        side: 'BUY',
+        originalSize: '50',
+        sizeMatched: '0',
+        price: '0.1',
+        outcome: 'Yes',
+        expiration: null,
+        orderType: 'GTC',
+        associateTrades: [],
+        createdAt: 1_700_000_000,
+        raw: {},
+      },
+    ]);
+    const service = createService({
+      causewayOrder: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'order_1',
+            orderIntentId: 'intent_1',
+            externalOrderId: '0x1111111111111111111111111111111111111111111111111111111111111111',
+            marketId: 'market_1',
+            outcomeId: 'outcome_1',
+            orderType: 'GTC',
+            createdAt: new Date('2026-05-19T00:00:00.000Z'),
+            orderIntent: {
+              id: 'intent_1',
+            },
+            market: {
+              question: 'Will Ecuador win the 2026 FIFA World Cup?',
+              event: {
+                title: '2026 FIFA World Cup Winner',
+              },
+            },
+            outcome: {
+              label: 'Yes',
+            },
+          },
+        ]),
+      },
+      polymarketOutcome: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    }, { status: 'available', reason: null }, { getOpenOrders });
+
+    const result = await service.listOpenOrders(currentUser());
+
+    expect(getOpenOrders).toHaveBeenCalledWith({}, testClobCredentials());
+    expect(result).toMatchObject({
+      capability: 'available',
+      dataSource: 'polymarket_clob',
+      error: null,
+      items: [
+        {
+          orderId: 'order_1',
+          intentId: 'intent_1',
+          externalOrderId: '0x1111111111111111111111111111111111111111111111111111111111111111',
+          status: 'live',
+          marketId: 'market_1',
+          outcomeId: 'outcome_1',
+          clobTokenId: 'token_1',
+          side: 'buy',
+          price: 0.1,
+          originalSize: 50,
+          sizeMatched: 0,
+          remainingSize: 50,
+          amountUsd: 5,
+          outcomeLabel: 'Yes',
+          marketTitle: 'Will Ecuador win the 2026 FIFA World Cup?',
+          eventTitle: '2026 FIFA World Cup Winner',
+          canCancel: true,
+        },
+      ],
+    });
+  });
+
+  it('cancels a CLOB order and marks the local order cancelled', async () => {
+    const cancelOrder = vi.fn().mockResolvedValue({
+      externalOrderId: '0x1111111111111111111111111111111111111111111111111111111111111111',
+      status: 'cancelled',
+      errorMessage: null,
+      response: {
+        canceled: ['0x1111111111111111111111111111111111111111111111111111111111111111'],
+      },
+    });
+    const tx = {
+      causewayOrder: {
+        update: vi.fn(),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      orderIntent: {
+        update: vi.fn(),
+      },
+      auditEvent: {
+        create: vi.fn(),
+      },
+    };
+    const service = createService({
+      causewayOrder: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'order_1',
+          orderIntentId: 'intent_1',
+          externalOrderId: '0x1111111111111111111111111111111111111111111111111111111111111111',
+          responsePayload: { success: true },
+          orderIntent: {
+            id: 'intent_1',
+          },
+        }),
+      },
+      $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
+    }, { status: 'available', reason: null }, { cancelOrder });
+
+    const result = await service.cancelOrder(currentUser('req_cancel_1'), 'order_1');
+
+    expect(cancelOrder).toHaveBeenCalledWith(
+      '0x1111111111111111111111111111111111111111111111111111111111111111',
+      testClobCredentials(),
+    );
+    expect(tx.causewayOrder.update).toHaveBeenCalledWith({
+      where: { id: 'order_1' },
+      data: {
+        status: 'cancelled',
+        errorMessage: null,
+        responsePayload: {
+          previous: { success: true },
+          cancellation: {
+            canceled: ['0x1111111111111111111111111111111111111111111111111111111111111111'],
+          },
+        },
+      },
+    });
+    expect(tx.orderIntent.update).toHaveBeenCalledWith({
+      where: { id: 'intent_1' },
+      data: { status: 'cancelled' },
+    });
+    expect(result).toEqual({
+      orderId: 'order_1',
+      intentId: 'intent_1',
+      externalOrderId: '0x1111111111111111111111111111111111111111111111111111111111111111',
+      status: 'cancelled',
+      errorMessage: null,
+    });
+  });
+
   it('atomically rejects a second submit that loses the intent status claim', async () => {
     const dto = submitDto();
     const causewayOrderUpdateMany = vi.fn();
@@ -1037,6 +1188,7 @@ function createService(
       funderAddress: '0x2222222222222222222222222222222222222222',
       tradingAccountType: 'gnosis_safe',
     }),
+    getUserClobCredentials: vi.fn().mockResolvedValue(testClobCredentials()),
   };
   return new OrdersService(clobClient, prisma as PrismaService, tradingService as unknown as TradingService);
 }

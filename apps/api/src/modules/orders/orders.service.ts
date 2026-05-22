@@ -4,9 +4,9 @@ import { getAddress } from 'viem';
 import { ApiException } from '../../common/errors/api.exception';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { hashJson } from '../../common/utils/hash.util';
-import { roundCurrency, toNullableNumber } from '../../common/utils/number.util';
+import { roundCurrency, roundShares, toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
-import { ClobApiCredentials, ClobClient, PreparedClobOrder, SignedClobOrderInput } from '../../integrations/polymarket/services/clob.client';
+import { ClobApiCredentials, ClobClient, ClobOpenOrder, PreparedClobOrder, SignedClobOrderInput } from '../../integrations/polymarket/services/clob.client';
 import type { OrderBookSnapshot } from '../../integrations/polymarket/types';
 import { TradingService } from '../trading/trading.service';
 import { type ConcreteTradingAccountType, type TradingAccountType, normalizeTradingAccountType } from '../trading/trading-account-type';
@@ -40,6 +40,30 @@ type PreviewOrderBookResult = {
 type SubmitOrderContext = {
   clientVersion?: string;
   clientSignedOrdersShape?: string;
+};
+
+type OpenOrderListItem = {
+  orderId: string | null;
+  intentId: string | null;
+  externalOrderId: string;
+  status: string;
+  rawStatus: string;
+  marketId: string | null;
+  outcomeId: string | null;
+  clobTokenId: string;
+  side: 'buy' | 'sell';
+  orderType: string | null;
+  price: number | null;
+  originalSize: number | null;
+  sizeMatched: number;
+  remainingSize: number | null;
+  amountUsd: number | null;
+  outcomeLabel: string | null;
+  marketTitle: string | null;
+  eventTitle: string | null;
+  createdAt: string | null;
+  makerAddress: string | null;
+  canCancel: boolean;
 };
 
 @Injectable()
@@ -441,6 +465,164 @@ export class OrdersService {
       submitResult: latestSubmission?.responseJson ?? null,
       createdAt: intent.createdAt.toISOString(),
       updatedAt: intent.updatedAt.toISOString(),
+    };
+  }
+
+  async listOpenOrders(user: CurrentUser) {
+    const credentials = await this.tradingService.getUserClobCredentials(user);
+    const remoteOrders = await this.clobClient.getOpenOrders({}, credentials);
+    const externalOrderIds = uniqueStrings(remoteOrders.map((order) => order.id));
+    const clobTokenIds = uniqueStrings(remoteOrders.map((order) => order.assetId));
+
+    const [localOrders, outcomes] = await Promise.all([
+      externalOrderIds.length > 0
+        ? this.prisma.causewayOrder.findMany({
+            where: {
+              externalOrderId: { in: externalOrderIds },
+              orderIntent: { userId: user.id },
+            },
+            include: {
+              orderIntent: {
+                select: {
+                  id: true,
+                },
+              },
+              market: {
+                include: {
+                  event: true,
+                },
+              },
+              outcome: true,
+            },
+          })
+        : Promise.resolve([]),
+      clobTokenIds.length > 0
+        ? this.prisma.polymarketOutcome.findMany({
+            where: {
+              clobTokenId: { in: clobTokenIds },
+            },
+            include: {
+              market: {
+                include: {
+                  event: true,
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const localByExternalOrderId = new Map<string, (typeof localOrders)[number]>();
+    for (const order of localOrders) {
+      if (order.externalOrderId) {
+        localByExternalOrderId.set(order.externalOrderId, order);
+      }
+    }
+    const outcomeByTokenId = new Map(outcomes.map((outcome) => [outcome.clobTokenId, outcome]));
+
+    return {
+      capability: 'available',
+      dataSource: 'polymarket_clob',
+      items: remoteOrders.map((remoteOrder) => buildOpenOrderItem(
+        remoteOrder,
+        localByExternalOrderId.get(remoteOrder.id) ?? null,
+        outcomeByTokenId.get(remoteOrder.assetId) ?? null,
+      )),
+      refreshedAt: new Date().toISOString(),
+      error: null,
+    };
+  }
+
+  async cancelOrder(user: CurrentUser, orderId: string) {
+    const localOrder = await this.prisma.causewayOrder.findFirst({
+      where: {
+        OR: [
+          { id: orderId },
+          { externalOrderId: orderId },
+        ],
+        orderIntent: {
+          userId: user.id,
+        },
+      },
+      include: {
+        orderIntent: {
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+    const externalOrderId = localOrder?.externalOrderId ?? (isLikelyExternalClobOrderId(orderId) ? orderId.trim() : null);
+    if (!externalOrderId) {
+      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'ORDER_NOT_CANCELABLE', 'Order does not have a Polymarket order id yet', {
+        orderId,
+      });
+    }
+
+    const credentials = await this.tradingService.getUserClobCredentials(user);
+    const result = await this.clobClient.cancelOrder(externalOrderId, credentials);
+    if (result.status !== 'cancelled') {
+      throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB order cancellation failed', {
+        orderId: localOrder?.id ?? null,
+        externalOrderId,
+        errorMessage: result.errorMessage,
+        response: result.response,
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (localOrder) {
+        await tx.causewayOrder.update({
+          where: { id: localOrder.id },
+          data: {
+            status: 'cancelled',
+            errorMessage: null,
+            responsePayload: toJson({
+              previous: localOrder.responsePayload ?? null,
+              cancellation: result.response,
+            }),
+          },
+        });
+        const stillActiveOrders = await tx.causewayOrder.count({
+          where: {
+            orderIntentId: localOrder.orderIntentId,
+            status: {
+              notIn: ['cancelled', 'failed', 'filled'],
+            },
+          },
+        });
+        if (stillActiveOrders === 0) {
+          await tx.orderIntent.update({
+            where: { id: localOrder.orderIntentId },
+            data: { status: OrderIntentStatus.cancelled },
+          });
+        }
+      }
+
+      await tx.auditEvent.create({
+        data: {
+          userId: user.id,
+          ...auditRequestId(user),
+          actorType: 'user',
+          entityType: 'clob_order',
+          entityId: localOrder?.id ?? externalOrderId,
+          action: 'order.cancelled',
+          after: toJson({
+            orderId: localOrder?.id ?? null,
+            intentId: localOrder?.orderIntent.id ?? null,
+            externalOrderId,
+            response: result.response,
+          }),
+        },
+      });
+    });
+
+    return {
+      orderId: localOrder?.id ?? null,
+      intentId: localOrder?.orderIntent.id ?? null,
+      externalOrderId,
+      status: 'cancelled',
+      errorMessage: null,
     };
   }
 
@@ -886,8 +1068,94 @@ type LoadedOrderIntent = Prisma.OrderIntentGetPayload<{
   };
 }>;
 
+type LocalOpenOrder = Prisma.CausewayOrderGetPayload<{
+  include: {
+    orderIntent: {
+      select: {
+        id: true;
+      };
+    };
+    market: {
+      include: {
+        event: true;
+      };
+    };
+    outcome: true;
+  };
+}>;
+
+type LocalOutcome = Prisma.PolymarketOutcomeGetPayload<{
+  include: {
+    market: {
+      include: {
+        event: true;
+      };
+    };
+  };
+}>;
+
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
+function buildOpenOrderItem(remoteOrder: ClobOpenOrder, localOrder: LocalOpenOrder | null, localOutcome: LocalOutcome | null): OpenOrderListItem {
+  const price = toNullableNumber(remoteOrder.price);
+  const originalSize = toNullableNumber(remoteOrder.originalSize);
+  const sizeMatched = toNullableNumber(remoteOrder.sizeMatched) ?? 0;
+  const remainingSize = originalSize == null ? null : roundShares(Math.max(0, originalSize - sizeMatched));
+  const market = localOrder?.market ?? localOutcome?.market ?? null;
+  const outcome = localOrder?.outcome ?? localOutcome ?? null;
+  const status = normalizeRemoteOrderStatus(remoteOrder.status);
+
+  return {
+    orderId: localOrder?.id ?? null,
+    intentId: localOrder?.orderIntent.id ?? null,
+    externalOrderId: remoteOrder.id,
+    status,
+    rawStatus: remoteOrder.status,
+    marketId: localOrder?.marketId ?? localOutcome?.marketId ?? null,
+    outcomeId: localOrder?.outcomeId ?? localOutcome?.id ?? null,
+    clobTokenId: remoteOrder.assetId,
+    side: remoteOrder.side.toLowerCase() as 'buy' | 'sell',
+    orderType: remoteOrder.orderType ?? localOrder?.orderType ?? null,
+    price,
+    originalSize,
+    sizeMatched: roundShares(sizeMatched),
+    remainingSize,
+    amountUsd: price == null || remainingSize == null ? null : roundCurrency(price * remainingSize),
+    outcomeLabel: outcome?.label ?? remoteOrder.outcome,
+    marketTitle: market?.question ?? null,
+    eventTitle: market?.event?.title ?? null,
+    createdAt: normalizeClobCreatedAt(remoteOrder.createdAt) ?? localOrder?.createdAt.toISOString() ?? null,
+    makerAddress: remoteOrder.makerAddress,
+    canCancel: isCancelableRemoteOrderStatus(status),
+  };
+}
+
+function normalizeRemoteOrderStatus(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) return 'unknown';
+  if (normalized === 'matched') return 'filled';
+  if (normalized === 'unmatched') return 'live';
+  return normalized;
+}
+
+function isCancelableRemoteOrderStatus(status: string): boolean {
+  return new Set(['live', 'open', 'unmatched']).has(status);
+}
+
+function normalizeClobCreatedAt(value: number | null): string | null {
+  if (value == null || !Number.isFinite(value) || value <= 0) return null;
+  const millis = value < 10_000_000_000 ? value * 1000 : value;
+  return new Date(millis).toISOString();
+}
+
+function isLikelyExternalClobOrderId(value: string): boolean {
+  return /^0x[0-9a-fA-F]{64}$/.test(value.trim());
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
 }
 
 function isUniqueConstraintError(error: unknown): boolean {

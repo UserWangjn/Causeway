@@ -755,6 +755,69 @@ describe('MarketsService', () => {
     });
   });
 
+  it('serves repeated market network requests from the in-memory cache', async () => {
+    const networkNodeFindMany = vi.fn().mockResolvedValue([]);
+    const marketCount = vi.fn().mockResolvedValue(0);
+    const marketGroupBy = vi.fn().mockResolvedValue([{ eventId: 'event_1' }]);
+    const marketFindMany = vi.fn().mockResolvedValue([
+      networkMarket('market_1', 'event_1', 'First hot market', '0.55', ['politics']),
+    ]);
+    const service = createService({
+      marketNetworkNode: {
+        findMany: networkNodeFindMany,
+      },
+      polymarketMarket: {
+        count: marketCount,
+        groupBy: marketGroupBy,
+        findMany: marketFindMany,
+      },
+    });
+
+    const first = await service.getMarketNetwork({ category: 'hot', limit: 10 });
+    const second = await service.getMarketNetwork({ category: 'hot', limit: 10 });
+
+    expect(first.nodes.map((node) => node.id)).toEqual(['event_1']);
+    expect(second.nodes.map((node) => node.id)).toEqual(['event_1']);
+    expect(second.cacheStatus).toBe('fresh');
+    expect(networkNodeFindMany).toHaveBeenCalledTimes(1);
+    expect(marketFindMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves stale market network cache during Prisma connection pool exhaustion', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-05-22T00:00:00.000Z'));
+      const networkNodeFindMany = vi.fn().mockResolvedValue([]);
+      const marketCount = vi.fn().mockResolvedValue(0);
+      const marketGroupBy = vi.fn().mockResolvedValue([{ eventId: 'event_1' }]);
+      const marketFindMany = vi.fn().mockResolvedValue([
+        networkMarket('market_1', 'event_1', 'First hot market', '0.55', ['politics']),
+      ]);
+      const service = createService({
+        marketNetworkNode: {
+          findMany: networkNodeFindMany,
+        },
+        polymarketMarket: {
+          count: marketCount,
+          groupBy: marketGroupBy,
+          findMany: marketFindMany,
+        },
+      });
+
+      await service.getMarketNetwork({ category: 'hot', limit: 10 });
+      vi.setSystemTime(new Date('2026-05-22T00:06:00.000Z'));
+      networkNodeFindMany.mockRejectedValueOnce(new Error('Timed out fetching a new connection from the connection pool'));
+
+      const stale = await service.getMarketNetwork({ category: 'hot', limit: 10 });
+
+      expect(stale.nodes.map((node) => node.id)).toEqual(['event_1']);
+      expect(stale.cacheStatus).toBe('stale');
+      expect(networkNodeFindMany).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns bounded network node copy for market hover cards', async () => {
     const longRules = `${'Resolution rules '.repeat(120)}Final sentence.`;
     const networkNodeFindMany = vi.fn().mockResolvedValue([]);

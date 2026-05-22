@@ -149,6 +149,32 @@ export type ClobPostOrderResult = {
   response: unknown;
 };
 
+export type ClobOpenOrder = {
+  id: string;
+  status: string;
+  owner: string | null;
+  makerAddress: string | null;
+  market: string | null;
+  assetId: string;
+  side: PolymarketOrderSide;
+  originalSize: string | null;
+  sizeMatched: string | null;
+  price: string | null;
+  outcome: string | null;
+  expiration: string | null;
+  orderType: string | null;
+  associateTrades: string[];
+  createdAt: number | null;
+  raw: unknown;
+};
+
+export type ClobCancelOrderResult = {
+  externalOrderId: string;
+  status: 'cancelled' | 'failed';
+  errorMessage: string | null;
+  response: unknown;
+};
+
 type SdkSignedOrderV2 = Parameters<typeof orderToJsonV2>[0];
 
 export type ClobPriceHistoryInput = {
@@ -407,9 +433,9 @@ export class ClobClient {
 
     return orders.map((order, index) => {
       const response = responses[index] ?? responseBody;
-      const errorMessage = readClobError(response);
       const externalOrderId = readExternalOrderId(response);
-      const success = errorMessage == null && readClobSuccess(response);
+      const errorMessage = readClobError(response) ?? readMissingExternalOrderIdError(response, externalOrderId);
+      const success = errorMessage == null && externalOrderId != null && readClobSuccess(response);
 
       return {
         orderId: order.preparedOrder.orderId,
@@ -419,6 +445,45 @@ export class ClobClient {
         response,
       };
     });
+  }
+
+  async getOrder(orderId: string, credentials?: ClobApiCredentials): Promise<ClobOpenOrder> {
+    const normalizedOrderId = normalizeExternalOrderId(orderId);
+    const response = await this.requestJson(`/data/order/${normalizedOrderId}`, 'GET', '', credentials);
+    return normalizeOpenOrder(response, normalizedOrderId);
+  }
+
+  async getOpenOrders(
+    params: { id?: string | null; market?: string | null; assetId?: string | null } = {},
+    credentials?: ClobApiCredentials,
+  ): Promise<ClobOpenOrder[]> {
+    const orders: ClobOpenOrder[] = [];
+    let nextCursor = 'MA==';
+    for (let pageIndex = 0; pageIndex < 10 && nextCursor !== 'LTE='; pageIndex += 1) {
+      const response = await this.requestJson('/data/orders', 'GET', '', credentials, {
+        ...(params.id ? { id: normalizeExternalOrderId(params.id) } : {}),
+        ...(params.market ? { market: params.market.trim() } : {}),
+        ...(params.assetId ? { asset_id: params.assetId.trim() } : {}),
+        next_cursor: nextCursor,
+      });
+      const page = normalizeOpenOrdersPage(response);
+      orders.push(...page.orders);
+      nextCursor = page.nextCursor;
+      if (!page.hasMore) break;
+    }
+    return orders;
+  }
+
+  async cancelOrder(orderId: string, credentials?: ClobApiCredentials): Promise<ClobCancelOrderResult> {
+    const externalOrderId = normalizeExternalOrderId(orderId);
+    const response = await this.deleteJson('/order', JSON.stringify({ orderID: externalOrderId }), credentials);
+    const errorMessage = readCancelOrderError(response, externalOrderId);
+    return {
+      externalOrderId,
+      status: errorMessage == null ? 'cancelled' : 'failed',
+      errorMessage,
+      response,
+    };
   }
 
   async getBalanceAllowance(
@@ -546,9 +611,13 @@ export class ClobClient {
     return this.requestJson(path, 'POST', body, credentials);
   }
 
+  private async deleteJson(path: string, body: string, credentials?: ClobApiCredentials): Promise<unknown> {
+    return this.requestJson(path, 'DELETE', body, credentials);
+  }
+
   private async requestJson(
     path: string,
-    method: 'GET' | 'POST',
+    method: 'DELETE' | 'GET' | 'POST',
     body: string,
     credentials?: ClobApiCredentials,
     query?: Record<string, string>,
@@ -564,7 +633,7 @@ export class ClobClient {
       const response = await fetch(url, {
         method,
         headers,
-        ...(method === 'POST' ? { body } : {}),
+        ...(method !== 'GET' ? { body } : {}),
         signal: controller.signal,
       });
       const text = await response.text();
@@ -596,7 +665,7 @@ export class ClobClient {
     }
   }
 
-  private buildL2Headers(method: 'GET' | 'POST', path: string, body: string, credentials?: ClobApiCredentials): Record<string, string> {
+  private buildL2Headers(method: 'DELETE' | 'GET' | 'POST', path: string, body: string, credentials?: ClobApiCredentials): Record<string, string> {
     const apiKey = credentials?.key ?? this.apiKey;
     const apiSecret = credentials?.secret ?? this.apiSecret;
     const apiPassphrase = credentials?.passphrase ?? this.apiPassphrase;
@@ -968,11 +1037,113 @@ function readExternalOrderId(value: unknown): string | null {
 
 function readClobError(value: unknown): string | null {
   if (!isRecord(value)) return null;
+  const explicitError = value.errorMsg ?? value.error_msg ?? value.error;
+  if (typeof explicitError === 'string' && explicitError.trim()) return explicitError.trim();
   if (value.success === true) return null;
   const status = typeof value.status === 'string' ? value.status.toLowerCase() : null;
   const message = value.success === false || status === 'failed' ? value.message : null;
-  const error = value.errorMsg ?? value.error_msg ?? value.error ?? message;
+  const error = message;
   return typeof error === 'string' && error.trim() ? error.trim() : null;
+}
+
+function readMissingExternalOrderIdError(value: unknown, externalOrderId: string | null): string | null {
+  if (externalOrderId) return null;
+  if (!readClobSuccess(value)) return null;
+  return 'CLOB accepted response did not include orderID';
+}
+
+function normalizeExternalOrderId(orderId: string): string {
+  const normalized = orderId.trim();
+  if (!normalized) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'CLOB order id is required');
+  }
+  return normalized;
+}
+
+function normalizeOpenOrdersPage(value: unknown): { orders: ClobOpenOrder[]; nextCursor: string; hasMore: boolean } {
+  if (Array.isArray(value)) {
+    return {
+      orders: value.map((item) => normalizeOpenOrder(item)).filter((item): item is ClobOpenOrder => item != null),
+      nextCursor: 'LTE=',
+      hasMore: false,
+    };
+  }
+  if (!isRecord(value)) {
+    throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB open orders returned an invalid body');
+  }
+  const data = Array.isArray(value.data) ? value.data : [];
+  const nextCursor = typeof value.next_cursor === 'string' ? value.next_cursor : 'LTE=';
+  return {
+    orders: data.map((item) => normalizeOpenOrder(item)).filter((item): item is ClobOpenOrder => item != null),
+    nextCursor,
+    hasMore: nextCursor !== 'LTE=',
+  };
+}
+
+function normalizeOpenOrder(value: unknown, fallbackId?: string): ClobOpenOrder {
+  if (!isRecord(value)) {
+    throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB order returned an invalid body');
+  }
+  const id = readString(value.id) ?? fallbackId;
+  const assetId = readString(value.asset_id) ?? readString(value.assetId);
+  if (!id || !assetId) {
+    throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB order returned missing identifiers', {
+      id,
+      assetId,
+    });
+  }
+  return {
+    id,
+    status: readString(value.status) ?? 'unknown',
+    owner: readString(value.owner),
+    makerAddress: readString(value.maker_address) ?? readString(value.makerAddress),
+    market: readString(value.market),
+    assetId,
+    side: normalizeOpenOrderSide(readString(value.side)),
+    originalSize: readString(value.original_size) ?? readString(value.originalSize),
+    sizeMatched: readString(value.size_matched) ?? readString(value.sizeMatched),
+    price: readString(value.price),
+    outcome: readString(value.outcome),
+    expiration: readString(value.expiration),
+    orderType: readString(value.order_type) ?? readString(value.orderType),
+    associateTrades: Array.isArray(value.associate_trades)
+      ? value.associate_trades.filter((item): item is string => typeof item === 'string')
+      : [],
+    createdAt: toNullableInteger(value.created_at ?? value.createdAt),
+    raw: value,
+  };
+}
+
+function normalizeOpenOrderSide(value: string | null): PolymarketOrderSide {
+  return value?.toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+}
+
+function readCancelOrderError(value: unknown, externalOrderId: string): string | null {
+  if (!isRecord(value)) return null;
+  const explicitError = readString(value.errorMsg) ?? readString(value.error_msg) ?? readString(value.error);
+  if (explicitError) return explicitError;
+  if (Array.isArray(value.canceled)) {
+    return value.canceled.includes(externalOrderId) ? null : 'CLOB order was not cancelled';
+  }
+  if (isRecord(value.not_canceled)) {
+    const reason = value.not_canceled[externalOrderId];
+    if (typeof reason === 'string' && reason.trim()) return reason.trim();
+    if (reason != null) return JSON.stringify(reason);
+  }
+  if (value.success === true) return null;
+  if (value.success === false) return readString(value.message) ?? 'CLOB order cancellation failed';
+  return 'CLOB order cancellation returned no confirmation';
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function toNullableInteger(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
 function normalizeOrderBook(tokenId: string, payload: unknown): OrderBookSnapshot {

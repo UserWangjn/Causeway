@@ -401,6 +401,109 @@ describe('ClobClient', () => {
     ]);
   });
 
+  it('treats CLOB success responses with error messages as failed orders', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify([
+        {
+          success: true,
+          orderID: '',
+          status: '',
+          errorMsg: 'not enough balance / allowance',
+        },
+      ])),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true, withCreds: true }));
+    const [preparedOrder] = client.prepareSignaturePayloads([
+      {
+        orderId: 'order_1',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        funderAddress: '0x2222222222222222222222222222222222222222',
+        chainId: 137,
+        tokenId: '123456789',
+        side: 'BUY',
+        orderMode: 'limit',
+        orderType: 'GTC',
+        limitPrice: 0.1,
+        estimatedFillPrice: 0.1,
+        size: 50,
+        amountUsd: 5,
+        tickSize: 0.01,
+        negRisk: false,
+      },
+    ], new Date(Date.now() + 60_000));
+
+    const result = await client.postSignedOrders([
+      {
+        preparedOrder,
+        signature: `0x${'a'.repeat(130)}`,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        orderId: 'order_1',
+        externalOrderId: null,
+        status: 'failed',
+        errorMessage: 'not enough balance / allowance',
+        response: {
+          success: true,
+          orderID: '',
+          status: '',
+          errorMsg: 'not enough balance / allowance',
+        },
+      },
+    ]);
+  });
+
+  it('treats CLOB success responses without order IDs as failed orders', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify([{ success: true, status: 'live' }])),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true, withCreds: true }));
+    const [preparedOrder] = client.prepareSignaturePayloads([
+      {
+        orderId: 'order_1',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        funderAddress: '0x2222222222222222222222222222222222222222',
+        chainId: 137,
+        tokenId: '123456789',
+        side: 'BUY',
+        orderMode: 'limit',
+        orderType: 'GTC',
+        limitPrice: 0.1,
+        estimatedFillPrice: 0.1,
+        size: 50,
+        amountUsd: 5,
+        tickSize: 0.01,
+        negRisk: false,
+      },
+    ], new Date(Date.now() + 60_000));
+
+    const result = await client.postSignedOrders([
+      {
+        preparedOrder,
+        signature: `0x${'a'.repeat(130)}`,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        orderId: 'order_1',
+        externalOrderId: null,
+        status: 'failed',
+        errorMessage: 'CLOB accepted response did not include orderID',
+        response: {
+          success: true,
+          status: 'live',
+        },
+      },
+    ]);
+  });
+
   it('rejects obsolete prepared CLOB orders with non-JSON-safe salts before posting', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
@@ -440,6 +543,138 @@ describe('ClobClient', () => {
       },
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fetches open CLOB orders with user L2 credentials', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        data: [
+          {
+            id: '0x1111111111111111111111111111111111111111111111111111111111111111',
+            status: 'LIVE',
+            owner: 'user-api-key',
+            maker_address: '0x2222222222222222222222222222222222222222',
+            market: 'condition_1',
+            asset_id: '123456789',
+            side: 'BUY',
+            original_size: '50',
+            size_matched: '0',
+            price: '0.1',
+            outcome: 'Yes',
+            order_type: 'GTC',
+            created_at: 1_700_000_000,
+          },
+        ],
+        next_cursor: 'LTE=',
+      })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true }));
+
+    const result = await client.getOpenOrders({ assetId: '123456789' }, userClobCredentials());
+
+    expect(result).toEqual([
+      {
+        id: '0x1111111111111111111111111111111111111111111111111111111111111111',
+        status: 'LIVE',
+        owner: 'user-api-key',
+        makerAddress: '0x2222222222222222222222222222222222222222',
+        market: 'condition_1',
+        assetId: '123456789',
+        side: 'BUY',
+        originalSize: '50',
+        sizeMatched: '0',
+        price: '0.1',
+        outcome: 'Yes',
+        expiration: null,
+        orderType: 'GTC',
+        associateTrades: [],
+        createdAt: 1_700_000_000,
+        raw: {
+          id: '0x1111111111111111111111111111111111111111111111111111111111111111',
+          status: 'LIVE',
+          owner: 'user-api-key',
+          maker_address: '0x2222222222222222222222222222222222222222',
+          market: 'condition_1',
+          asset_id: '123456789',
+          side: 'BUY',
+          original_size: '50',
+          size_matched: '0',
+          price: '0.1',
+          outcome: 'Yes',
+          order_type: 'GTC',
+          created_at: 1_700_000_000,
+        },
+      },
+    ]);
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.pathname).toBe('/data/orders');
+    expect(requestedUrl.searchParams.get('asset_id')).toBe('123456789');
+    expect(requestedUrl.searchParams.get('next_cursor')).toBe('MA==');
+    const options = fetchMock.mock.calls[0]?.[1] as { method: string; headers: Record<string, string> };
+    expect(options.method).toBe('GET');
+    expect(options.headers.POLY_ADDRESS).toBe('0x1111111111111111111111111111111111111111');
+    expect(options.headers.POLY_API_KEY).toBe('user-api-key');
+  });
+
+  it('cancels an open CLOB order with user L2 credentials', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        canceled: ['0x2222222222222222222222222222222222222222222222222222222222222222'],
+        not_canceled: {},
+      })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true }));
+
+    const result = await client.cancelOrder(
+      '0x2222222222222222222222222222222222222222222222222222222222222222',
+      userClobCredentials(),
+    );
+
+    expect(result).toEqual({
+      externalOrderId: '0x2222222222222222222222222222222222222222222222222222222222222222',
+      status: 'cancelled',
+      errorMessage: null,
+      response: {
+        canceled: ['0x2222222222222222222222222222222222222222222222222222222222222222'],
+        not_canceled: {},
+      },
+    });
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.pathname).toBe('/order');
+    const options = fetchMock.mock.calls[0]?.[1] as { method: string; headers: Record<string, string>; body: string };
+    expect(options.method).toBe('DELETE');
+    expect(JSON.parse(options.body)).toEqual({
+      orderID: '0x2222222222222222222222222222222222222222222222222222222222222222',
+    });
+    expect(options.headers.POLY_ADDRESS).toBe('0x1111111111111111111111111111111111111111');
+    expect(options.headers.POLY_API_KEY).toBe('user-api-key');
+  });
+
+  it('does not treat unconfirmed CLOB cancellations as cancelled', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify({
+        canceled: [],
+        not_canceled: {},
+      })),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true }));
+
+    const result = await client.cancelOrder(
+      '0x2222222222222222222222222222222222222222222222222222222222222222',
+      userClobCredentials(),
+    );
+
+    expect(result).toMatchObject({
+      externalOrderId: '0x2222222222222222222222222222222222222222222222222222222222222222',
+      status: 'failed',
+      errorMessage: 'CLOB order was not cancelled',
+    });
   });
 
   it('refreshes and reads CLOB balance allowance with the requested signature type', async () => {

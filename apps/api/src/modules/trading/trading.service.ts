@@ -2,7 +2,7 @@ import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, type UserPolymarketAccount } from '@prisma/client';
 import { randomInt } from 'node:crypto';
-import { getAddress, verifyTypedData } from 'viem';
+import { encodeFunctionData, encodePacked, getAddress, hashTypedData, maxUint256, verifyMessage, zeroAddress, verifyTypedData } from 'viem';
 import { buildDepositWalletCreateRequest, deriveDepositWallet } from '@polymarket/builder-relayer-client/dist/builder';
 import { getContractConfig } from '@polymarket/builder-relayer-client/dist/config';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
@@ -12,8 +12,8 @@ import { CredentialCryptoService } from '../../common/security/credential-crypto
 import { PrismaService } from '../../database/prisma.service';
 import { ClobClient, type ClobApiCredentials, SignatureTypeV2 } from '../../integrations/polymarket/services/clob.client';
 import { CompleteClobAuthDto } from './dto/complete-clob-auth.dto';
+import { CompleteDepositWalletApprovalDto, CompleteDepositWalletFundingDto } from './dto/deposit-wallet-approval.dto';
 import {
-  CONCRETE_TRADING_ACCOUNT_TYPES,
   type ConcreteTradingAccountType,
   type TradingAccountType,
   normalizeTradingAccountType,
@@ -132,6 +132,57 @@ type ClobAuthPayload = {
   };
 };
 
+type DepositWalletCallPayload = {
+  target: string;
+  value: string;
+  data: string;
+};
+
+type DepositWalletApprovalPayload = {
+  walletAddress: string;
+  chainId: number;
+  nonce: string;
+  deadline: string;
+  calls: DepositWalletCallPayload[];
+  eip712: {
+    primaryType: 'Batch';
+    domain: {
+      name: 'DepositWallet';
+      version: '1';
+      chainId: number;
+      verifyingContract: string;
+    };
+    types: {
+      Call: Array<{ name: string; type: string }>;
+      Batch: Array<{ name: string; type: string }>;
+    };
+    message: {
+      wallet: string;
+      nonce: string;
+      deadline: string;
+      calls: DepositWalletCallPayload[];
+    };
+  };
+};
+
+type SafeDepositWalletFundingPayload = {
+  walletAddress: string;
+  chainId: number;
+  safeAddress: string;
+  depositWalletAddress: string;
+  amountMicroUsd: number;
+  amountUsd: number;
+  nonce: string;
+  messageHash: string;
+};
+
+type RelayerSubmissionResult = {
+  transactionId: string | null;
+  state: string | null;
+  transactionHash: string | null;
+  raw: unknown;
+};
+
 type CreateApiKeyResponse = {
   key: string;
   secret: string;
@@ -164,6 +215,63 @@ const RELAYER_FAILED_STATES = new Set(['STATE_FAILED', 'STATE_INVALID']);
 const RELAYER_CONFIRMED_STATES = new Set(['STATE_CONFIRMED']);
 const DEPOSIT_WALLET_CONFIRMED_NOT_DEPLOYED_REASON =
   'Deposit wallet creation is confirmed by Polymarket relayer, but deployment is not yet observable. Refresh readiness shortly.';
+const COLLATERAL_TOKEN_ADDRESS = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB';
+const POLYGON_CLOB_APPROVAL_SPENDERS = [
+  '0xE111180000d2663C0091e4f400237545B87B996B',
+  '0xe2222d279d744050d28e00520010520000310F59',
+  '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296',
+] as const;
+const DEPOSIT_WALLET_BATCH_TYPES = {
+  Call: [
+    { name: 'target', type: 'address' },
+    { name: 'value', type: 'uint256' },
+    { name: 'data', type: 'bytes' },
+  ],
+  Batch: [
+    { name: 'wallet', type: 'address' },
+    { name: 'nonce', type: 'uint256' },
+    { name: 'deadline', type: 'uint256' },
+    { name: 'calls', type: 'Call[]' },
+  ],
+} as const;
+const SAFE_TX_TYPES = {
+  SafeTx: [
+    { name: 'to', type: 'address' },
+    { name: 'value', type: 'uint256' },
+    { name: 'data', type: 'bytes' },
+    { name: 'operation', type: 'uint8' },
+    { name: 'safeTxGas', type: 'uint256' },
+    { name: 'baseGas', type: 'uint256' },
+    { name: 'gasPrice', type: 'uint256' },
+    { name: 'gasToken', type: 'address' },
+    { name: 'refundReceiver', type: 'address' },
+    { name: 'nonce', type: 'uint256' },
+  ],
+} as const;
+const ERC20_APPROVE_ABI = [
+  {
+    type: 'function',
+    name: 'approve',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: '_spender', type: 'address' },
+      { name: '_value', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+] as const;
+const ERC20_TRANSFER_ABI = [
+  {
+    type: 'function',
+    name: 'transfer',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: '_to', type: 'address' },
+      { name: '_value', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+] as const;
 const COLLATERAL_ALLOWANCE_KEYS = new Set([
   'collateral',
   'usdc',
@@ -172,7 +280,7 @@ const COLLATERAL_ALLOWANCE_KEYS = new Set([
   '0xe2222d279d744050d28e00520010520000310f59',
   '0xd91e80cf2e7be2e162c6513ced06f1dda35296',
 ]);
-const TRADING_ACCOUNT_PRIORITY = [...CONCRETE_TRADING_ACCOUNT_TYPES];
+const TRADING_ACCOUNT_PRIORITY = ['deposit_wallet', 'gnosis_safe', 'proxy'] as const satisfies readonly ConcreteTradingAccountType[];
 
 @Injectable()
 export class TradingService {
@@ -362,6 +470,22 @@ export class TradingService {
     };
   }
 
+  async getUserClobCredentials(user: CurrentUser): Promise<ClobApiCredentials> {
+    if (!this.enableRealOrders) {
+      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', 'CLOB real trading is disabled by ENABLE_REAL_ORDERS=false');
+    }
+    const account = await this.prisma.userPolymarketAccount.findUnique({ where: { userId: user.id } });
+    if (!account?.clobApiKeyCiphertext || !account.clobApiSecretCiphertext || !account.clobApiPassphraseCiphertext) {
+      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', 'User CLOB credentials are not configured');
+    }
+    return {
+      key: this.crypto.decrypt(account.clobApiKeyCiphertext),
+      secret: this.crypto.decrypt(account.clobApiSecretCiphertext),
+      passphrase: this.crypto.decrypt(account.clobApiPassphraseCiphertext),
+      address: getAddress(user.walletAddress),
+    };
+  }
+
   async prepareClobAuth(user: CurrentUser): Promise<ClobAuthPayload> {
     await this.getOrCreateAccount(user);
     const timestamp = Math.floor(Date.now() / 1000);
@@ -491,7 +615,7 @@ export class TradingService {
       update: {
         walletAddress,
         chainId: user.chainId,
-        signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
+        signatureType: SignatureTypeV2.POLY_1271,
         clobApiKeyCiphertext: this.crypto.encrypt(creds.key),
         clobApiSecretCiphertext: this.crypto.encrypt(creds.secret),
         clobApiPassphraseCiphertext: this.crypto.encrypt(creds.passphrase),
@@ -505,7 +629,7 @@ export class TradingService {
         userId: user.id,
         walletAddress,
         chainId: user.chainId,
-        signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
+        signatureType: SignatureTypeV2.POLY_1271,
         clobApiKeyCiphertext: this.crypto.encrypt(creds.key),
         clobApiSecretCiphertext: this.crypto.encrypt(creds.secret),
         clobApiPassphraseCiphertext: this.crypto.encrypt(creds.passphrase),
@@ -519,7 +643,7 @@ export class TradingService {
 
     await this.audit(user, 'trading.clob_auth_completed', {
       clobApiKeyPreview: previewApiKey(creds.key),
-      signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
+      signatureType: SignatureTypeV2.POLY_1271,
       depositWalletAddress,
     });
 
@@ -640,6 +764,148 @@ export class TradingService {
     return this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' });
   }
 
+  async prepareDepositWalletApproval(user: CurrentUser): Promise<DepositWalletApprovalPayload> {
+    const account = await this.requireDepositWalletAccount(user);
+    const walletAddress = getAddress(user.walletAddress);
+    const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
+    const nonce = await this.fetchRelayerNonce(walletAddress, 'WALLET');
+    const deadline = Math.floor(Date.now() / 1000 + 240).toString();
+    const calls = buildDepositWalletApprovalCalls(user.chainId);
+    return this.buildDepositWalletApprovalPayload(user.chainId, depositWalletAddress, nonce, deadline, calls);
+  }
+
+  async completeDepositWalletApproval(user: CurrentUser, dto: CompleteDepositWalletApprovalDto) {
+    const account = await this.requireDepositWalletAccount(user);
+    const walletAddress = getAddress(user.walletAddress);
+    const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
+    const calls = buildDepositWalletApprovalCalls(user.chainId);
+    if (Number(dto.deadline) <= Math.floor(Date.now() / 1000)) {
+      throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Deposit wallet approval payload has expired; prepare the approval again.');
+    }
+    const payload = this.buildDepositWalletApprovalPayload(user.chainId, depositWalletAddress, dto.nonce, dto.deadline, calls);
+    const valid = await verifyTypedData({
+      address: walletAddress,
+      domain: {
+        ...payload.eip712.domain,
+        verifyingContract: depositWalletAddress,
+      },
+      types: payload.eip712.types,
+      primaryType: payload.eip712.primaryType,
+      message: payload.eip712.message,
+      signature: dto.signature as `0x${string}`,
+    });
+    if (!valid) {
+      throw new ApiException(HttpStatus.UNAUTHORIZED, 'INVALID_SIGNATURE', 'Deposit wallet approval signature is invalid');
+    }
+    const request = {
+      type: 'WALLET',
+      from: walletAddress,
+      to: getContractConfig(user.chainId).DepositWalletContracts.DepositWalletFactory,
+      nonce: dto.nonce,
+      signature: dto.signature,
+      depositWalletParams: {
+        depositWallet: depositWalletAddress,
+        deadline: dto.deadline,
+        calls,
+      },
+    };
+    const result = await this.submitRelayerRequest(request, 'Polymarket relayer deposit wallet approval failed');
+    await this.audit(user, 'trading.deposit_wallet_approval_submitted', {
+      depositWalletAddress,
+      transactionId: result.transactionId,
+      state: result.state,
+      spenderCount: calls.length,
+    });
+    return {
+      transaction: result,
+      readiness: await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' }),
+    };
+  }
+
+  async prepareSafeDepositWalletFunding(user: CurrentUser, amountMicroUsd?: number): Promise<SafeDepositWalletFundingPayload> {
+    const account = await this.requireDepositWalletAccount(user);
+    const walletAddress = getAddress(user.walletAddress);
+    const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
+    const amount = normalizeMicroUsd(amountMicroUsd);
+    const safeAddress = await this.fetchRelayerFunderAddress(walletAddress, 'SAFE');
+    const nonce = await this.fetchRelayerNonce(walletAddress, 'SAFE');
+    const transaction = buildSafeTransferTransaction(depositWalletAddress, amount);
+    const messageHash = buildSafeTransactionHash(user.chainId, safeAddress, transaction, nonce);
+    return {
+      walletAddress,
+      chainId: user.chainId,
+      safeAddress,
+      depositWalletAddress,
+      amountMicroUsd: amount,
+      amountUsd: amount / 1_000_000,
+      nonce,
+      messageHash,
+    };
+  }
+
+  async completeSafeDepositWalletFunding(user: CurrentUser, dto: CompleteDepositWalletFundingDto) {
+    const prepared = await this.prepareSafeDepositWalletFunding(user, dto.amountMicroUsd);
+    if (prepared.nonce !== dto.nonce || prepared.messageHash.toLowerCase() !== dto.messageHash.toLowerCase()) {
+      throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Safe funding payload is stale; prepare the transfer again.');
+    }
+    const valid = await verifyMessage({
+      address: prepared.walletAddress as `0x${string}`,
+      message: { raw: prepared.messageHash as `0x${string}` },
+      signature: dto.signature as `0x${string}`,
+    });
+    if (!valid) {
+      throw new ApiException(HttpStatus.UNAUTHORIZED, 'INVALID_SIGNATURE', 'Safe funding signature is invalid');
+    }
+    const transaction = buildSafeTransferTransaction(prepared.depositWalletAddress, prepared.amountMicroUsd);
+    const request = {
+      from: prepared.walletAddress,
+      to: transaction.to,
+      proxyWallet: prepared.safeAddress,
+      data: transaction.data,
+      nonce: prepared.nonce,
+      signature: packSafeSignature(dto.signature),
+      signatureParams: {
+        gasPrice: '0',
+        operation: '0',
+        safeTxnGas: '0',
+        baseGas: '0',
+        gasToken: zeroAddress,
+        refundReceiver: zeroAddress,
+      },
+      type: 'SAFE',
+      metadata: `fund deposit wallet ${prepared.amountUsd.toFixed(6)} pUSD`,
+    };
+    const result = await this.submitRelayerRequest(request, 'Polymarket relayer safe funding transfer failed');
+    await this.audit(user, 'trading.deposit_wallet_safe_funding_submitted', {
+      safeAddress: prepared.safeAddress,
+      depositWalletAddress: prepared.depositWalletAddress,
+      amountMicroUsd: prepared.amountMicroUsd,
+      transactionId: result.transactionId,
+      state: result.state,
+    });
+    return {
+      transaction: result,
+      readiness: await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' }),
+    };
+  }
+
+  async getRelayerTransactionStatus(user: CurrentUser, transactionId: string) {
+    if (!/^[A-Za-z0-9:_-]{1,160}$/.test(transactionId)) {
+      throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Invalid relayer transaction id');
+    }
+    const owned = await this.isKnownUserRelayerTransaction(user, transactionId);
+    if (!owned) {
+      throw new ApiException(HttpStatus.NOT_FOUND, 'NOT_FOUND', 'Relayer transaction was not found for this user');
+    }
+    const transactions = await this.fetchRelayerTransactions(transactionId);
+    const transaction = findRelayerTransaction(transactions, transactionId);
+    return {
+      transactionId,
+      state: transaction ? readString(transaction, 'state') : null,
+      transactionHash: transaction ? readString(transaction, 'transactionHash') ?? readString(transaction, 'hash') : null,
+    };
+  }
+
   private async getOrCreateAccount(user: CurrentUser): Promise<UserPolymarketAccount> {
     const walletAddress = getAddress(user.walletAddress);
     const depositWalletAddress = this.deriveDepositWalletAddress(walletAddress, user.chainId);
@@ -648,14 +914,13 @@ export class TradingService {
       update: {
         walletAddress,
         chainId: user.chainId,
-        signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
         depositWalletAddress,
       },
       create: {
         userId: user.id,
         walletAddress,
         chainId: user.chainId,
-        signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
+        signatureType: SignatureTypeV2.POLY_1271,
         depositWalletAddress,
         readinessStatus: 'needs_clob_auth',
         readinessReason: 'User must sign Polymarket CLOB authentication',
@@ -674,7 +939,7 @@ export class TradingService {
     }
 
     const selected = requestedTradingAccountType === 'auto'
-      ? options.find((option) => option.status === 'ready') ?? options[0]
+      ? options[0]
       : options.find((option) => option.type === requestedTradingAccountType) ?? options[0];
 
     return { selected, options };
@@ -1079,7 +1344,54 @@ export class TradingService {
     }
   }
 
+  private async fetchRelayerNonce(ownerAddress: string, transactionType: 'SAFE' | 'PROXY' | 'WALLET'): Promise<string> {
+    const url = new URL('/nonce', this.relayerBaseUrl);
+    url.searchParams.set('address', ownerAddress);
+    url.searchParams.set('type', transactionType);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error('Polymarket relayer nonce request timed out')), this.timeoutMs);
+    try {
+      const response = await fetch(url, {
+        headers: {
+          accept: 'application/json',
+          'user-agent': 'causeway-api/0.1',
+        },
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      const parsed = parseJson(text);
+      if (!response.ok) {
+        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Polymarket relayer nonce lookup failed', {
+          status: response.status,
+          transactionType,
+          body: parsed,
+        });
+      }
+      const nonce = readString(parsed, 'nonce');
+      if (!nonce) {
+        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Polymarket relayer returned no nonce', {
+          transactionType,
+          body: parsed,
+        });
+      }
+      return nonce;
+    } catch (error) {
+      if (error instanceof ApiException) throw error;
+      throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Polymarket relayer nonce lookup failed', {
+        transactionType,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private async fetchRelayerTransactionState(transactionId: string): Promise<string | null> {
+    const transaction = findRelayerTransaction(await this.fetchRelayerTransactions(transactionId), transactionId);
+    return transaction ? readString(transaction, 'state') : null;
+  }
+
+  private async fetchRelayerTransactions(transactionId: string): Promise<unknown> {
     const url = new URL(RELAYER_TRANSACTION_PATH, this.relayerBaseUrl);
     url.searchParams.set('id', transactionId);
     const controller = new AbortController();
@@ -1100,16 +1412,98 @@ export class TradingService {
           body: parsed,
         });
       }
-      const transaction = findRelayerTransaction(parsed, transactionId);
-      return transaction ? readString(transaction, 'state') : null;
+      return parsed;
     } finally {
       clearTimeout(timeout);
     }
   }
 
+  private buildDepositWalletApprovalPayload(
+    chainId: number,
+    depositWalletAddress: string,
+    nonce: string,
+    deadline: string,
+    calls: DepositWalletCallPayload[],
+  ): DepositWalletApprovalPayload {
+    return {
+      walletAddress: depositWalletAddress,
+      chainId,
+      nonce,
+      deadline,
+      calls,
+      eip712: {
+        primaryType: 'Batch',
+        domain: {
+          name: 'DepositWallet',
+          version: '1',
+          chainId,
+          verifyingContract: depositWalletAddress,
+        },
+        types: {
+          Call: [...DEPOSIT_WALLET_BATCH_TYPES.Call],
+          Batch: [...DEPOSIT_WALLET_BATCH_TYPES.Batch],
+        },
+        message: {
+          wallet: depositWalletAddress,
+          nonce,
+          deadline,
+          calls,
+        },
+      },
+    };
+  }
+
+  private async requireDepositWalletAccount(user: CurrentUser): Promise<UserPolymarketAccount> {
+    if (!this.enableRealOrders) {
+      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', 'Real trading is disabled');
+    }
+    if (!this.hasBuilderCredentials()) {
+      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', 'Builder API credentials are required for deposit wallet funding');
+    }
+    const account = await this.getOrCreateAccount(user);
+    const depositWalletAddress = account.depositWalletAddress ?? this.deriveDepositWalletAddress(user.walletAddress, user.chainId);
+    const deployed = account.depositWalletDeployed || await this.checkDepositWalletDeployed(depositWalletAddress).catch(() => false);
+    if (!deployed) {
+      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', 'Deposit wallet must be deployed before funding or approval');
+    }
+    return account;
+  }
+
+  private async isKnownUserRelayerTransaction(user: CurrentUser, transactionId: string): Promise<boolean> {
+    const account = await this.prisma.userPolymarketAccount.findUnique({
+      where: { userId: user.id },
+      select: { depositWalletTxId: true },
+    });
+    if (account?.depositWalletTxId === transactionId) return true;
+
+    const audit = await this.prisma.auditEvent.findFirst({
+      where: {
+        userId: user.id,
+        entityType: 'polymarket_account',
+        entityId: user.id,
+        action: {
+          in: [
+            'trading.deposit_wallet_approval_submitted',
+            'trading.deposit_wallet_safe_funding_submitted',
+          ],
+        },
+        after: {
+          path: ['transactionId'],
+          equals: transactionId,
+        },
+      },
+      select: { id: true },
+    });
+    return Boolean(audit);
+  }
+
   private async submitDepositWalletCreate(walletAddress: string, chainId: number): Promise<unknown> {
     const config = getContractConfig(chainId).DepositWalletContracts;
     const request = buildDepositWalletCreateRequest(getAddress(walletAddress), config);
+    return (await this.submitRelayerRequest(request, 'Polymarket relayer deposit wallet create failed')).raw;
+  }
+
+  private async submitRelayerRequest(request: unknown, errorMessage: string): Promise<RelayerSubmissionResult> {
     const body = JSON.stringify(request);
     const builderConfig = new BuilderConfig({
       localBuilderCreds: {
@@ -1121,7 +1515,7 @@ export class TradingService {
     const headers = await builderConfig.generateBuilderHeaders('POST', RELAYER_SUBMIT_PATH, body);
     const url = new URL(RELAYER_SUBMIT_PATH, this.relayerBaseUrl);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error('Polymarket relayer wallet create request timed out')), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(new Error('Polymarket relayer request timed out')), this.timeoutMs);
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -1137,15 +1531,20 @@ export class TradingService {
       const text = await response.text();
       const parsed = parseJson(text);
       if (!response.ok) {
-        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Polymarket relayer deposit wallet create failed', {
+        throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', errorMessage, {
           status: response.status,
           body: parsed,
         });
       }
-      return parsed;
+      return {
+        transactionId: readString(parsed, 'transactionID') ?? readString(parsed, 'transactionId'),
+        state: readString(parsed, 'state'),
+        transactionHash: readString(parsed, 'transactionHash') ?? readString(parsed, 'hash'),
+        raw: parsed,
+      };
     } catch (error) {
       if (error instanceof ApiException) throw error;
-      throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'Polymarket relayer deposit wallet create failed', {
+      throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', errorMessage, {
         cause: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -1170,6 +1569,94 @@ export class TradingService {
       },
     });
   }
+}
+
+function buildDepositWalletApprovalCalls(chainId: number): DepositWalletCallPayload[] {
+  if (chainId !== 137) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Deposit wallet funding is only configured for Polygon mainnet');
+  }
+  return POLYGON_CLOB_APPROVAL_SPENDERS.map((spender) => ({
+    target: COLLATERAL_TOKEN_ADDRESS,
+    value: '0',
+    data: encodeFunctionData({
+      abi: ERC20_APPROVE_ABI,
+      functionName: 'approve',
+      args: [spender, maxUint256],
+    }),
+  }));
+}
+
+function buildSafeTransferTransaction(depositWalletAddress: string, amountMicroUsd: number) {
+  return {
+    to: COLLATERAL_TOKEN_ADDRESS,
+    value: '0',
+    operation: 0,
+    data: encodeFunctionData({
+      abi: ERC20_TRANSFER_ABI,
+      functionName: 'transfer',
+      args: [getAddress(depositWalletAddress), BigInt(amountMicroUsd)],
+    }),
+  };
+}
+
+function buildSafeTransactionHash(
+  chainId: number,
+  safeAddress: string,
+  transaction: ReturnType<typeof buildSafeTransferTransaction>,
+  nonce: string,
+): string {
+  return hashTypedData({
+    primaryType: 'SafeTx',
+    domain: {
+      chainId,
+      verifyingContract: getAddress(safeAddress),
+    },
+    types: SAFE_TX_TYPES,
+    message: {
+      to: transaction.to as `0x${string}`,
+      value: BigInt(transaction.value),
+      data: transaction.data,
+      operation: transaction.operation,
+      safeTxGas: 0n,
+      baseGas: 0n,
+      gasPrice: 0n,
+      gasToken: zeroAddress,
+      refundReceiver: zeroAddress,
+      nonce: BigInt(nonce),
+    },
+  });
+}
+
+function packSafeSignature(signature: string): string {
+  let sig = signature.trim();
+  if (!/^0x[0-9a-fA-F]{130}$/.test(sig)) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Safe funding signature must be a 65-byte hex signature');
+  }
+  let v = Number.parseInt(sig.slice(-2), 16);
+  if (v === 0 || v === 1) {
+    v += 31;
+  } else if (v === 27 || v === 28) {
+    v += 4;
+  } else {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Safe funding signature has an invalid recovery id');
+  }
+  sig = `${sig.slice(0, -2)}${v.toString(16).padStart(2, '0')}`;
+  return encodePacked(
+    ['uint256', 'uint256', 'uint8'],
+    [
+      BigInt(`0x${sig.slice(2, 66)}`),
+      BigInt(`0x${sig.slice(66, 130)}`),
+      v,
+    ],
+  );
+}
+
+function normalizeMicroUsd(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 1_000_000_000_000) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'amountMicroUsd must be a positive integer no larger than 1,000,000 pUSD');
+  }
+  return parsed;
 }
 
 function resolveReadinessStatus(input: {

@@ -22,8 +22,8 @@ import { SyncRunsQueryDto } from './dto/sync-runs-query.dto';
 export class PolymarketSyncService {
   private readonly pageSize = 100;
   private readonly eventPageSize = 100;
-  private readonly eventUpsertConcurrency = 3;
-  private readonly marketUpsertConcurrency = 4;
+  private readonly eventUpsertConcurrency = 2;
+  private readonly marketUpsertConcurrency = 2;
 
   constructor(
     @Inject(GammaClient)

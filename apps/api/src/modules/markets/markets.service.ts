@@ -213,6 +213,29 @@ type NetworkEventGroup = {
   liquidity: number;
   rank: number;
 };
+type NetworkNodePayload = { id: string; rules?: string | null; [key: string]: unknown };
+type NetworkEdgePayload = { id: string; source: string; target: string; relationType: string; weight: number };
+type MarketNetworkResponse = {
+  nodes: NetworkNodePayload[];
+  edges: NetworkEdgePayload[];
+  total: number;
+  totalEvents?: number;
+  totalMarkets?: number;
+  returned: number;
+  limit: number;
+  hasMore: boolean;
+  category: string;
+  nodeType: NetworkNodeType;
+  source: 'database';
+  topologySource: NetworkTopologySource;
+  generatedAt: string;
+  cacheStatus?: 'fresh' | 'stale';
+};
+type MarketNetworkCacheEntry = {
+  value: MarketNetworkResponse;
+  freshUntil: number;
+  staleUntil: number;
+};
 type MarketCategoryCountRow = { category: string | null; count: bigint | number | string };
 type MarketCategorySummary = {
   totalCount: number;
@@ -226,6 +249,9 @@ const NETWORK_CANDIDATE_MAX = 400;
 const NETWORK_CANDIDATE_MULTIPLIER = 8;
 const NETWORK_NODE_TEXT_MAX_LENGTH = 1200;
 const NEW_MARKET_WINDOW_DAYS = 14;
+const MARKET_NETWORK_CACHE_TTL_MS = 5 * 60 * 1000;
+const MARKET_NETWORK_STALE_TTL_MS = 15 * 60 * 1000;
+const MARKET_NETWORK_CACHE_MAX_ENTRIES = 60;
 
 const HOT_MARKET_ACTIVITY_WHERE = Prisma.validator<Prisma.PolymarketMarketWhereInput>()({
   OR: [
@@ -238,6 +264,8 @@ const HOT_MARKET_ACTIVITY_WHERE = Prisma.validator<Prisma.PolymarketMarketWhereI
 @Injectable()
 export class MarketsService {
   private readonly logger = new Logger(MarketsService.name);
+  private readonly marketNetworkCache = new Map<string, MarketNetworkCacheEntry>();
+  private readonly marketNetworkInFlight = new Map<string, Promise<MarketNetworkResponse>>();
 
   constructor(
     @Inject(ClobClient)
@@ -576,7 +604,44 @@ export class MarketsService {
     });
   }
 
-  async getMarketNetwork(query: MarketQueryDto) {
+  async getMarketNetwork(query: MarketQueryDto): Promise<MarketNetworkResponse> {
+    const cacheKey = marketNetworkCacheKey(query);
+    const cached = this.marketNetworkCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && cached.freshUntil > now) {
+      return {
+        ...cached.value,
+        cacheStatus: 'fresh',
+      };
+    }
+
+    const inFlight = this.marketNetworkInFlight.get(cacheKey);
+    if (inFlight) return inFlight;
+
+    const request = this.loadMarketNetwork(query)
+      .then((result) => {
+        this.writeMarketNetworkCache(cacheKey, result);
+        return result;
+      })
+      .catch((error: unknown) => {
+        const stale = this.marketNetworkCache.get(cacheKey);
+        if (stale && stale.staleUntil > Date.now() && isPrismaConnectionPoolTimeout(error)) {
+          this.logger.warn(`Serving stale market network cache after database pool timeout: ${cacheKey}`);
+          return {
+            ...stale.value,
+            cacheStatus: 'stale' as const,
+          };
+        }
+        throw error;
+      })
+      .finally(() => {
+        this.marketNetworkInFlight.delete(cacheKey);
+      });
+    this.marketNetworkInFlight.set(cacheKey, request);
+    return request;
+  }
+
+  private async loadMarketNetwork(query: MarketQueryDto): Promise<MarketNetworkResponse> {
     const nodeType = normalizeNetworkNodeType(query.nodeType);
     if (nodeType === 'market') {
       return this.getMarketLevelNetwork(query);
@@ -584,51 +649,23 @@ export class MarketsService {
     return this.getEventLevelNetwork(query);
   }
 
-  private async getEventLevelNetwork(query: MarketQueryDto) {
-    const limit = query.limit ?? 100;
-    const marketWhere = this.buildWhere(query);
-    const candidateLimit = networkCandidateLimit(limit);
-    const [nodes, total, totalEvents] = await Promise.all([
-      this.prisma.marketNetworkNode.findMany({
-        where: this.buildNetworkNodeWhere(query),
-        orderBy: { score: 'desc' },
-        take: candidateLimit,
-        include: {
-          market: {
-            select: NETWORK_MARKET_SELECT,
-          },
-        },
-      }),
-      this.prisma.polymarketMarket.count({
-        where: marketWhere,
-      }),
-      this.countNetworkEventGroups(marketWhere),
-    ]);
-    const candidates = nodes.length
-      ? mergeNetworkCandidates(
-          nodes.map((node, index) => ({
-            market: node.market,
-            category: node.category,
-            graphScore: toNullableNumber(node.score) ?? 0,
-            rank: index,
-          })),
-          await this.loadActivityNetworkCandidates(query, candidateLimit, nodes.length),
-        )
-      : await this.loadActivityNetworkCandidates(query, candidateLimit);
-    const selectedGroups = selectNetworkEventGroups(candidates, query, limit);
-
-    return {
-      nodes: selectedGroups.map((group) => this.formatNetworkEventNode(group)),
-      edges: buildEventGroupEdges(selectedGroups),
-      ...this.formatNetworkMeta(query, limit, total, selectedGroups.length, nodes.length ? 'precomputed' : 'deterministic', 'event', {
-        totalEvents,
-        totalMarkets: total,
-        hasMore: totalEvents > selectedGroups.length,
-      }),
-    };
+  private writeMarketNetworkCache(cacheKey: string, value: MarketNetworkResponse): void {
+    if (this.marketNetworkCache.size >= MARKET_NETWORK_CACHE_MAX_ENTRIES && !this.marketNetworkCache.has(cacheKey)) {
+      const oldestKey = this.marketNetworkCache.keys().next().value;
+      if (oldestKey) this.marketNetworkCache.delete(oldestKey);
+    }
+    const now = Date.now();
+    this.marketNetworkCache.set(cacheKey, {
+      value: {
+        ...value,
+        cacheStatus: undefined,
+      },
+      freshUntil: now + MARKET_NETWORK_CACHE_TTL_MS,
+      staleUntil: now + MARKET_NETWORK_STALE_TTL_MS,
+    });
   }
 
-  private async getMarketLevelNetwork(query: MarketQueryDto) {
+  private async getEventLevelNetwork(query: MarketQueryDto): Promise<MarketNetworkResponse> {
     const limit = query.limit ?? 100;
     const marketWhere = this.buildWhere(query);
     const candidateLimit = networkCandidateLimit(limit);
@@ -642,9 +679,47 @@ export class MarketsService {
         },
       },
     });
-    const total = await this.prisma.polymarketMarket.count({
-      where: marketWhere,
+    const candidates = nodes.length
+      ? mergeNetworkCandidates(
+          nodes.map((node, index) => ({
+            market: node.market,
+            category: node.category,
+            graphScore: toNullableNumber(node.score) ?? 0,
+            rank: index,
+          })),
+          await this.loadActivityNetworkCandidates(query, candidateLimit, nodes.length),
+        )
+      : await this.loadActivityNetworkCandidates(query, candidateLimit);
+    const selectedGroups = selectNetworkEventGroups(candidates, query, limit);
+    const total = await this.safeNetworkMarketCount(marketWhere, candidates.length);
+    const totalEvents = await this.safeNetworkEventGroupCount(marketWhere, selectedGroups.length);
+
+    return {
+      nodes: selectedGroups.map((group) => this.formatNetworkEventNode(group)),
+      edges: buildEventGroupEdges(selectedGroups),
+      ...this.formatNetworkMeta(query, limit, total, selectedGroups.length, nodes.length ? 'precomputed' : 'deterministic', 'event', {
+        totalEvents,
+        totalMarkets: total,
+        hasMore: totalEvents > selectedGroups.length,
+      }),
+    };
+  }
+
+  private async getMarketLevelNetwork(query: MarketQueryDto): Promise<MarketNetworkResponse> {
+    const limit = query.limit ?? 100;
+    const marketWhere = this.buildWhere(query);
+    const candidateLimit = networkCandidateLimit(limit);
+    const nodes = await this.prisma.marketNetworkNode.findMany({
+      where: this.buildNetworkNodeWhere(query),
+      orderBy: { score: 'desc' },
+      take: candidateLimit,
+      include: {
+        market: {
+          select: NETWORK_MARKET_SELECT,
+        },
+      },
     });
+    const total = await this.safeNetworkMarketCount(marketWhere, nodes.length);
     if (!nodes.length) {
       return this.buildDeterministicMarketLevelNetwork(query, limit, total, candidateLimit);
     }
@@ -695,7 +770,7 @@ export class MarketsService {
     limit: number,
     total: number,
     candidateLimit = networkCandidateLimit(limit),
-  ) {
+  ): Promise<MarketNetworkResponse> {
     const selectedMarkets = selectNetworkCandidates(
       await this.loadActivityNetworkCandidates(query, candidateLimit),
       query,
@@ -714,26 +789,44 @@ export class MarketsService {
   }
 
   private async countNetworkEventGroups(marketWhere: Prisma.PolymarketMarketWhereInput): Promise<number> {
-    const [eventGroups, standaloneMarketCount] = await Promise.all([
-      this.prisma.polymarketMarket.groupBy({
-        by: ['eventId'],
-        where: {
-          AND: [
-            marketWhere,
-            { eventId: { not: null } },
-          ],
-        },
-      }),
-      this.prisma.polymarketMarket.count({
-        where: {
-          AND: [
-            marketWhere,
-            { eventId: null },
-          ],
-        },
-      }),
-    ]);
+    const eventGroups = await this.prisma.polymarketMarket.groupBy({
+      by: ['eventId'],
+      where: {
+        AND: [
+          marketWhere,
+          { eventId: { not: null } },
+        ],
+      },
+    });
+    const standaloneMarketCount = await this.prisma.polymarketMarket.count({
+      where: {
+        AND: [
+          marketWhere,
+          { eventId: null },
+        ],
+      },
+    });
     return eventGroups.length + standaloneMarketCount;
+  }
+
+  private async safeNetworkMarketCount(marketWhere: Prisma.PolymarketMarketWhereInput, fallback: number): Promise<number> {
+    try {
+      return await this.prisma.polymarketMarket.count({ where: marketWhere });
+    } catch (error) {
+      if (!isPrismaConnectionPoolTimeout(error)) throw error;
+      this.logger.warn('Market network total count skipped after database pool timeout');
+      return fallback;
+    }
+  }
+
+  private async safeNetworkEventGroupCount(marketWhere: Prisma.PolymarketMarketWhereInput, fallback: number): Promise<number> {
+    try {
+      return await this.countNetworkEventGroups(marketWhere);
+    } catch (error) {
+      if (!isPrismaConnectionPoolTimeout(error)) throw error;
+      this.logger.warn('Market network event group count skipped after database pool timeout');
+      return fallback;
+    }
   }
 
   private buildNewMarketWhere(baseWhere: Prisma.PolymarketMarketWhereInput): Prisma.PolymarketMarketWhereInput {
@@ -900,7 +993,7 @@ export class MarketsService {
       hasMore: options.hasMore ?? total > returned,
       category: trimToUndefined(query.category) ?? 'all',
       nodeType,
-      source: 'database',
+      source: 'database' as const,
       topologySource,
       generatedAt: new Date().toISOString(),
     };
@@ -1384,6 +1477,22 @@ function networkCandidateLimit(limit: number): number {
     NETWORK_CANDIDATE_MAX,
     Math.max(NETWORK_CANDIDATE_MIN, limit * NETWORK_CANDIDATE_MULTIPLIER),
   );
+}
+
+function marketNetworkCacheKey(query: MarketQueryDto): string {
+  return JSON.stringify({
+    active: query.active ?? null,
+    category: query.category ?? null,
+    closed: query.closed ?? null,
+    limit: query.limit ?? 100,
+    nodeType: normalizeNetworkNodeType(query.nodeType),
+    q: trimToUndefined(query.q) ?? null,
+  });
+}
+
+function isPrismaConnectionPoolTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes('Timed out fetching a new connection from the connection pool');
 }
 
 function selectNetworkCandidates(
