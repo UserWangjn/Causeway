@@ -955,14 +955,15 @@ export class TradingService {
     const recipientAddress = getAddress(dto.recipientAddress);
     const safeAddress = getAddress(dto.safeAddress);
     const amount = normalizeMicroUsd(dto.amountMicroUsd);
-    const readiness = await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' });
-    const safeOption = readiness.accountOptions?.find(
+    const relayerSafeAddress = await this.fetchRelayerFunderAddress(walletAddress, 'SAFE').catch(() => null);
+    if (relayerSafeAddress && relayerSafeAddress.toLowerCase() !== safeAddress.toLowerCase()) {
+      throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Polymarket wallet transfer safe address changed; prepare the transfer again.');
+    }
+    const readiness = await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' }).catch(() => null);
+    const safeOption = readiness?.accountOptions?.find(
       (option) => option.type === 'gnosis_safe' && option.funderAddress?.toLowerCase() === safeAddress.toLowerCase(),
     );
-    if (!safeOption?.funderAddress) {
-      throw new ApiException(HttpStatus.CONFLICT, 'CAPABILITY_UNAVAILABLE', 'Polymarket Safe wallet is not available for withdrawal');
-    }
-    const available = safeOption.cashAvailable;
+    const available = safeOption?.cashAvailable;
     if (available != null && amount / 1_000_000 > available + Number.EPSILON) {
       throw new ApiException(HttpStatus.CONFLICT, 'INSUFFICIENT_FUNDS', 'Polymarket wallet balance is insufficient for this withdrawal', {
         available,
