@@ -2117,6 +2117,7 @@ async function completePolymarketWalletTransfer(token: string, payload: Polymark
     body: JSON.stringify({
       amountMicroUsd: payload.amountMicroUsd,
       recipientAddress: payload.recipientAddress,
+      safeAddress: payload.safeAddress,
       nonce: payload.nonce,
       messageHash: payload.messageHash,
       signature,

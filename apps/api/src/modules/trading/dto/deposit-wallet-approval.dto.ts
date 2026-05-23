@@ -44,6 +44,10 @@ export class PreparePolymarketWalletTransferDto {
 
 export class CompletePolymarketWalletTransferDto extends PreparePolymarketWalletTransferDto {
   @IsString()
+  @Matches(/^0x[0-9a-fA-F]{40}$/)
+  safeAddress!: string;
+
+  @IsString()
   @Matches(/^\d+$/)
   nonce!: string;
 

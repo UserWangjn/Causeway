@@ -953,15 +953,14 @@ export class TradingService {
     await this.requireDepositWalletAccount(user);
     const walletAddress = getAddress(user.walletAddress);
     const recipientAddress = getAddress(dto.recipientAddress);
+    const safeAddress = getAddress(dto.safeAddress);
     const amount = normalizeMicroUsd(dto.amountMicroUsd);
     const readiness = await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' });
-    const safeOption = readiness.accountOptions?.find((option) => option.type === 'gnosis_safe')
-      ?? readiness.accountOptions?.find((option) => option.type === 'proxy');
+    const safeOption = readiness.accountOptions?.find(
+      (option) => option.type === 'gnosis_safe' && option.funderAddress?.toLowerCase() === safeAddress.toLowerCase(),
+    );
     if (!safeOption?.funderAddress) {
       throw new ApiException(HttpStatus.CONFLICT, 'CAPABILITY_UNAVAILABLE', 'Polymarket Safe wallet is not available for withdrawal');
-    }
-    if (safeOption.type !== 'gnosis_safe') {
-      throw new ApiException(HttpStatus.CONFLICT, 'CAPABILITY_UNAVAILABLE', 'Only Polymarket Safe withdrawals are currently supported');
     }
     const available = safeOption.cashAvailable;
     if (available != null && amount / 1_000_000 > available + Number.EPSILON) {
@@ -971,7 +970,7 @@ export class TradingService {
       });
     }
     const transaction = buildPusdTransferTransaction(recipientAddress, amount);
-    const messageHash = buildSafeTransactionHash(user.chainId, safeOption.funderAddress, transaction, dto.nonce);
+    const messageHash = buildSafeTransactionHash(user.chainId, safeAddress, transaction, dto.nonce);
     if (messageHash.toLowerCase() !== dto.messageHash.toLowerCase()) {
       throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Polymarket wallet transfer payload is stale; prepare the transfer again.');
     }
@@ -986,7 +985,7 @@ export class TradingService {
     const request = {
       from: walletAddress,
       to: transaction.to,
-      proxyWallet: safeOption.funderAddress,
+      proxyWallet: safeAddress,
       data: transaction.data,
       nonce: dto.nonce,
       signature: packSafeSignature(dto.signature),
@@ -1003,7 +1002,7 @@ export class TradingService {
     };
     const result = await this.submitRelayerRequest(request, 'Polymarket relayer wallet transfer failed');
     await this.audit(user, 'trading.polymarket_wallet_transfer_submitted', {
-      safeAddress: safeOption.funderAddress,
+      safeAddress,
       recipientAddress,
       amountMicroUsd: amount,
       transactionId: result.transactionId,
