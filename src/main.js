@@ -30,78 +30,141 @@ const recipes = [
 ];
 
 const quickStart = [
-  ["01", "SELECT ROOT OUTCOME", "Pick a real Polymarket outcome token.", "market -> outcome -> tokenId"],
-  ["02", "RUN CAUSAL INFERENCE", "Causeway expands the thesis into a 1-3 layer graph.", "depth: 3 / threshold: 0.55"],
-  ["03", "REVIEW EVERY TOKEN", "All outcomes stay visible. No hard-coded Yes/No shortcuts.", "outcomeAction: buy | avoid"],
-  ["04", "PREVIEW ORDERS", "Refresh order books, capability status, and risk checks.", "execution: dry_run | real"],
+  ["01", "SET ROOT THESIS", "Start with the event or market idea you want to understand.", "thesis: fed-cut-june"],
+  ["02", "MAP MARKET SHADOW", "Causeway expands the thesis into related markets, paths, and second-order effects.", "depth: 3 / confidence: 0.55"],
+  ["03", "REVIEW REASONING", "Every connection includes a reason, uncertainty, and a suggested review state.", "show: assumptions | confidence | risks"],
+  ["04", "BUILD PREVIEW", "Turn the scenario into a controlled action preview with limits, checks, and an audit trail.", "mode: dry_run | guarded"],
 ];
 
 const controls = [
   {
-    step: "01 / ROOT",
-    label: "SET",
-    title: "You choose the starting token.",
-    body: "Every inference begins from a specific market, selected outcome, and CLOB token ID.",
+    step: "01 / SIMULATE",
+    label: "WORLD",
+    title: "Build parallel market worlds.",
+    body: "Causeway will move beyond single-path reasoning into simulated environments where events, agents, narratives, and incentives interact before real-world action.",
     fields: [
-      ["marketId", "pm_8472"],
-      ["outcome", "Yes"],
-      ["tokenId", "0x71a...9c02"],
-      ["depth", "3"],
+      ["seed event", "policy shock"],
+      ["agent groups", "128"],
+      ["environment", "market world"],
+      ["rounds", "24"],
     ],
   },
   {
-    step: "02 / REASON",
-    label: "MAP",
-    title: "AI builds the causal path.",
-    body: "Candidate markets are recalled from local Polymarket data, then ranked by relevance, direction, confidence, and tradability.",
-    flow: ["root", "market graph", "outcome actions"],
+    step: "02 / EVOLVE",
+    label: "SWARM",
+    title: "Let many agents reason together.",
+    body: "Instead of one model producing one answer, Causeway can run specialized agents with memory, roles, biases, and strategies, then observe consensus and conflict.",
+    flow: ["analyst", "skeptic", "verifier", "forecaster"],
   },
   {
-    step: "03 / CONFIRM",
-    label: "ACT",
-    title: "Execution stays human-confirmed.",
-    body: "Causeway can preview orders and dry-run the workflow, but real trading waits for explicit user approval.",
-    alert: "Order preview ready. Real submit requires wallet confirmation.",
+    step: "03 / PREDICT",
+    label: "REPORT",
+    title: "Turn simulation into decision intelligence.",
+    body: "The output is not a command to act, but a prediction report: possible futures, probability shifts, assumptions, source confidence, and review paths.",
+    alert: "Prediction report ready. Human approval remains the boundary.",
   },
 ];
 
 const featureCards = [
   {
-    icon: "token",
-    title: "Outcome-token native",
-    body: "Causeway models market -> outcomes[] -> tokenId, so execution logic matches how Polymarket actually trades.",
-    visual: "YES / NO / OVER / UNDER / TEAM A",
+    icon: "event",
+    title: "Events cast wider shadows",
+    body: "A single headline can move through policy, macro, sports, crypto, and election markets. Causeway helps reveal the wider field before you act.",
+    visual: "event -> market shadow",
   },
   {
-    icon: "graph",
-    title: "Causal graph, not chat advice",
-    body: "The AI returns structured nodes, edges, confidence, direction, and reasons that can be audited later.",
-    visual: "root -> layer 1 -> layer 2 -> layer 3",
+    icon: "path",
+    title: "Theses need structure",
+    body: "Causeway turns one market idea into a readable path: what it may affect, why it matters, and where the next decision point sits.",
+    visual: "thesis -> path -> decision",
   },
   {
-    icon: "book",
-    title: "Polymarket data first",
-    body: "Phase one reasons from synced market structure, outcomes, prices, order books, and liquidity.",
-    visual: "Gamma + CLOB + Data API",
+    icon: "logic",
+    title: "Reasoning must be visible",
+    body: "Useful AI does not just answer. It shows assumptions, confidence, uncertainty, and the reasoning behind each market connection.",
+    visual: "assumptions + confidence + why",
   },
   {
-    icon: "human",
-    title: "No autonomous trading",
-    body: "AI defaults can be useful, but the product boundary is clear: every real order is previewed and confirmed by the user.",
-    visual: "preview -> approve -> submit",
+    icon: "bound",
+    title: "Speed needs governance",
+    body: "Fast response is only valuable when control stays clear. Causeway keeps review, confirmation, and final action inside a user-governed workflow.",
+    visual: "reason -> review -> approve",
     highlight: true,
   },
   {
-    icon: "preview",
-    title: "Dry-run and real modes",
-    body: "When real CLOB capability is unavailable, the same UX still completes the local preview and audit loop.",
-    visual: "dry_run available / real gated",
+    icon: "view",
+    title: "Previews reduce blind action",
+    body: "Before a scenario becomes real exposure, Causeway turns it into a preview with expected action, limits, risk checks, and audit trail.",
+    visual: "scenario -> preview -> record",
   },
   {
-    icon: "vault",
-    title: "Vault-ready reporting",
-    body: "Scripts can evolve into transparent baskets with mandates, eligibility, risk budgets, and NAV-style reports.",
-    visual: "mandate + caps + NAV",
+    icon: "mem",
+    title: "Strategies need memory",
+    body: "Repeated scripts can mature into transparent strategies with mandates, eligibility rules, risk budgets, and reporting logic.",
+    visual: "script -> strategy -> report",
+  },
+];
+
+const roadmap = [
+  {
+    phase: "01",
+    status: "Now",
+    theme: "Market Data Foundation",
+    headline: "Understand the market before touching the world.",
+    summary:
+      "Phase one focuses on Polymarket market data first. External sources are a later source-object layer.",
+    detail:
+      "Causeway starts by building a reliable map of the market itself: market IDs, outcomes, token IDs, prices, liquidity, order books, resolution state, and recent market changes. The goal is not to rush into news ingestion. The goal is to make sure every AI-generated path can resolve back to real, tradable market structure before it becomes a preview or user decision.",
+    points: ["Market -> outcome -> tokenId mapping", "Liquidity and order book awareness", "Dry-run previews before any real execution"],
+    signal: "Data -> Structure",
+  },
+  {
+    phase: "02",
+    status: "Next",
+    theme: "Reasoning Model",
+    headline: "Map one event into every related market.",
+    summary:
+      "Build a stronger inference model that can identify all markets touched by a news event, then score relevance, direction, confidence, and suggested action.",
+    detail:
+      "A single event rarely affects only one market. A Federal Reserve signal may touch rates, inflation, equities, crypto, election narratives, and commodity expectations. This phase turns that relationship into an auditable market graph: each connected market gets a reason, an impact direction, a confidence score, and a recommended workflow state such as monitor, avoid, preview, or reduce size.",
+    points: ["Cross-market relationship graph", "Relevance, direction, confidence, and tradability scoring", "Structured recommendations that remain reviewable"],
+    signal: "Event -> Market Graph",
+  },
+  {
+    phase: "03",
+    status: "Later",
+    theme: "Real-Time Scenario Generation",
+    headline: "Turn live news into cross-market scripts.",
+    summary:
+      "Build real-time news stream ingestion and automated scenario generation so one event can produce a full-market response plan quickly.",
+    detail:
+      "At this stage, Causeway moves from offline reasoning into live event response. The system watches real-time news flow, extracts the event, identifies entities and affected themes, then generates a complete market script: what happened, which markets matter, which outcomes should be watched, what confirmation signals are missing, and which actions should be queued for human review.",
+    points: ["Real-time news flow ingestion", "Automatic script generation from one event", "Fast all-market reaction while preserving review gates"],
+    signal: "News -> Script",
+  },
+  {
+    phase: "04",
+    status: "Trust",
+    theme: "Source Verification Layer",
+    headline: "Verify the ground truth before action.",
+    summary:
+      "Before a bet is placed, Causeway should verify the deepest available source of truth through an authority-data library.",
+    detail:
+      "Speed is not enough if the source is wrong. This phase adds a verification layer that traces claims back to primary or authoritative sources: official releases, regulatory filings, sports league data, court documents, government databases, company statements, and on-chain records. Before an action is previewed, the system can show source trail, freshness, conflicts, and whether the original claim was corrected or misread.",
+    points: ["Authority source database", "Primary-source trail and freshness checks", "Conflict detection before order preview"],
+    signal: "Claim -> Proof",
+  },
+  {
+    phase: "05",
+    status: "Future",
+    theme: "Delegated AI Execution",
+    headline: "Let users optionally delegate bounded execution to AI.",
+    summary:
+      "In the future, users may choose to leave the manual verification layer and grant limited account authority to AI for intelligent order execution.",
+    detail:
+      "Delegation is the future layer, not the default boundary. Users can choose to authorize AI execution only inside explicit limits: market categories, maximum order size, loss budget, time window, data-source requirements, and revocation rules. The system should maintain audit trails, permission expiry, and emergency stop controls so autonomy is optional, bounded, and accountable.",
+    points: ["Optional permission delegation", "User-defined limits and risk budgets", "Audit trails, expiry, and emergency revocation"],
+    signal: "Approve -> Delegate",
   },
 ];
 
@@ -203,6 +266,39 @@ function featureCard(card) {
   `;
 }
 
+function roadmapCard(item, index) {
+  return `
+    <article class="roadmap-card" style="--roadmap-index: ${index}">
+      <div class="roadmap-card-head">
+        <span class="roadmap-phase">Phase ${item.phase}</span>
+        <span class="roadmap-status">${item.status}</span>
+      </div>
+      <h3>${item.theme}</h3>
+      <p>${item.headline}</p>
+      <div class="roadmap-signal"><span>${item.signal}</span></div>
+    </article>
+  `;
+}
+
+function roadmapDetail(item, index) {
+  return `
+    <details class="roadmap-detail" ${index === 0 ? "open" : ""}>
+      <summary>
+        <span>Phase ${item.phase}</span>
+        <strong>${item.theme}</strong>
+        <i>+</i>
+      </summary>
+      <div>
+        <p>${item.summary}</p>
+        <p>${item.detail}</p>
+        <ul>
+          ${item.points.map((point) => `<li>${point}</li>`).join("")}
+        </ul>
+      </div>
+    </details>
+  `;
+}
+
 function compareTable() {
   return `
     <div class="compare-table">
@@ -283,6 +379,7 @@ document.querySelector("#app").innerHTML = `
     <nav aria-label="Primary navigation">
       <a href="#recipes">Recipes</a>
       <a href="#quickstart">How it works</a>
+      <a href="#roadmap">Roadmap</a>
       <a href="#compare">Compare</a>
       <a href="#faq">FAQ</a>
       <a href="/Causeway_Whitepaper_v1.0_EN.pdf">Docs -></a>
@@ -322,23 +419,32 @@ document.querySelector("#app").innerHTML = `
     <section class="quickstart section-band split" id="quickstart">
       <div class="split-copy">
         <p class="eyebrow">- QUICK START</p>
-        <h2>From one outcome to an executable script.</h2>
-        <p>Install the workflow, choose a root market, run causal inference, review every outcome, and preview orders before any real submission.</p>
+        <h2>From one event to a market response plan.</h2>
+        <p>Choose a market thesis, let Causeway map the surrounding impact, review the reasoning path, and turn it into a controlled preview before any real action.</p>
         <a class="button primary" href="/Causeway_Whitepaper_v1.0_EN.pdf">Read the full docs -></a>
       </div>
       <div class="terminal-window">
         <div class="window-bar"><i></i><i></i><i></i><span>causeway-cli</span></div>
         ${quickStart.map(quickStartRow).join("")}
-        <footer>Dry-run stays available when real CLOB capability is gated.</footer>
+        <footer>Dry-run stays available while real execution remains gated by user approval.</footer>
       </div>
     </section>
 
     <section class="control section-band">
       <div class="section-copy wide">
-        <p class="eyebrow">- THREE STEPS TO CONTROLLED EXECUTION</p>
-        <h2>Let AI reason. <span>Keep execution human.</span></h2>
+        <p class="eyebrow">- SWARM INTELLIGENCE ROADMAP</p>
+        <h2>From market reasoning to <span>collective prediction.</span></h2>
+        <p>The long-term vision is a collective intelligence engine: seed an event, simulate many possible worlds, let agent groups debate and evolve, then turn the result into a human-governed prediction report.</p>
+      </div>
+      <div class="control-vision" aria-hidden="true">
+        <img src="/assets/swarm-intelligence-bg.png" alt="" />
+        <div>
+          <span>Endgame</span>
+          <b>Predict how the world may move.</b>
+        </div>
       </div>
       <div class="control-grid">${controls.map(controlCard).join("")}</div>
+      <p class="vision-note">The endgame is not faster trading. It is a living intelligence layer for predicting how the world may move.</p>
     </section>
 
     <section class="image-point">
@@ -365,10 +471,40 @@ document.querySelector("#app").innerHTML = `
       </div>
     </section>
 
+    <section class="roadmap section-band" id="roadmap">
+      <div class="roadmap-top">
+        <div class="section-copy">
+          <p class="eyebrow">- FUTURE ROADMAP</p>
+          <h2>From market data to trusted event response.</h2>
+          <p>Causeway grows in five deliberate phases: data first, reasoning second, real-time scripts third, source verification fourth, and optional delegated execution only when the boundary is mature.</p>
+        </div>
+        <div class="roadmap-orb" aria-hidden="true">
+          <span></span>
+          <b>Data</b>
+          <b>Reason</b>
+          <b>Verify</b>
+          <b>Delegate</b>
+        </div>
+      </div>
+      <div class="roadmap-track" aria-hidden="true">
+        <span>Data</span>
+        <i></i>
+        <span>Reasoning</span>
+        <i></i>
+        <span>Real-time</span>
+        <i></i>
+        <span>Verification</span>
+        <i></i>
+        <span>Delegation</span>
+      </div>
+      <div class="roadmap-grid">${roadmap.map(roadmapCard).join("")}</div>
+      <div class="roadmap-detail-list">${roadmap.map(roadmapDetail).join("")}</div>
+    </section>
+
     <section class="features section-band" id="features">
       <div class="section-copy">
-        <p class="eyebrow">- WHY IT MATTERS</p>
-        <h2>Built for markets that actually move.</h2>
+        <p class="eyebrow">- MARKET INTELLIGENCE LAYER</p>
+        <h2>Every event has a market shadow.</h2>
       </div>
       <div class="feature-grid">${featureCards.map(featureCard).join("")}</div>
     </section>
@@ -408,7 +544,7 @@ document.querySelector("#app").innerHTML = `
 
   <footer class="site-footer">
     <span>(c) 2026 Causeway</span>
-    <nav><a href="/Causeway_Whitepaper_v1.0_EN.pdf">Docs</a><a href="#compare">Compare</a><a href="#faq">FAQ</a></nav>
+    <nav><a href="/Causeway_Whitepaper_v1.0_EN.pdf">Docs</a><a href="#roadmap">Roadmap</a><a href="#compare">Compare</a><a href="#faq">FAQ</a></nav>
   </footer>
 `;
 
@@ -437,6 +573,10 @@ const revealTargets = [
   ".control-card",
   ".image-point-copy > *",
   ".logo-constellation",
+  ".roadmap-top > *",
+  ".roadmap-track",
+  ".roadmap-card",
+  ".roadmap-detail",
   ".feature-card",
   ".compare-top > *",
   ".compare-table",
