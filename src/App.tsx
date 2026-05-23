@@ -2091,6 +2091,28 @@ async function completeSafeDepositWalletFunding(token: string, payload: DepositW
   }).then((response) => readApiData<DepositWalletActionResult>(response))
 }
 
+async function prepareDepositWalletTransfer(token: string, input: { amountMicroUsd: number; recipientAddress: string }) {
+  return fetch(`${API_PREFIX}/trading/deposit-wallet/transfer/prepare`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(input),
+  }).then((response) => readApiData<DepositWalletTransferPrepareResult>(response))
+}
+
+async function completeDepositWalletTransfer(token: string, payload: DepositWalletTransferPrepareResult, signature: string) {
+  return fetch(`${API_PREFIX}/trading/deposit-wallet/transfer/complete`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      amountMicroUsd: payload.amountMicroUsd,
+      recipientAddress: payload.recipientAddress,
+      nonce: payload.nonce,
+      deadline: payload.deadline,
+      signature,
+    }),
+  }).then((response) => readApiData<DepositWalletActionResult>(response))
+}
+
 async function fetchRelayerTransactionStatus(token: string, transactionId: string) {
   return fetch(`${API_PREFIX}/trading/relayer-transactions/${encodeURIComponent(transactionId)}`, {
     headers: authHeaders(token),
@@ -3791,6 +3813,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   const [isPreparingTrade, setIsPreparingTrade] = useState(false)
   const [bridgeError, setBridgeError] = useState<string | null>(null)
   const [withdrawRecipient, setWithdrawRecipient] = useState('')
+  const [withdrawAmount, setWithdrawAmount] = useState('')
   const [withdrawAssetKey, setWithdrawAssetKey] = useState('')
   const [depositChainId, setDepositChainId] = useState('')
   const [depositAssetKey, setDepositAssetKey] = useState('')
@@ -3961,6 +3984,48 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     }
   }, [ensureTradingToken, supportedAssets, withdrawAssetKey, withdrawRecipient])
 
+  const handleSubmitWithdrawTransfer = useCallback(async () => {
+    const recipientAddress = withdrawRecipient.trim()
+    const amountUsd = parseDraftNumber(withdrawAmount)
+    const walletAddress = readStoredAuthSession()?.walletAddress ?? auth.walletAddress
+    if (!amountUsd) {
+      setBridgeError('请输入有效的提现金额。')
+      return
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(recipientAddress)) {
+      setBridgeError('请输入有效的 EVM 收款地址。')
+      return
+    }
+    if (!walletAddress) {
+      setBridgeError('缺少已连接的钱包地址，请重新登录。')
+      return
+    }
+    setIsLoadingBridge(true)
+    setBridgeError(null)
+    try {
+      const token = await ensureTradingToken()
+      const payload = await prepareDepositWalletTransfer(token, {
+        amountMicroUsd: orderFundingAmountMicroUsd(amountUsd),
+        recipientAddress,
+      })
+      const signature = await signTypedDataWithFallback({
+        variables: typedDataToSignVariables(payload.eip712),
+        walletAddress,
+        signTypedDataAsync,
+        walletClient: walletClient as TypedDataWalletClient | null | undefined,
+      })
+      const result = await completeDepositWalletTransfer(token, payload, signature)
+      await waitForRelayerTransaction(token, result.transaction.transactionId)
+      setReadiness(result.readiness)
+      setWithdrawAmount('')
+      void refreshWallet(token)
+    } catch (error) {
+      setBridgeError(errorMessage(error))
+    } finally {
+      setIsLoadingBridge(false)
+    }
+  }, [auth.walletAddress, ensureTradingToken, refreshWallet, signTypedDataAsync, walletClient, withdrawAmount, withdrawRecipient])
+
   const handleCheckStatus = useCallback(async (address?: string | null) => {
     const target = address ?? statusAddress
     if (!target) return
@@ -4063,6 +4128,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     ? tradingOption(readiness, 'gnosis_safe') ?? tradingOption(readiness, 'proxy')
     : null
   const displayedBalance = safeOption?.cashAvailable ?? (readiness ? readinessCash(readiness) : null)
+  const withdrawAvailable = readiness ? readinessCash(readiness) : displayedBalance
   const walletLabel = bridgeWallet?.walletKind === 'safe'
     ? 'Safe'
     : bridgeWallet?.walletKind === 'proxy'
@@ -4199,22 +4265,30 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               {walletTab === 'withdraw' ? (
                 <div className="deposit-path-card">
                   <div className="deposit-path-head">
-                    <span><ArrowRight size={16} /> 提现到其他钱包或交易所</span>
-                    <small>选择目标链和资产后生成官方 Bridge 提现地址。不要提前生成，确认要提现时再生成。</small>
+                    <span><ArrowRight size={16} /> 转移 pUSD</span>
+                    <small>从当前 Polymarket Deposit Wallet 直接转出 pUSD，不再生成 Bridge 提现地址。</small>
                   </div>
-                  <select className="bridge-input" value={withdrawAssetKey} onChange={(event) => setWithdrawAssetKey(event.target.value)}>
-                    {supportedAssets.map((asset) => (
-                      <option key={assetOptionKey(asset)} value={assetOptionKey(asset)}>
-                        {asset.chainName} · {asset.token.symbol} · min ${asset.minCheckoutUsd ?? 0}
-                      </option>
-                    ))}
-                  </select>
-                  <input className="bridge-input" value={withdrawRecipient} onChange={(event) => setWithdrawRecipient(event.target.value)} placeholder="收款地址" />
-                  <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected || !selectedWithdrawAsset} type="button" onClick={() => void handleCreateWithdrawal()}>
-                    {isLoadingBridge ? '生成中...' : '生成官方提现地址'}
+                  <div className="withdraw-available-panel">
+                    <span>可用余额</span>
+                    <b>{formatUsd(withdrawAvailable)} <small>pUSD</small></b>
+                  </div>
+                  <label className="bridge-field">
+                    <span>转账金额（美元）</span>
+                    <div className="bridge-input-action">
+                      <input className="bridge-input" inputMode="decimal" value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} placeholder="0.00" />
+                      <button type="button" onClick={() => setWithdrawAmount(withdrawAvailable != null ? withdrawAvailable.toFixed(2) : '')}>最大限度</button>
+                    </div>
+                  </label>
+                  <label className="bridge-field">
+                    <span>目标地址</span>
+                    <div className="bridge-input-action">
+                      <input className="bridge-input" value={withdrawRecipient} onChange={(event) => setWithdrawRecipient(event.target.value)} placeholder="0x..." />
+                      <button type="button" onClick={() => setWithdrawRecipient(auth.walletAddress ?? '')}>使用关联钱包</button>
+                    </div>
+                  </label>
+                  <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected} type="button" onClick={() => void handleSubmitWithdrawTransfer()}>
+                    {isLoadingBridge ? '提交中...' : '提交转账'}
                   </button>
-                  <BridgeAddressList addresses={bridgeWithdrawal?.withdrawal.address} copiedAddress={copiedAddress} onCopy={handleCopy} onStatus={handleCheckStatus} />
-                  {bridgeWithdrawal?.withdrawal.note ? <small className="wallet-inline-warning">{bridgeWithdrawal.withdrawal.note}</small> : null}
                 </div>
               ) : null}
 
