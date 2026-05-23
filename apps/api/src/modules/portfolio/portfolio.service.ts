@@ -19,6 +19,7 @@ import { PortfolioOrdersQueryDto } from './dto/portfolio-orders-query.dto';
 import { PortfolioTradesQueryDto } from './dto/portfolio-trades-query.dto';
 
 const CASH_BALANCE_UNAVAILABLE_REASON = 'cash balance source is not wired yet';
+const LOCAL_TRADE_HISTORY_REASON = 'trade history is based on monitored Causeway orders; external non-Causeway trades are excluded';
 
 const PORTFOLIO_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
   id: true,
@@ -137,7 +138,7 @@ export class PortfolioService {
     });
     const openOrders = await this.prisma.causewayOrder.findMany({
       where: {
-        orderIntent: { userId: user.id },
+        orderIntent: { userId: user.id, executionMode: 'real' },
         status: { in: ['submitted', 'partially_filled'] },
       },
       select: { amountUsd: true },
@@ -434,13 +435,13 @@ export class PortfolioService {
 
     if (!items.length) {
       return {
-        capability: 'degraded',
+        capability: 'available',
         dataSource: 'local',
         items: [],
         nextCursor: null,
         hasMore: false,
         refreshedAt: new Date().toISOString(),
-        error: 'real trade history source is not wired yet; returning local completed orders',
+        error: null,
       };
     }
 
@@ -471,7 +472,7 @@ export class PortfolioService {
       nextCursor: orders.length > limit ? encodeTimestampCursor('portfolio_trades', items.at(-1)) : null,
       hasMore: orders.length > limit,
       refreshedAt: new Date().toISOString(),
-      error: 'real trade history source is not wired yet; returning local completed orders',
+      error: LOCAL_TRADE_HISTORY_REASON,
     };
   }
 }
@@ -626,7 +627,8 @@ function buildPortfolioOrdersWhere(
 ): Prisma.OrderIntentWhereInput {
   const base: Prisma.OrderIntentWhereInput = {
     userId,
-    status: status ? mapPortfolioOrderStatus(status) : undefined,
+    executionMode: 'real',
+    ...portfolioOrderStatusWhere(status),
   };
   if (!cursor) return base;
 
@@ -650,8 +652,11 @@ function buildPortfolioOrdersWhere(
 
 function buildPortfolioTradesWhere(userId: string, cursor: DecodedTimestampCursor | null): Prisma.CausewayOrderWhereInput {
   const base: Prisma.CausewayOrderWhereInput = {
-    orderIntent: { userId },
-    status: { in: ['dry_run_completed', 'filled', 'partially_filled'] },
+    orderIntent: {
+      userId,
+      executionMode: 'real',
+    },
+    status: { in: ['filled', 'partially_filled'] },
   };
   if (!cursor) return base;
 
@@ -710,20 +715,31 @@ function decodeTimestampCursor(cursor: string | undefined, expectedScope: Timest
   };
 }
 
-function mapPortfolioOrderStatus(status: string): Prisma.EnumOrderIntentStatusFilter<'OrderIntent'> | undefined {
+function portfolioOrderStatusWhere(status: string | undefined): Prisma.OrderIntentWhereInput {
+  if (!status) return {};
   if (status === 'open') {
     return {
-      in: [
-        OrderIntentStatus.preview_ready,
-        OrderIntentStatus.user_confirming,
-        OrderIntentStatus.submitted,
-        OrderIntentStatus.partially_submitted,
-        OrderIntentStatus.unknown,
-      ],
+      status: {
+        in: [
+          OrderIntentStatus.preview_ready,
+          OrderIntentStatus.user_confirming,
+          OrderIntentStatus.submitted,
+          OrderIntentStatus.partially_submitted,
+          OrderIntentStatus.unknown,
+        ],
+      },
     };
   }
-  if (status === 'filled') return { in: [OrderIntentStatus.dry_run_completed] };
-  if (status === 'cancelled') return { equals: OrderIntentStatus.cancelled };
-  if (status === 'failed') return { equals: OrderIntentStatus.failed };
-  return undefined;
+  if (status === 'filled') {
+    return {
+      orders: {
+        some: {
+          status: { in: ['filled', 'partially_filled'] },
+        },
+      },
+    };
+  }
+  if (status === 'cancelled') return { status: OrderIntentStatus.cancelled };
+  if (status === 'failed') return { status: OrderIntentStatus.failed };
+  return {};
 }

@@ -26,9 +26,12 @@ export function buildInferenceAiPrompt(
       'Do not use news, social media, macro data, or world knowledge unless it is explicitly included in the input.',
       'Do not assume outcomes are Yes/No; outcome labels may be teams, ranges, Over/Under, Odd/Even, or arbitrary labels.',
       'Never provide financial advice language. Describe causal reasoning and uncertainty only.',
+      'All user-visible natural-language fields must be written in English only.',
+      'Do not write Chinese or any other non-English language in summary, reasons, or warnings.',
       'Return only a JSON object that matches the requested Causeway inference output schema.',
       'Do not include markdown, prose, code fences, or fields outside the schema.',
       'Use numeric JSON numbers for layer and confidence values.',
+      'Keep the response compact enough to finish in one provider response; prefer fewer high-confidence nodes over exhaustive coverage.',
       'Every edge must point from a lower layer node to a higher layer node; never point an edge into the root node.',
     ].join(' '),
     userPayload: {
@@ -51,6 +54,9 @@ export function buildInferenceAiPrompt(
         'If you notice an edge would point from a higher layer to a lower layer, swap sourceClientNodeId/targetClientNodeId and sourceOutcomeId/targetOutcomeId so the UI edge follows increasing layer order.',
         'Do not invent marketId, outcomeId, tokenId, price, or clientNodeId values outside the input and nodes you output.',
         'Reason about specific outcome-to-outcome relationships, not only market titles.',
+        'Write summary, node reasons, edge reasons, outcome reasons, and warnings in English only.',
+        'Keep summary under 240 characters. Keep node, edge, and outcome reasons under 180 characters each.',
+        'Return no more than 3 warnings. Keep each warning under 180 characters.',
       ],
       outputShape: inferenceOutputShape(),
       ...(repairContext
@@ -67,6 +73,9 @@ export function buildInferenceAiPrompt(
                 'Add a valid incoming edge for every non-root node, or remove any non-root node that cannot be connected from a lower layer node.',
                 'Fix every reversed edge by swapping both node ids and outcome ids; never leave an edge targeting the root node.',
                 'Use the previousOutput preview only for diagnosis; the canonical market and outcome IDs are in input.',
+                'If the previous output was truncated or invalid JSON, rebuild a smaller complete JSON object from input instead of continuing the previous text.',
+                'If the previous output used Chinese or another non-English language, translate all user-visible text fields to concise English.',
+                'Use fewer non-root nodes and shorter reasons if needed to return valid JSON in one response.',
               ],
             },
           }
@@ -78,7 +87,7 @@ export function buildInferenceAiPrompt(
 
 function inferenceOutputShape(): Record<string, unknown> {
   return {
-    summary: 'string',
+    summary: 'English string',
     nodes: [
       {
         clientNodeId: 'string',
@@ -86,14 +95,14 @@ function inferenceOutputShape(): Record<string, unknown> {
         layer: 'number: 0 | 1 | 2 | 3',
         confidence: 'number between 0 and 1',
         impactDirection: 'supports | opposes | unclear',
-        reason: 'string',
+        reason: 'English string',
         outcomes: [
           {
             outcomeId: 'string',
             outcomeLabel: 'string',
             aiAction: 'buy | avoid',
             confidence: 'number between 0 and 1',
-            reason: 'string',
+            reason: 'English string',
           },
         ],
       },
@@ -106,10 +115,10 @@ function inferenceOutputShape(): Record<string, unknown> {
         targetOutcomeId: 'string',
         relation: 'causes | supports | hedges | contradicts | correlates',
         confidence: 'number between 0 and 1',
-        reason: 'string',
+        reason: 'English string',
       },
     ],
-    warnings: ['string'],
+    warnings: ['English string'],
   };
 }
 

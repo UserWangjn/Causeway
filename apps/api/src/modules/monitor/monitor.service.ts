@@ -1,19 +1,36 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { Prisma, ScriptStatus } from '@prisma/client';
+import { CausewayOrderStatus, OrderIntentStatus, Prisma, ScriptStatus } from '@prisma/client';
+import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { PrismaService } from '../../database/prisma.service';
+import { ClobClient, type ClobApiCredentials, type ClobOpenOrder } from '../../integrations/polymarket/services/clob.client';
+import { TradingService } from '../trading/trading.service';
 
 const SCRIPT_MARKET_REFRESH_REASON = 'Script market monitoring refresh uses local market cache; external refresh is not wired yet';
-const ORDER_STATUS_REFRESH_REASON = 'Order status refresh uses local order state; external CLOB status refresh is not wired yet';
+const ORDER_STATUS_REFRESH_REASON = 'Order status refresh uses Polymarket CLOB order detail when external order ids are available';
 const MONITOR_REFRESH_BATCH_SIZE = 500;
+const ORDER_STATUS_REFRESH_BATCH_SIZE = 100;
 
 const ORDER_STATUS_REFRESH_SELECT = Prisma.validator<Prisma.CausewayOrderSelect>()({
   id: true,
   status: true,
   externalOrderId: true,
+  orderIntentId: true,
   orderIntent: {
     select: {
+      id: true,
       executionMode: true,
       status: true,
+      user: {
+        select: {
+          id: true,
+          walletAddress: true,
+          polymarketAccount: {
+            select: {
+              chainId: true,
+            },
+          },
+        },
+      },
     },
   },
 });
@@ -58,7 +75,11 @@ type OrderStatusRefreshRecord = Prisma.CausewayOrderGetPayload<{
 
 @Injectable()
 export class MonitorService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(ClobClient) private readonly clobClient: ClobClient,
+    @Inject(TradingService) private readonly tradingService: TradingService,
+  ) {}
 
   async refreshOrderStatuses() {
     const run = await this.prisma.syncRun.create({
@@ -67,14 +88,15 @@ export class MonitorService {
         scope: 'orders',
         status: 'running',
         metadata: toJson({
-          capability: 'degraded',
-          source: 'local_order_state',
+          capability: 'available',
+          source: 'polymarket_clob',
           reason: ORDER_STATUS_REFRESH_REASON,
-          batchSize: MONITOR_REFRESH_BATCH_SIZE,
+          batchSize: ORDER_STATUS_REFRESH_BATCH_SIZE,
         }),
       },
     });
     const summary = createOrderStatusRefreshSummary();
+    const credentialsByUserId = new Map<string, Promise<ClobApiCredentials>>();
     let inspectedOrderCount = 0;
     let batchCount = 0;
     let cursor: string | null = null;
@@ -83,13 +105,16 @@ export class MonitorService {
       while (true) {
         const orders: OrderStatusRefreshRecord[] = await this.prisma.causewayOrder.findMany({
           where: {
+            orderIntent: {
+              executionMode: 'real',
+            },
             status: {
-              in: ['preview_ready', 'dry_run_completed', 'submitted', 'partially_filled', 'filled', 'unknown', 'cancelled', 'failed'],
+              in: [CausewayOrderStatus.submitted, CausewayOrderStatus.partially_filled, CausewayOrderStatus.unknown],
             },
           },
           select: ORDER_STATUS_REFRESH_SELECT,
           orderBy: { id: 'asc' },
-          take: MONITOR_REFRESH_BATCH_SIZE,
+          take: ORDER_STATUS_REFRESH_BATCH_SIZE,
           ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         });
         if (!orders.length) {
@@ -100,24 +125,28 @@ export class MonitorService {
         inspectedOrderCount += orders.length;
         cursor = orders.at(-1)?.id ?? cursor;
         addOrderStatusRefreshSummary(summary, orders);
-        if (orders.length < MONITOR_REFRESH_BATCH_SIZE) {
+        for (const order of orders) {
+          await this.refreshOneOrderStatus(order, summary, credentialsByUserId);
+        }
+        if (orders.length < ORDER_STATUS_REFRESH_BATCH_SIZE) {
           break;
         }
       }
 
+      const capability = resolveOrderStatusRefreshCapability(summary);
       const completedRun = await this.prisma.syncRun.update({
         where: { id: run.id },
         data: {
           status: 'completed',
           finishedAt: new Date(),
           fetchedCount: inspectedOrderCount,
-          upsertedCount: 0,
+          upsertedCount: summary.remoteOrderPersistedCount,
           cursor,
           metadata: toJson({
-            capability: 'degraded',
-            source: 'local_order_state',
+            capability,
+            source: 'polymarket_clob',
             reason: ORDER_STATUS_REFRESH_REASON,
-            batchSize: MONITOR_REFRESH_BATCH_SIZE,
+            batchSize: ORDER_STATUS_REFRESH_BATCH_SIZE,
             batchCount,
             inspectedOrderCount,
             ...summary,
@@ -129,8 +158,8 @@ export class MonitorService {
         runId: completedRun.id,
         jobType: completedRun.jobType,
         status: completedRun.status,
-        capability: 'degraded',
-        source: 'local_order_state',
+        capability,
+        source: 'polymarket_clob',
         reason: ORDER_STATUS_REFRESH_REASON,
         inspectedOrderCount,
         batchCount,
@@ -148,9 +177,9 @@ export class MonitorService {
           cursor,
           metadata: toJson({
             capability: 'unavailable',
-            source: 'local_order_state',
+            source: 'polymarket_clob',
             reason,
-            batchSize: MONITOR_REFRESH_BATCH_SIZE,
+            batchSize: ORDER_STATUS_REFRESH_BATCH_SIZE,
             batchCount,
             inspectedOrderCount,
             ...summary,
@@ -163,13 +192,68 @@ export class MonitorService {
         jobType: failedRun.jobType,
         status: failedRun.status,
         capability: 'unavailable',
-        source: 'local_order_state',
+        source: 'polymarket_clob',
         reason,
         inspectedOrderCount,
         batchCount,
         ...summary,
       };
     }
+  }
+
+  private async refreshOneOrderStatus(
+    order: OrderStatusRefreshRecord,
+    summary: ReturnType<typeof createOrderStatusRefreshSummary>,
+    credentialsByUserId: Map<string, Promise<ClobApiCredentials>>,
+  ): Promise<void> {
+    if (!order.externalOrderId) return;
+
+    summary.remoteRefreshAttemptCount += 1;
+    try {
+      const credentials = await this.getOrderRefreshCredentials(order, credentialsByUserId);
+      const remoteOrder = await this.clobClient.getOrder(order.externalOrderId, credentials);
+      summary.remoteRefreshSuccessCount += 1;
+      summary.remoteStatusCounts[remoteOrder.status] = (summary.remoteStatusCounts[remoteOrder.status] ?? 0) + 1;
+      const nextStatus = mapClobOrderStatus(remoteOrder);
+      const statusChanged = nextStatus !== order.status;
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.causewayOrder.update({
+          where: { id: order.id },
+          data: {
+            status: nextStatus,
+            errorMessage: null,
+            responsePayload: toJson({
+              source: 'polymarket_clob_order_detail',
+              refreshedAt: new Date().toISOString(),
+              order: remoteOrder.raw,
+            }),
+          },
+        });
+        await refreshOrderIntentStatus(tx, order.orderIntentId);
+      });
+      if (statusChanged) {
+        summary.remoteStatusUpdatedCount += 1;
+      }
+      summary.remoteOrderPersistedCount += 1;
+    } catch (error) {
+      summary.remoteRefreshFailedCount += 1;
+      const reason = error instanceof Error ? error.message : String(error);
+      summary.remoteRefreshErrorCounts[reason] = (summary.remoteRefreshErrorCounts[reason] ?? 0) + 1;
+    }
+  }
+
+  private getOrderRefreshCredentials(
+    order: OrderStatusRefreshRecord,
+    credentialsByUserId: Map<string, Promise<ClobApiCredentials>>,
+  ): Promise<ClobApiCredentials> {
+    const userId = order.orderIntent.user.id;
+    const cachedCredentials = credentialsByUserId.get(userId);
+    if (cachedCredentials) return cachedCredentials;
+
+    const credentials = this.tradingService.getUserClobCredentials(toCurrentUser(order));
+    credentialsByUserId.set(userId, credentials);
+    return credentials;
   }
 
   async refreshScriptMarkets() {
@@ -303,8 +387,15 @@ function createOrderStatusRefreshSummary() {
   return {
     statusCounts: {} as Record<string, number>,
     intentStatusCounts: {} as Record<string, number>,
+    remoteStatusCounts: {} as Record<string, number>,
     refreshableExternalOrderCount: 0,
     missingExternalOrderIdCount: 0,
+    remoteRefreshAttemptCount: 0,
+    remoteRefreshSuccessCount: 0,
+    remoteRefreshFailedCount: 0,
+    remoteOrderPersistedCount: 0,
+    remoteStatusUpdatedCount: 0,
+    remoteRefreshErrorCounts: {} as Record<string, number>,
   };
 }
 
@@ -316,13 +407,90 @@ function addOrderStatusRefreshSummary(
     summary.statusCounts[order.status] = (summary.statusCounts[order.status] ?? 0) + 1;
     summary.intentStatusCounts[order.orderIntent.status] = (summary.intentStatusCounts[order.orderIntent.status] ?? 0) + 1;
 
-    if (order.orderIntent.executionMode === 'real' && (order.status === 'submitted' || order.status === 'partially_filled')) {
+    if (order.orderIntent.executionMode === 'real') {
       summary.refreshableExternalOrderCount += 1;
       if (!order.externalOrderId) {
         summary.missingExternalOrderIdCount += 1;
       }
     }
   }
+}
+
+function resolveOrderStatusRefreshCapability(
+  summary: ReturnType<typeof createOrderStatusRefreshSummary>,
+): 'available' | 'degraded' {
+  return summary.remoteRefreshFailedCount > 0 || summary.missingExternalOrderIdCount > 0 ? 'degraded' : 'available';
+}
+
+function toCurrentUser(order: OrderStatusRefreshRecord): CurrentUser {
+  return {
+    id: order.orderIntent.user.id,
+    sessionId: 'monitor_order_status_refresh',
+    walletAddress: order.orderIntent.user.walletAddress,
+    chainId: order.orderIntent.user.polymarketAccount?.chainId ?? 137,
+  };
+}
+
+function mapClobOrderStatus(order: ClobOpenOrder): CausewayOrderStatus {
+  const normalizedStatus = normalizeClobStatus(order.status);
+  const originalSize = toFiniteNumber(order.originalSize);
+  const sizeMatched = toFiniteNumber(order.sizeMatched);
+
+  if (originalSize != null && originalSize > 0 && sizeMatched != null) {
+    if (sizeMatched >= originalSize) return CausewayOrderStatus.filled;
+    if (sizeMatched > 0) return CausewayOrderStatus.partially_filled;
+  }
+
+  if (normalizedStatus === 'matched' || normalizedStatus === 'filled') return CausewayOrderStatus.filled;
+  if (normalizedStatus.includes('partial')) return CausewayOrderStatus.partially_filled;
+  if (normalizedStatus.includes('cancel')) return CausewayOrderStatus.cancelled;
+  if (normalizedStatus === 'expired' || normalizedStatus === 'rejected' || normalizedStatus === 'failed') {
+    return CausewayOrderStatus.failed;
+  }
+  if (!normalizedStatus || normalizedStatus === 'unknown') return CausewayOrderStatus.unknown;
+  return CausewayOrderStatus.submitted;
+}
+
+async function refreshOrderIntentStatus(tx: Prisma.TransactionClient, orderIntentId: string): Promise<void> {
+  const orders = await tx.causewayOrder.findMany({
+    where: { orderIntentId },
+    select: { status: true },
+  });
+  const status = resolveOrderIntentStatus(orders.map((order) => order.status));
+  if (!status) return;
+
+  await tx.orderIntent.update({
+    where: { id: orderIntentId },
+    data: { status },
+  });
+}
+
+function resolveOrderIntentStatus(statuses: CausewayOrderStatus[]): OrderIntentStatus | null {
+  if (!statuses.length) return null;
+  if (statuses.every((status) => status === CausewayOrderStatus.cancelled)) return OrderIntentStatus.cancelled;
+  if (statuses.every((status) => status === CausewayOrderStatus.failed)) return OrderIntentStatus.failed;
+  if (statuses.every((status) => status === CausewayOrderStatus.unknown)) return OrderIntentStatus.unknown;
+
+  const hasAcceptedOrder = statuses.some((status) => (
+    status === CausewayOrderStatus.submitted
+    || status === CausewayOrderStatus.partially_filled
+    || status === CausewayOrderStatus.filled
+  ));
+  const hasTerminalProblem = statuses.some((status) => status === CausewayOrderStatus.cancelled || status === CausewayOrderStatus.failed);
+  if (hasAcceptedOrder && hasTerminalProblem) return OrderIntentStatus.partially_submitted;
+  if (hasAcceptedOrder) return OrderIntentStatus.submitted;
+  if (hasTerminalProblem) return OrderIntentStatus.failed;
+  return null;
+}
+
+function normalizeClobStatus(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function toFiniteNumber(value: string | null): number | null {
+  if (value == null || !value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function createScriptMarketSnapshotTracker() {

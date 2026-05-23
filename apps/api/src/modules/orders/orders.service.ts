@@ -1,4 +1,5 @@
 import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ExecutionMode, OrderIntentStatus, Prisma } from '@prisma/client';
 import { getAddress } from 'viem';
 import { ApiException } from '../../common/errors/api.exception';
@@ -77,9 +78,12 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     @Inject(TradingService)
     private readonly tradingService: TradingService,
+    @Inject(ConfigService)
+    private readonly config: ConfigService,
   ) {}
 
   async preview(user: CurrentUser, dto: OrderPreviewDto) {
+    this.assertExecutionModeAllowed(dto.executionMode);
     assertUniqueSelectionIds(dto.selections.map((selection) => selection.selectionId));
     const selections = await this.loadSelections(user.id, dto.scriptId, dto.selections.map((selection) => selection.selectionId));
     const selectionById = new Map(selections.map((selection) => [selection.id, selection]));
@@ -267,7 +271,18 @@ export class OrdersService {
     return pending;
   }
 
+  private assertExecutionModeAllowed(executionMode: string): void {
+    if (executionMode !== 'dry_run') return;
+    if (this.config.get<boolean>('orders.dryRun', false)) return;
+    throw new ApiException(
+      HttpStatus.FORBIDDEN,
+      'DRY_RUN_ORDERS_DISABLED',
+      'Dry-run orders are disabled in this environment',
+    );
+  }
+
   async prepareSignature(user: CurrentUser, dto: PrepareSignatureDto) {
+    this.assertExecutionModeAllowed(dto.executionMode);
     const walletAddress = normalizeWalletAddress(dto.walletAddress);
     const intent = await this.loadIntent(user.id, dto.intentId);
     if (walletAddress.toLowerCase() !== user.walletAddress.toLowerCase() || dto.chainId !== user.chainId) {
@@ -346,6 +361,7 @@ export class OrdersService {
   }
 
   async submit(user: CurrentUser, dto: SubmitOrderDto, context: SubmitOrderContext = {}) {
+    this.assertExecutionModeAllowed(dto.executionMode);
     const requestHash = hashJson({
       intentId: dto.intentId,
       executionMode: dto.executionMode,

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { HttpStatus, Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
-import { Prisma } from '@prisma/client';
+import { MembershipStatus, MembershipTier, Prisma } from '@prisma/client';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ApiException } from '../../common/errors/api.exception';
 import { hashJson } from '../../common/utils/hash.util';
@@ -11,10 +11,8 @@ import { AiClientService } from '../../integrations/ai/services/ai-client.servic
 import { CreateInferenceRunDto } from './dto/create-inference-run.dto';
 import {
   buildInferenceCacheKey,
-  buildMockInferenceOutput,
   INFERENCE_OUTPUT_SCHEMA_VERSION,
   INFERENCE_PROMPT_VERSION,
-  MOCK_INFERENCE_MODEL,
   validateAiInferenceOutput,
 } from './inference-engine';
 import {
@@ -39,6 +37,11 @@ const SCRIPT_PERSIST_TRANSACTION_MAX_WAIT_MS = 5_000;
 const SCRIPT_PERSIST_TRANSACTION_TIMEOUT_MS = 20_000;
 const DEFAULT_SCRIPT_BUY_AMOUNT_USD = '10';
 const AUTO_INFERENCE_MODEL = 'auto';
+const FREE_INFERENCE_MODEL = 'deepseek-v4-flash';
+const FREE_INFERENCE_MAX_DEPTH = 1;
+const MAX_AI_OUTPUT_MARKETS_PER_LAYER = 4;
+const MAX_AI_OUTPUT_MARKETS_PER_LAYER_FOR_DEPTH_THREE = 3;
+const REAL_INFERENCE_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'] as const;
 
 const CANDIDATE_MARKET_INCLUDE = {
   event: true,
@@ -72,17 +75,35 @@ export class InferenceService implements OnModuleDestroy {
 
   getCapability() {
     const capability = this.aiClient.getCapability();
+    const realModels = capability.models.filter(isRealInferenceModel);
+    const defaultModel = capability.model && isRealInferenceModel(capability.model)
+      ? capability.model
+      : realModels[0] ?? null;
+    if (capability.status === 'available' && !defaultModel) {
+      return {
+        status: 'unavailable',
+        reason: 'No supported real AI inference model is configured',
+        defaultModel: null,
+        models: [],
+        freeModel: FREE_INFERENCE_MODEL,
+        freeMaxDepth: FREE_INFERENCE_MAX_DEPTH,
+        premiumModels: [],
+      };
+    }
     return {
       status: capability.status,
       reason: capability.reason,
-      defaultModel: capability.model,
-      models: capability.models,
-      mockModel: MOCK_INFERENCE_MODEL,
+      defaultModel,
+      models: realModels,
+      freeModel: FREE_INFERENCE_MODEL,
+      freeMaxDepth: FREE_INFERENCE_MAX_DEPTH,
+      premiumModels: realModels.filter((model) => model !== FREE_INFERENCE_MODEL),
     };
   }
 
   async createRun(user: CurrentUser, dto: CreateInferenceRunDto) {
-    const resolvedDto = { ...dto, model: this.resolveRequestedModel(dto.model) };
+    const resolvedDto = this.resolveCreateRunDto(dto);
+    await this.assertInferenceEntitlement(user, resolvedDto);
 
     const root = await this.loadRootMarket(resolvedDto.rootMarketId, resolvedDto.rootOutcomeId);
     const candidateMarkets = await this.loadCandidateMarkets(root.market, resolvedDto);
@@ -130,9 +151,15 @@ export class InferenceService implements OnModuleDestroy {
     };
   }
 
-  private resolveRequestedModel(requestedModel: string): string {
-    if (requestedModel === MOCK_INFERENCE_MODEL) return requestedModel;
+  private resolveCreateRunDto(dto: CreateInferenceRunDto): CreateInferenceRunDto {
+    return {
+      ...dto,
+      model: this.resolveRequestedModel(dto.model),
+      maxMarketsPerLayer: Math.min(dto.maxMarketsPerLayer, maxAiOutputMarketsPerLayer(dto.depth)),
+    };
+  }
 
+  private resolveRequestedModel(requestedModel: string): string {
     const capability = this.aiClient.getCapability();
     if (capability.status !== 'available' || !capability.model) {
       throw new ApiException(
@@ -142,9 +169,19 @@ export class InferenceService implements OnModuleDestroy {
       );
     }
 
-    if (requestedModel === AUTO_INFERENCE_MODEL) return capability.model;
+    const allowedModels = (capability.models?.length ? capability.models : [capability.model]).filter(isRealInferenceModel);
+    const defaultModel = isRealInferenceModel(capability.model) ? capability.model : allowedModels[0];
+    if (!defaultModel) {
+      throw new ApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'CAPABILITY_UNAVAILABLE',
+        'No supported real AI inference model is configured',
+        { configuredModel: capability.model, allowedModels },
+      );
+    }
 
-    const allowedModels = capability.models?.length ? capability.models : [capability.model];
+    if (requestedModel === AUTO_INFERENCE_MODEL) return defaultModel;
+
     if (!allowedModels.includes(requestedModel)) {
       throw new ApiException(
         HttpStatus.SERVICE_UNAVAILABLE,
@@ -155,6 +192,48 @@ export class InferenceService implements OnModuleDestroy {
     }
 
     return requestedModel;
+  }
+
+  private async assertInferenceEntitlement(user: CurrentUser, dto: CreateInferenceRunDto): Promise<void> {
+    const requiresPremium = dto.depth > FREE_INFERENCE_MAX_DEPTH || dto.model !== FREE_INFERENCE_MODEL;
+    if (!requiresPremium) return;
+
+    if (await this.hasActivePremiumMembership(user.id)) return;
+
+    throw new ApiException(
+      HttpStatus.PAYMENT_REQUIRED,
+      'PREMIUM_MEMBERSHIP_REQUIRED',
+      'Premium membership is required for advanced AI models or inference depth above 1',
+      {
+        freeModel: FREE_INFERENCE_MODEL,
+        freeMaxDepth: FREE_INFERENCE_MAX_DEPTH,
+        requestedModel: dto.model,
+        requestedDepth: dto.depth,
+      },
+    );
+  }
+
+  private async hasActivePremiumMembership(userId: string): Promise<boolean> {
+    const now = new Date();
+    await this.prisma.membershipEntitlement.updateMany({
+      where: {
+        userId,
+        tier: MembershipTier.premium,
+        status: MembershipStatus.active,
+        expiresAt: { lte: now },
+      },
+      data: { status: MembershipStatus.expired },
+    });
+    const active = await this.prisma.membershipEntitlement.findFirst({
+      where: {
+        userId,
+        tier: MembershipTier.premium,
+        status: MembershipStatus.active,
+        expiresAt: { gt: now },
+      },
+      select: { id: true },
+    });
+    return Boolean(active);
   }
 
   @Interval(1_000)
@@ -354,18 +433,6 @@ export class InferenceService implements OnModuleDestroy {
           },
         };
       }
-    }
-
-    if (dto.model === MOCK_INFERENCE_MODEL) {
-      const output = validateAiInferenceOutput(buildMockInferenceOutput(promptInput), promptInput);
-      return {
-        validatedOutput: output,
-        cacheHit: false,
-        audit: {
-          source: 'mock',
-          attempts: [],
-        },
-      };
     }
 
     return {
@@ -657,7 +724,7 @@ type ResolvedInferenceOutput = {
 };
 
 type InferenceRunAudit = {
-  source: 'cache' | 'mock' | 'provider';
+  source: 'cache' | 'provider';
   attempts: InferenceProviderAttemptAudit[];
 };
 
@@ -796,6 +863,10 @@ function resolveCandidatePromptLimit(dto: CreateInferenceRunDto): number {
     MIN_INFERENCE_CANDIDATE_MARKETS,
     MAX_INFERENCE_CANDIDATE_MARKETS,
   );
+}
+
+function maxAiOutputMarketsPerLayer(depth: number): number {
+  return depth >= 3 ? MAX_AI_OUTPUT_MARKETS_PER_LAYER_FOR_DEPTH_THREE : MAX_AI_OUTPUT_MARKETS_PER_LAYER;
 }
 
 function buildRootMarketContext(rootMarket: LoadedRootMarket['market'], rootTags: string[], rootTerms: string[]): RootMarketContext {
@@ -1423,6 +1494,10 @@ function readStringArray(value: unknown, path: string): string[] {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isRealInferenceModel(model: string): boolean {
+  return (REAL_INFERENCE_MODELS as readonly string[]).includes(model);
 }
 
 function storedInputError(message: string): ApiException {

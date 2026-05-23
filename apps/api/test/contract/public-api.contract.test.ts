@@ -1,4 +1,4 @@
-import type { INestApplication } from '@nestjs/common';
+﻿import type { INestApplication } from '@nestjs/common';
 import type { PrismaClient } from '@prisma/client';
 import request, { type Response, type Test } from 'supertest';
 import type { App as SupertestApp } from 'supertest/types';
@@ -80,26 +80,45 @@ const MARKET_NETWORK_KEYS = [
   'nodes',
   'edges',
   'total',
+  'totalEvents',
+  'totalMarkets',
   'returned',
   'limit',
   'hasMore',
+  'nodeType',
   'category',
   'source',
   'topologySource',
   'generatedAt',
 ] as const;
+const STANDARD_MARKET_NETWORK_KEYS = [...MARKET_NETWORK_KEYS, 'cacheStatus'] as const;
 const MARKET_NETWORK_NODE_KEYS = [
   'id',
+  'nodeType',
   'marketId',
+  'eventId',
+  'eventSlug',
+  'eventTitle',
+  'slug',
   'title',
+  'groupItemTitle',
   'description',
   'rules',
   'icon',
+  'image',
   'price',
   'volume',
   'volume24hr',
   'liquidity',
   'category',
+  'categoryKey',
+  'officialCategory',
+  'tags',
+  'endDate',
+  'acceptingOrders',
+  'marketsCount',
+  'topMarkets',
+  'syncedAt',
 ] as const;
 
 describe('documented public API contracts', () => {
@@ -163,12 +182,14 @@ describe('documented public API contracts', () => {
     expectKeys(networkData, MARKET_NETWORK_KEYS);
     expect(networkData.nodes.length).toBeGreaterThan(0);
     expectKeys(networkData.nodes[0], MARKET_NETWORK_NODE_KEYS);
-    expectKeys(networkData.edges[0], ['id', 'source', 'target', 'relationType', 'weight']);
+    if (networkData.edges.length > 0) {
+      expectKeys(networkData.edges[0], ['id', 'source', 'target', 'relationType', 'weight']);
+    }
 
     const standardNetworkData = apiData<{ nodes: Record<string, unknown>[]; edges: Record<string, unknown>[] }>(
       await request(httpServer).get('/api/v1/markets/network').query({ active: 'true', limit: 10 }).expect(200),
     );
-    expectKeys(standardNetworkData, MARKET_NETWORK_KEYS);
+    expectKeys(standardNetworkData, STANDARD_MARKET_NETWORK_KEYS);
     expectKeys(standardNetworkData.nodes[0], MARKET_NETWORK_NODE_KEYS);
   });
 
@@ -233,6 +254,8 @@ describe('documented public API contracts', () => {
       'description',
       'rules',
       'marketsCount',
+      'marketsReturned',
+      'hasMoreMarkets',
       'syncedAt',
     ]);
     expectKeys(readRecord(eventDetailData, 'selectedMarket'), EXPLORER_MARKET_NODE_KEYS);
@@ -286,7 +309,7 @@ describe('documented public API contracts', () => {
           depth: 1,
           maxMarketsPerLayer: 2,
           confidenceThreshold: 0.5,
-          model: 'mock-causeway-v1',
+          model: 'deepseek-v4-flash',
           cacheEnabled: true,
         })
         .expect(201),
@@ -311,6 +334,9 @@ describe('documented public API contracts', () => {
       'status',
       'summary',
       'rootMarketId',
+      'rootEventId',
+      'rootEventSlug',
+      'rootEventTitle',
       'rootOutcomeId',
       'rootOutcomeLabel',
       'rootPrice',
@@ -335,6 +361,9 @@ describe('documented public API contracts', () => {
     expectKeys(readRecordArray(readRecord(scriptData, 'graph'), 'nodes')[0], [
       'nodeId',
       'marketId',
+      'eventId',
+      'eventSlug',
+      'eventTitle',
       'title',
       'layer',
       'recommendedOutcomes',
@@ -345,6 +374,9 @@ describe('documented public API contracts', () => {
     expectKeys(readRecordArray(scriptData, 'markets')[0], [
       'scriptMarketId',
       'marketId',
+      'eventId',
+      'eventSlug',
+      'eventTitle',
       'title',
       'layer',
       'impactDirection',
@@ -352,6 +384,12 @@ describe('documented public API contracts', () => {
       'reason',
       'icon',
       'image',
+      'active',
+      'closed',
+      'archived',
+      'acceptingOrders',
+      'enableOrderBook',
+      'staleDetectedAt',
       'orderMinSize',
       'tickSize',
       'bestAsk',
@@ -412,6 +450,12 @@ describe('documented public API contracts', () => {
       'estimatedMaxLoss',
       'requiresSignature',
       'submitMode',
+      'signatureType',
+      'requestedTradingAccountType',
+      'tradingAccountType',
+      'tradingAccountLabel',
+      'funderAddress',
+      'accountOptions',
       'refreshedAt',
       'expiresAt',
       'orders',
@@ -432,6 +476,8 @@ describe('documented public API contracts', () => {
       'tickSize',
       'minOrderSize',
       'orderBookRefreshedAt',
+      'orderBookStatusCode',
+      'orderBookError',
       'valid',
       'warnings',
       'error',

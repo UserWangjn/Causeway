@@ -14,6 +14,7 @@ export function configureTestEnvironment(): void {
   process.env.POLYMARKET_DATA_API_ENABLED = 'false';
   process.env.POLYMARKET_MARKET_SYNC_ENABLED = 'false';
   process.env.POLYMARKET_MARKET_SYNC_RUN_ON_STARTUP = 'false';
+  process.env.DRY_RUN = 'true';
   process.env.LOG_LEVEL ??= 'warn';
   process.env.LOG_HTTP_REQUESTS ??= 'false';
 }

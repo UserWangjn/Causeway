@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildInferenceCacheKey,
-  buildMockInferenceOutput,
   validateAiInferenceOutput,
 } from '../../src/modules/inference/inference-engine';
 import type { AiInferenceOutput, InferenceMarketInput, InferencePromptInput } from '../../src/modules/inference/inference.types';
+import { buildFixtureInferenceOutput } from '../support/inference-output.fixture';
 
 describe('inference engine helpers', () => {
   it('builds a stable cache key independent of object key ordering', () => {
@@ -16,11 +16,11 @@ describe('inference engine helpers', () => {
           ...inferencePromptInput(),
           candidateMarkets: candidates,
         },
-        model: 'mock-causeway-v1',
+        model: 'deepseek-v4-flash',
       }),
     ).toBe(
       buildInferenceCacheKey({
-        model: 'mock-causeway-v1',
+        model: 'deepseek-v4-flash',
         promptInput: {
           candidateMarkets: candidates,
           settings: {
@@ -46,10 +46,10 @@ describe('inference engine helpers', () => {
     );
   });
 
-  it('generates a complete mock output and validates candidate market/outcome references', () => {
+  it('validates complete fixture output with candidate market/outcome references', () => {
     const promptInput = inferencePromptInput();
 
-    const output = buildMockInferenceOutput(promptInput);
+    const output = buildFixtureInferenceOutput(promptInput);
 
     expect(output.nodes.length).toBeGreaterThan(1);
     expect(output.nodes[1]?.outcomes).toHaveLength(promptInput.candidateMarkets[0]?.outcomes.length);
@@ -80,6 +80,14 @@ describe('inference engine helpers', () => {
     output.nodes[1].outcomes[0].aiAction = 'sell';
 
     expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output schema is invalid');
+  });
+
+  it('rejects Chinese user-visible text from provider output', () => {
+    const promptInput = inferencePromptInput();
+    const output = validInferenceOutput(promptInput);
+    output.summary = '这是中文摘要';
+
+    expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output user-visible text must be English');
   });
 
   it('normalizes numeric strings from provider output at the schema boundary', () => {

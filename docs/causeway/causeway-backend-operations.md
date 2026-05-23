@@ -72,7 +72,7 @@ $env:AI_ALLOWED_MODELS="<model>,<optional-second-model>"
 npm run smoke:api:ai
 ```
 
-API 推演接口使用同一组 AI provider 配置。`AI_BASE_URL` 必须是纯 base URL，不得包含 credentials、query 参数或 fragment；生产环境必须使用 HTTPS，开发/测试环境只允许 localhost/loopback provider 使用 HTTP。非 mock `model="auto"` 会解析为 `AI_MODEL`；显式模型必须存在于 `AI_ALLOWED_MODELS`，该列表始终自动包含 `AI_MODEL`。provider 调用使用 OpenAI-compatible `POST /chat/completions`，并由 `AI_HTTP_TIMEOUT_MS` 和 `AI_MAX_OUTPUT_TOKENS` 控制请求边界。
+API 推演接口使用同一组 AI provider 配置。`AI_BASE_URL` 必须是纯 base URL，不得包含 credentials、query 参数或 fragment；生产环境必须使用 HTTPS，开发/测试环境只允许 localhost/loopback provider 使用 HTTP。`model="auto"` 会解析为当前可用真实默认模型；显式模型必须存在于 `AI_ALLOWED_MODELS`，该列表始终自动包含 `AI_MODEL`。当前运行时只允许真实 DeepSeek 模型：`deepseek-v4-flash` 免费模型和 `deepseek-v4-pro` 高级模型。provider 调用使用 OpenAI-compatible `POST /chat/completions`，并由 `AI_HTTP_TIMEOUT_MS` 和 `AI_MAX_OUTPUT_TOKENS` 控制请求边界。
 
 Portfolio position sync 默认通过 Polymarket Data API 拉取公开 positions。需要保持本地只读或外部 Data API 不可用时，将 `POLYMARKET_DATA_API_ENABLED=false`；此时持仓同步返回 `503 CAPABILITY_UNAVAILABLE`。Data API 上游错误响应只允许暴露脱敏后的 endpoint，不记录或返回钱包地址 query 参数。
 

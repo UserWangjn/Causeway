@@ -7,7 +7,7 @@ This is the production backend foundation for Causeway. The legacy Python demo u
 - NestJS + TypeScript
 - PostgreSQL + Prisma
 - JWT wallet-session auth with one-time signed nonces
-- Polymarket Gamma sync, local market reads, dry-run order lifecycle, and capability-gated real order flow
+- Polymarket Gamma sync, local market reads, and capability-gated real order flow
 - Worker-ready module layout for inference, order status refresh, and monitoring jobs
 
 ## Directory Map
@@ -31,7 +31,7 @@ apps/api
 2. Wallet auth and protected API calls.
 3. Polymarket market sync and normalized Event / Market / Outcome storage.
 4. Markets and market-network read APIs.
-5. Dry-run order preview / submit with idempotency.
+5. Real order preview / signature / submit with idempotency.
 6. Inference worker, script generation, and cache.
 7. Portfolio and monitor read models.
 8. Real CLOB signing/submission once the official flow is verified.
@@ -56,34 +56,28 @@ Use `apps/api/.env.production.example` as the production deployment checklist, b
 
 ## Frontend Local Integration
 
-Prepare a local API with deterministic demo data:
+Prepare a local API with real Polymarket market data:
 
 ```powershell
 Copy-Item apps/api/.env.example apps/api/.env -Force
 npm run db:deploy
-npm run db:seed:demo
 npm run dev:api
 ```
 
 The API base URL is `http://127.0.0.1:8000/api/v1`.
 
-Demo data for the primary frontend flow:
-
-- Root market slug: `demo-fed-rate-cut-2026`
-- Root market id: `demo_market_rate_cut_2026`
-- Root outcome id: `demo_outcome_rate_cut_yes`
-- Mock inference model: `mock-causeway-v1`
+Local integration data comes from the Polymarket sync pipeline and the configured DeepSeek provider. Runtime demo seeds and mock inference models are not maintained.
 
 Recommended local flow:
 
 1. Read markets with `GET /markets?active=true`.
-2. Resolve the root market with `GET /markets/by-slug/demo-fed-rate-cut-2026`.
+2. Pick a root market from `GET /markets/network?category=hot` or resolve it with `GET /markets/by-slug/:slug`.
 3. Sign in through `POST /auth/nonce` and `POST /auth/verify`.
-4. Create a mock inference run with `POST /inference-runs`.
+4. Create an inference run with `POST /inference-runs`; `deepseek-v4-flash` at depth 1 is the free/default path, while advanced models or deeper runs require an active membership.
 5. Read the generated script with `GET /scripts/:scriptId`.
 6. Patch selections with `PATCH /scripts/:scriptId/outcome-selections/:selectionId`.
-7. Run `POST /orders/preview`, `POST /orders/prepare-signature`, and `POST /orders/submit` with `executionMode="dry_run"`.
-8. Read local order state with `GET /portfolio/orders` and `GET /portfolio/trades`.
+7. For real wallet testing, enable real order configuration and call `POST /orders/preview`, `POST /orders/prepare-signature`, and `POST /orders/submit` with `executionMode="real"`.
+8. Read real local order state with `GET /portfolio/orders` and filled/partially filled trades with `GET /portfolio/trades`.
 
 For local wallet testing, the e2e suite uses the standard Anvil private key
 `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`, whose address is
@@ -121,7 +115,9 @@ For providers that expose an OpenAI-compatible thinking toggle, set `AI_THINKING
 
 Portfolio position sync uses the public Polymarket Data API when `POLYMARKET_DATA_API_ENABLED=true`. Set `POLYMARKET_DATA_API_ENABLED=false` to keep portfolio reads local-only and make position sync return `503 CAPABILITY_UNAVAILABLE`; upstream Data API errors only expose the redacted endpoint path in API responses.
 
-Real CLOB submission is safety-gated. Keep `ENABLE_REAL_ORDERS=false` for normal frontend integration. To enable `executionMode="real"`, configure `POLYMARKET_CLOB_API_KEY`, `POLYMARKET_CLOB_API_SECRET`, `POLYMARKET_CLOB_API_PASSPHRASE`, `POLYMARKET_CLOB_API_ADDRESS`, and `POLYMARKET_CLOB_SIGNATURE_TYPE=2`; frontend `prepare-signature` requests must include the user's Gnosis Safe / proxy `funderAddress`. `npm run smoke:api:real-orders` performs preflight validation only and does not submit an order.
+Real CLOB submission is safety-gated. Keep `ENABLE_REAL_ORDERS=false` unless the environment is configured for wallet trading. To enable `executionMode="real"`, configure `POLYMARKET_CLOB_API_KEY`, `POLYMARKET_CLOB_API_SECRET`, `POLYMARKET_CLOB_API_PASSPHRASE`, `POLYMARKET_CLOB_API_ADDRESS`, and `POLYMARKET_CLOB_SIGNATURE_TYPE=2`; frontend `prepare-signature` requests must include the user's Gnosis Safe / proxy `funderAddress`. `npm run smoke:api:real-orders` performs preflight validation only and does not submit an order.
+
+`executionMode="dry_run"` is test-only and disabled by default. Set `DRY_RUN=true` only in local test environments that explicitly need dry-run API contract coverage; production-like runs should leave it false so simulated orders cannot appear in user portfolio data.
 
 The Polymarket market sync scheduler is disabled by default. Enable it explicitly with
 `POLYMARKET_MARKET_SYNC_ENABLED=true`. `POLYMARKET_MARKET_SYNC_MODE=incremental`

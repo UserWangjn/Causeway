@@ -3,7 +3,7 @@ import { polygon } from 'wagmi/chains'
 
 export const supportedChain = polygon
 
-export const arcChain = defineChain({
+export const arcTestnet = defineChain({
   id: 5_042_002,
   name: 'Arc Testnet',
   nativeCurrency: {
@@ -28,4 +28,6 @@ export const arcChain = defineChain({
   testnet: true,
 })
 
-export const walletChains = [supportedChain, arcChain] as const
+export const arcChain = arcTestnet
+
+export const walletChains = [supportedChain, arcTestnet] as const

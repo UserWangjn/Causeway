@@ -1,4 +1,4 @@
-import type { INestApplication } from '@nestjs/common';
+﻿import type { INestApplication } from '@nestjs/common';
 import type { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import type { App as SupertestApp } from 'supertest/types';
@@ -183,7 +183,7 @@ describe('core backend workflows e2e', () => {
     expect(detailBody.data.outcomes.map((outcome) => outcome.tokenId)).toEqual(['token_binary_yes', 'token_binary_no']);
   });
 
-  it('runs mock inference and exposes the generated script contract', async () => {
+  it('runs real-model inference and exposes the generated script contract', async () => {
     const createResponse = await request(httpServer)
       .post('/api/v1/inference-runs')
       .set('authorization', `Bearer ${accessToken}`)
@@ -193,7 +193,7 @@ describe('core backend workflows e2e', () => {
         depth: 1,
         maxMarketsPerLayer: 2,
         confidenceThreshold: 0.5,
-        model: 'mock-causeway-v1',
+        model: 'deepseek-v4-flash',
         cacheEnabled: true,
       })
       .expect(201);
@@ -360,7 +360,7 @@ describe('core backend workflows e2e', () => {
     ]);
   });
 
-  it('returns a structured unavailable signing state for real orders while CLOB is not wired', async () => {
+  it('returns a structured unavailable signing state for real orders before Polymarket CLOB authentication', async () => {
     const previewResponse = await request(httpServer)
       .post('/api/v1/orders/preview')
       .set('authorization', `Bearer ${accessToken}`)
@@ -406,7 +406,7 @@ describe('core backend workflows e2e', () => {
       payloads: [],
     });
     expect(prepareSignatureBody.data.expiresAt).toEqual(expect.any(String));
-    expect(prepareSignatureBody.data.error).toContain('CLOB real trading is disabled');
+    expect(prepareSignatureBody.data.error).toContain('User must sign Polymarket CLOB authentication');
   });
 
   it('rejects idempotency key reuse with a different submit payload', async () => {

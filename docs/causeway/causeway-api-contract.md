@@ -454,7 +454,7 @@ fidelity
 }
 ```
 
-说明：`POST /inference-runs` 始终只创建 `queued` 任务，前端通过 `GET /inference-runs/:runId` 轮询 `completed` 后再读取 `scriptId`。`mock-causeway-v1` 也走同一套异步任务语义。配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 后，非 mock 模型通过 OpenAI-compatible `POST /chat/completions` JSON 输出通道执行；`AI_BASE_URL` 必须是纯 base URL，生产环境必须使用 HTTPS。请求中的 `model="auto"` 会解析为当前 `AI_MODEL`；显式模型必须存在于 `AI_ALLOWED_MODELS`，该列表始终自动包含 `AI_MODEL`。真实 AI provider 未配置、请求模型不匹配或 provider 输出不能通过后端 schema 校验时，任务应进入 `failed` 并写入 `errorMessage`。
+说明：`POST /inference-runs` 始终只创建 `queued` 任务，前端通过 `GET /inference-runs/:runId` 轮询 `completed` 后再读取 `scriptId`。推演只允许真实 DeepSeek 模型。配置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 后，模型通过 OpenAI-compatible `POST /chat/completions` JSON 输出通道执行；`AI_BASE_URL` 必须是纯 base URL，生产环境必须使用 HTTPS。请求中的 `model="auto"` 会解析为当前可用真实默认模型；显式模型必须存在于 `AI_ALLOWED_MODELS`，该列表始终自动包含 `AI_MODEL`。`deepseek-v4-flash` 且 `depth=1` 免费；其他模型或更深层数需要 Premium 会员。真实 AI provider 未配置、请求模型不匹配、无会员权限或 provider 输出不能通过后端 schema 校验时，任务不会生成脚本。
 
 ### `GET /inference-runs/:runId`
 
@@ -1170,7 +1170,7 @@ type SyncRunItem = {
 
 ### `POST /internal/monitor/order-statuses/refresh`
 
-内部接口，触发订单状态刷新边界。当前实现按批扫描本地订单状态，先记录 `SyncRun.running`，结束时更新为 `completed` 或 `failed`；真实 CLOB 状态刷新未接通前不能伪造成 available 或外部状态已刷新。
+内部接口，触发真实订单状态刷新。当前实现按批扫描本地真实订单，通过用户级 Polymarket CLOB credentials 查询外部订单详情，并将成交、部分成交、取消或失败状态回写到 `CausewayOrder`；单笔外部刷新失败不会中断整批任务，但会把本次 run 标记为 `degraded`。
 
 响应：
 ```ts
@@ -1178,15 +1178,21 @@ type OrderStatusRefreshResult = {
   runId: string;
   jobType: "order_status_refresh";
   status: "completed" | "failed";
-  capability: "degraded" | "unavailable";
-  source: "local_order_state";
+  capability: "available" | "degraded" | "unavailable";
+  source: "polymarket_clob";
   reason: string;
   inspectedOrderCount: number;
   batchCount: number;
   statusCounts: Record<string, number>;
   intentStatusCounts: Record<string, number>;
+  remoteStatusCounts: Record<string, number>;
   refreshableExternalOrderCount: number;
   missingExternalOrderIdCount: number;
+  remoteRefreshAttemptCount: number;
+  remoteRefreshSuccessCount: number;
+  remoteRefreshFailedCount: number;
+  remoteOrderPersistedCount: number;
+  remoteStatusUpdatedCount: number;
 };
 ```
 

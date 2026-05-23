@@ -48,11 +48,61 @@ import {
   ShieldCheck,
   Star,
   WalletCards,
+  X,
 } from 'lucide-react'
 import { ConnectButton, useConnectModal } from '@rainbow-me/rainbowkit'
-import { createPublicClient, http } from 'viem'
-import { useAccount, useDisconnect, useSignMessage, useSignTypedData, useSwitchChain, useWalletClient } from 'wagmi'
-import { arcChain, supportedChain } from './wallet-config'
+import { useAccount, useDisconnect, useSignMessage, useSignTypedData, useSwitchChain, useWalletClient, useWriteContract } from 'wagmi'
+import { createPublicClient, erc20Abi, http } from 'viem'
+import { arcChain, arcTestnet, supportedChain } from './wallet-config'
+
+type UiLocale = 'en' | 'zh'
+
+const HIDDEN_LOCALE_STORAGE_KEY = 'causeway:hidden-ui-locale'
+
+function readHiddenUiLocale(): UiLocale {
+  if (typeof window === 'undefined') return 'en'
+  if (!isHiddenLocalePreviewAllowed()) {
+    window.localStorage.removeItem(HIDDEN_LOCALE_STORAGE_KEY)
+    return 'en'
+  }
+  const params = new URLSearchParams(window.location.search)
+  const requestedLocale = params.get('__cw_locale') ?? params.get('__locale')
+  if (requestedLocale === 'zh' || requestedLocale === 'zh-CN') {
+    window.localStorage.setItem(HIDDEN_LOCALE_STORAGE_KEY, 'zh')
+    return 'zh'
+  }
+  if (requestedLocale === 'en') {
+    window.localStorage.removeItem(HIDDEN_LOCALE_STORAGE_KEY)
+    return 'en'
+  }
+  return window.localStorage.getItem(HIDDEN_LOCALE_STORAGE_KEY) === 'zh' ? 'zh' : 'en'
+}
+
+function isHiddenLocalePreviewAllowed() {
+  if (import.meta.env.DEV || import.meta.env.VITE_ENABLE_ZH_PREVIEW === 'true') return true
+  return new Set(['localhost', '127.0.0.1', '::1']).has(window.location.hostname)
+}
+
+const uiLocale = readHiddenUiLocale()
+
+function isChinesePreviewEnabled() {
+  return uiLocale === 'zh'
+}
+
+function copy(en: string, zh: string) {
+  return isChinesePreviewEnabled() ? zh : en
+}
+
+const CJK_TEXT_PATTERN = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/u
+
+function hasCjkText(value: string | null | undefined) {
+  return Boolean(value && CJK_TEXT_PATTERN.test(value))
+}
+
+function englishTextOrFallback(value: string | null | undefined, fallback: string) {
+  const trimmed = value?.trim()
+  return trimmed && !hasCjkText(trimmed) ? trimmed : fallback
+}
 
 type View = 'network' | 'detail' | 'infer' | 'progress' | 'script' | 'scripts'
 
@@ -460,7 +510,7 @@ type InferenceScenario = {
 type InferenceResult = {
   runId: string
   scriptId?: string | null
-  status: 'completed' | 'fallback' | string
+  status: 'completed' | string
   aiAvailable: boolean
   model: string
   providerBaseUrl?: string | null
@@ -521,7 +571,9 @@ type BackendInferenceCapability = {
   reason: string | null
   defaultModel: string | null
   models: string[]
-  mockModel: 'mock-causeway-v1'
+  freeModel: 'deepseek-v4-flash'
+  freeMaxDepth: 1
+  premiumModels: string[]
 }
 
 type TypedDataPayload = {
@@ -835,9 +887,9 @@ type ArcProofResult = {
 
 type ScriptStatusFilter = 'all' | 'draft' | 'active' | 'archived'
 
-type InferenceScope = 'news' | 'markets' | 'social' | 'all'
+type InferenceScope = 'markets' | 'all'
 type InferenceDepth = 1 | 2 | 3
-type InferenceModelPreference = 'mock-causeway-v1' | 'auto' | 'deepseek-v4-pro' | 'deepseek-v4-flash'
+type InferenceModelPreference = 'deepseek-v4-pro' | 'deepseek-v4-flash'
 type ConfidenceMode = 'broad' | 'balanced' | 'strict'
 
 type InferenceSettingsState = {
@@ -854,11 +906,11 @@ type InferenceSettingsState = {
 const defaultInferenceSettings: InferenceSettingsState = {
   scope: 'all',
   timeRange: 'until_close',
-  modelPreference: 'auto',
+  modelPreference: 'deepseek-v4-flash',
   confidenceMode: 'balanced',
-  depth: 2,
+  depth: 1,
   confidenceThreshold: 0.55,
-  includeWebSearch: true,
+  includeWebSearch: false,
   rootOutcomeId: null,
 }
 
@@ -867,32 +919,22 @@ type ExternalResource = {
   label: string
   description: string
   href: string | null
+  locale?: UiLocale
 }
 
 const externalResources: ExternalResource[] = [
   {
     id: 'whitepaper-zh',
-    label: '白皮书 中文',
-    description: 'Causeway Whitepaper v1.0',
+    label: copy('Chinese Whitepaper', '白皮书 中文'),
+    description: copy('Chinese PDF', 'Causeway Whitepaper v1.0'),
     href: '/Causeway_Whitepaper_v1.0_ZH.pdf',
+    locale: 'zh',
   },
   {
     id: 'whitepaper-en',
     label: 'Whitepaper EN',
     description: 'English PDF',
     href: '/Causeway_Whitepaper_v1.0_EN.pdf',
-  },
-  {
-    id: 'x',
-    label: 'X / Twitter',
-    description: '待配置官方账号',
-    href: null,
-  },
-  {
-    id: 'discord',
-    label: 'Discord',
-    description: '待配置社区入口',
-    href: null,
   },
 ]
 
@@ -978,6 +1020,92 @@ type CausewayAuth = {
   isSigningIn: boolean
   signIn: () => Promise<void>
   signOut: () => Promise<void>
+}
+
+type MembershipPlan = {
+  sku: 'premium_monthly' | 'premium_yearly'
+  label: string
+  amountMicroUsd: string
+  amountUsd: string
+  durationDays: number
+  tier: 'premium'
+}
+
+type MembershipPayment = {
+  enabled: boolean
+  chainId: number
+  currency: 'USDC'
+  plans: MembershipPlan[]
+}
+
+type MembershipStatus = {
+  tier: 'free' | 'premium'
+  status: 'free' | 'active' | 'expired' | 'revoked'
+  startsAt: string | null
+  expiresAt: string | null
+  capabilities: {
+    premiumSignals: boolean
+    fullReasoningTrace: boolean
+    arcProof: boolean
+  }
+  payment: MembershipPayment
+  generatedAt: string
+}
+
+type MembershipCatalog = {
+  payment: MembershipPayment
+  generatedAt: string
+}
+
+type MembershipState = {
+  membership: MembershipStatus | null
+  catalog: MembershipCatalog | null
+  loading: boolean
+  catalogLoading: boolean
+  error: string | null
+  refreshMembership: (signal?: AbortSignal) => Promise<MembershipStatus | null>
+  refreshCatalog: (signal?: AbortSignal) => Promise<MembershipCatalog | null>
+  setMembership: (membership: MembershipStatus | null) => void
+  setError: (error: string | null) => void
+}
+
+type MembershipRecord = {
+  walletAddress: string
+  membership: MembershipStatus
+}
+
+type ArcPaymentIntent = {
+  id: string
+  sku: MembershipPlan['sku']
+  status: 'pending' | 'confirmed' | 'expired' | 'failed' | 'cancelled'
+  walletAddress: string
+  txHash: string | null
+  failureReason: string | null
+  expiresAt: string
+  confirmedAt: string | null
+  payment: {
+    chainId: number
+    tokenAddress: string
+    receiverAddress: string
+    currency: 'USDC'
+    decimals: number
+    amountMicroUsd: string
+    amountUsd: string
+  }
+}
+
+type ArcPaymentVerifyResult = {
+  intent: ArcPaymentIntent
+  membership: MembershipStatus
+}
+
+type StoredArcPayment = {
+  intentId: string
+  txHash: HexString
+  sku: MembershipPlan['sku']
+  amountUsd: string
+  expiresAt: string
+  storedAt: string
 }
 
 type SignTypedDataVariables = Parameters<ReturnType<typeof useSignTypedData>['signTypedDataAsync']>[0]
@@ -1067,6 +1195,9 @@ const ACCESS_TOKEN_STORAGE_KEY = 'causeway.accessToken'
 const ACCESS_WALLET_STORAGE_KEY = 'causeway.walletAddress'
 const ACCESS_CHAIN_STORAGE_KEY = 'causeway.chainId'
 const ACCESS_EXPIRES_STORAGE_KEY = 'causeway.expiresAt'
+const ARC_PAYMENT_PENDING_STORAGE_KEY = 'causeway.arcPayment.pending'
+const ARC_PAYMENT_VERIFY_INTERVAL_MS = 2_500
+const ARC_PAYMENT_VERIFY_TIMEOUT_MS = 180_000
 
 async function readApiData<T>(response: Response): Promise<T> {
   const rawText = await response.text()
@@ -1287,41 +1418,69 @@ function orderPreviewErrorText(order: OrderPreviewOrder, draft?: OrderDraftSelec
     : order.outcomeLabel || order.marketId
   const rawError = order.error || ''
   if (rawError.includes('BELOW_MIN_ORDER_SIZE')) {
-    const minimum = order.minOrderSize != null ? formatUsd(order.minOrderSize) : '市场最小下单金额'
-    return `${label} 低于最小下单金额 ${minimum}（当前 ${formatUsd(order.amountUsd)}）`
+    const minimum = order.minOrderSize != null ? formatUsd(order.minOrderSize) : copy('the market minimum', '市场最小下单金额')
+    return copy(
+      `${label} is below the minimum order amount ${minimum} (current ${formatUsd(order.amountUsd)}).`,
+      `${label} 低于最小下单金额 ${minimum}（当前 ${formatUsd(order.amountUsd)}）`,
+    )
   }
   if (rawError.includes('INVALID_TICK_SIZE')) {
-    const currentPrice = order.limitPrice != null ? `（当前限价 ${formatLimitPrice(order.limitPrice)}）` : ''
-    return `${label} 限价不符合报价精度，最小变动单位 ${formatTickSize(order.tickSize)}${currentPrice}`
+    const currentPrice = order.limitPrice != null
+      ? copy(` (current limit ${formatLimitPrice(order.limitPrice)})`, `（当前限价 ${formatLimitPrice(order.limitPrice)}）`)
+      : ''
+    return copy(
+      `${label} limit price does not match the market tick size. Minimum tick: ${formatTickSize(order.tickSize)}${currentPrice}`,
+      `${label} 限价不符合报价精度，最小变动单位 ${formatTickSize(order.tickSize)}${currentPrice}`,
+    )
   }
   if (rawError.includes('ORDERBOOK_DEPTH_UNAVAILABLE')) {
-    return `${label} 盘口深度不足，当前金额无法完全成交，请降低金额或改用限价`
+    return copy(
+      `${label} has insufficient order book depth for this amount. Reduce size or use a limit order.`,
+      `${label} 盘口深度不足，当前金额无法完全成交，请降低金额或改用限价`,
+    )
   }
   if (rawError.includes('ORDERBOOK_UNAVAILABLE')) {
-    return `${label} 盘口暂不可用，请等待市场数据刷新后重试`
+    return copy(
+      `${label} order book is temporarily unavailable. Refresh market data and try again.`,
+      `${label} 盘口暂不可用，请等待市场数据刷新后重试`,
+    )
   }
   if (rawError.includes('MARKET_NOT_TRADABLE')) {
     if (order.orderBookStatusCode === 404 || order.orderBookError === 'not_found') {
-      return `${label} 官方盘口已关闭或已下架，不能真实下单`
+      return copy(
+        `${label} official order book is closed or delisted, so orders cannot be placed.`,
+        `${label} 官方盘口已关闭或已下架，不能下单`,
+      )
     }
-    return `${label} 市场暂不可交易，可能已关闭、暂停接单或盘口未开放`
+    return copy(
+      `${label} is not tradable right now. It may be closed, paused, or not accepting orders.`,
+      `${label} 市场暂不可交易，可能已关闭、暂停接单或盘口未开放`,
+    )
   }
   if (rawError.includes('REQUEST_VALIDATION_FAILED')) {
     if (order.orderMode === 'limit' && order.limitPrice == null) {
-      return `${label} 限价单缺少限价`
+      return copy(`${label} limit order is missing a limit price.`, `${label} 限价单缺少限价`)
     }
-    return `${label} 金额、数量或限价不合法，请修正后重试`
+    return copy(
+      `${label} has an invalid amount, size, or limit price. Please correct it and try again.`,
+      `${label} 金额、数量或限价不合法，请修正后重试`,
+    )
   }
-  return rawError ? `${label} 下单参数无效：${rawError}` : `${label} 下单参数无效，请修正金额、数量、限价或盘口状态`
+  return rawError
+    ? copy(`${label} has invalid order parameters: ${rawError}`, `${label} 下单参数无效：${rawError}`)
+    : copy(
+      `${label} has invalid order parameters. Please correct amount, size, limit price, or market status.`,
+      `${label} 下单参数无效，请修正金额、数量、限价或盘口状态`,
+    )
 }
 
 function orderPreviewWarningText(warnings: string[]) {
-  if (warnings.length === 0) return '可提交'
+  if (warnings.length === 0) return copy('Ready to submit', '可提交')
   return warnings.map((warning) => {
-    if (warning.includes('MARKET_ORDER_ESTIMATE_CAN_CHANGE')) return '市价单成交价格会随盘口变化'
-    if (warning.includes('ORDERBOOK_REFRESH_UNAVAILABLE_USING_LOCAL_CACHE')) return '盘口刷新失败，使用本地缓存估算'
+    if (warning.includes('MARKET_ORDER_ESTIMATE_CAN_CHANGE')) return copy('Market order execution price may change with the book.', '市价单成交价格会随盘口变化')
+    if (warning.includes('ORDERBOOK_REFRESH_UNAVAILABLE_USING_LOCAL_CACHE')) return copy('Order book refresh failed; using local cached estimate.', '盘口刷新失败，使用本地缓存估算')
     return warning
-  }).join('、')
+  }).join(copy(', ', '、'))
 }
 
 function realOrderConfirmationText(preview: OrderPreview) {
@@ -1332,7 +1491,7 @@ function realOrderConfirmationText(preview: OrderPreview) {
   const extraCount = preview.orders.length - orderLines.length
   const extraLine = extraCount > 0 ? [`...and ${extraCount} more order${extraCount === 1 ? '' : 's'}.`] : []
   return [
-    'You are about to sign and submit a real Polymarket order.',
+    'You are about to sign and submit a Polymarket order.',
     '',
     `Max spend: ${formatUsd(preview.totalAmountUsd)}`,
     `Orders: ${preview.orders.length}`,
@@ -1344,7 +1503,7 @@ function realOrderConfirmationText(preview: OrderPreview) {
 }
 
 function formatTickSize(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return '市场要求'
+  if (value == null || !Number.isFinite(value)) return copy('market requirement', '市场要求')
   return `$${value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`
 }
 
@@ -1469,10 +1628,8 @@ function useCausewayAuth(): CausewayAuth {
 }
 
 function inferenceModel(settings: InferenceSettingsState) {
-  if (settings.modelPreference === 'mock-causeway-v1') return 'mock-causeway-v1'
   if (settings.modelPreference === 'deepseek-v4-pro') return 'deepseek-v4-pro'
-  if (settings.modelPreference === 'deepseek-v4-flash') return 'deepseek-v4-flash'
-  return 'auto'
+  return 'deepseek-v4-flash'
 }
 
 function authHeaders(token: string) {
@@ -1480,6 +1637,203 @@ function authHeaders(token: string) {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${token}`,
   }
+}
+
+async function fetchMembership(token: string, signal?: AbortSignal) {
+  return fetch(`${API_PREFIX}/membership/me`, {
+    signal,
+    headers: authHeaders(token),
+  }).then((response) => readApiData<MembershipStatus>(response))
+}
+
+async function fetchMembershipCatalog(signal?: AbortSignal) {
+  return fetch(`${API_PREFIX}/membership/catalog`, {
+    signal,
+  }).then((response) => readApiData<MembershipCatalog>(response))
+}
+
+async function createArcPaymentIntent(token: string, sku: MembershipPlan['sku']) {
+  return fetch(`${API_PREFIX}/payments/arc-usdc/intents`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ sku }),
+  }).then((response) => readApiData<ArcPaymentIntent>(response))
+}
+
+async function verifyArcPaymentIntent(token: string, intentId: string, txHash: HexString) {
+  return fetch(`${API_PREFIX}/payments/arc-usdc/intents/${encodeURIComponent(intentId)}/verify`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({ txHash }),
+  }).then((response) => readApiData<ArcPaymentVerifyResult>(response))
+}
+
+function arcExplorerTx(txHash: string) {
+  return `${arcTestnet.blockExplorers.default.url}/tx/${txHash}`
+}
+
+async function verifyArcPaymentIntentWithRetry(
+  token: string,
+  intentId: string,
+  txHash: HexString,
+  onStatus?: (status: string) => void,
+) {
+  const deadline = Date.now() + ARC_PAYMENT_VERIFY_TIMEOUT_MS
+  let attempt = 1
+  while (true) {
+    try {
+      return await verifyArcPaymentIntent(token, intentId, txHash)
+    } catch (verifyError) {
+      if (!isArcPaymentPendingVerificationError(verifyError) || Date.now() + ARC_PAYMENT_VERIFY_INTERVAL_MS > deadline) {
+        throw verifyError
+      }
+      onStatus?.(`Waiting for Arc confirmation... attempt ${attempt}`)
+      attempt += 1
+      await delay(ARC_PAYMENT_VERIFY_INTERVAL_MS)
+    }
+  }
+}
+
+function isArcPaymentPendingVerificationError(error: unknown) {
+  const message = errorMessage(error)
+  return message.includes('(PAYMENT_TX_NOT_FOUND)') || message.includes('(PAYMENT_CONFIRMATIONS_PENDING)')
+}
+
+function isArcPaymentPermanentError(error: unknown) {
+  const message = errorMessage(error)
+  return [
+    '(PAYMENT_VERIFICATION_FAILED)',
+    '(PAYMENT_INTENT_NOT_PAYABLE)',
+    '(PAYMENT_TX_ALREADY_USED)',
+    '(PAYMENT_INTENT_EXPIRED)',
+  ].some((code) => message.includes(code))
+}
+
+function readStoredArcPayment(): StoredArcPayment | null {
+  try {
+    const raw = window.localStorage.getItem(ARC_PAYMENT_PENDING_STORAGE_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (!isRecord(parsed)) return null
+    const intentId = readStringField(parsed, 'intentId')
+    const txHash = readStringField(parsed, 'txHash')
+    const sku = readStringField(parsed, 'sku')
+    const amountUsd = readStringField(parsed, 'amountUsd')
+    const expiresAt = readStringField(parsed, 'expiresAt')
+    const storedAt = readStringField(parsed, 'storedAt')
+    if (!intentId || !txHash || !isHexString(txHash) || (sku !== 'premium_monthly' && sku !== 'premium_yearly') || !amountUsd || !expiresAt || !storedAt) {
+      return null
+    }
+    return { intentId, txHash, sku, amountUsd, expiresAt, storedAt }
+  } catch {
+    return null
+  }
+}
+
+function writeStoredArcPayment(payment: StoredArcPayment) {
+  try {
+    window.localStorage.setItem(ARC_PAYMENT_PENDING_STORAGE_KEY, JSON.stringify(payment))
+  } catch {
+    // The tx hash remains visible in memory; local storage only enables refresh recovery.
+  }
+}
+
+function clearStoredArcPayment() {
+  try {
+    window.localStorage.removeItem(ARC_PAYMENT_PENDING_STORAGE_KEY)
+  } catch {
+    // Ignore storage errors; payment verification is server-authoritative.
+  }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function useMembershipState(auth: CausewayAuth): MembershipState {
+  const [membershipRecord, setMembershipRecord] = useState<MembershipRecord | null>(null)
+  const [catalog, setCatalog] = useState<MembershipCatalog | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const visibleMembership = membershipRecord && auth.walletAddress && sameAddress(membershipRecord.walletAddress, auth.walletAddress)
+    ? membershipRecord.membership
+    : null
+
+  const setMembership = useCallback((nextMembership: MembershipStatus | null) => {
+    const walletAddress = auth.walletAddress ?? readStoredAuthSession()?.walletAddress ?? null
+    if (!nextMembership || !walletAddress) {
+      setMembershipRecord(null)
+      return
+    }
+    setMembershipRecord({ walletAddress, membership: nextMembership })
+  }, [auth.walletAddress])
+
+  const refreshCatalog = useCallback(async (signal?: AbortSignal) => {
+    setCatalogLoading(true)
+    try {
+      const nextCatalog = await fetchMembershipCatalog(signal)
+      if (!signal?.aborted) {
+        setCatalog(nextCatalog)
+        setError(null)
+      }
+      return nextCatalog
+    } catch (catalogError) {
+      if (!signal?.aborted) setError(errorMessage(catalogError))
+      throw catalogError
+    } finally {
+      if (!signal?.aborted) setCatalogLoading(false)
+    }
+  }, [])
+
+  const refreshMembership = useCallback(async (signal?: AbortSignal) => {
+    const token = auth.accessToken ?? getAccessToken()
+    if (!token) {
+      setMembership(null)
+      return null
+    }
+
+    setLoading(true)
+    try {
+      const nextMembership = await fetchMembership(token, signal)
+      if (!signal?.aborted) {
+        setMembership(nextMembership)
+        setError(null)
+      }
+      return nextMembership
+    } catch (membershipError) {
+      if (!signal?.aborted) setError(errorMessage(membershipError))
+      throw membershipError
+    } finally {
+      if (!signal?.aborted) setLoading(false)
+    }
+  }, [auth.accessToken, setMembership])
+
+  useEffect(() => {
+    if (!auth.isAuthenticated) return
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      void refreshMembership(controller.signal).catch(() => {
+        // The shared error state is already updated in refreshMembership.
+      })
+    }, 0)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [auth.isAuthenticated, refreshMembership])
+
+  return useMemo(() => ({
+    membership: visibleMembership,
+    catalog,
+    loading,
+    catalogLoading,
+    error,
+    refreshMembership,
+    refreshCatalog,
+    setMembership,
+    setError,
+  }), [catalog, catalogLoading, error, loading, refreshCatalog, refreshMembership, setMembership, visibleMembership])
 }
 
 function orderDebugEnabled() {
@@ -1683,7 +2037,7 @@ async function signRawHashWithFallback(input: {
   walletClient?: TypedDataWalletClient | null
 }) {
   if (!isHexString(input.messageHash)) {
-    throw new Error('Relayer 签名消息不是有效 hex。')
+    throw new Error(copy('Relayer signature message is not valid hex.', 'Relayer 签名消息不是有效 hex。'))
   }
   const attempts: string[] = []
   const message = { raw: input.messageHash } as { raw: HexString }
@@ -1742,10 +2096,10 @@ function assertSignedOrderPayloads(value: Array<{ orderId: string; signature: un
     const orderId = item.orderId.trim()
     const signature = normalizeSignatureValue(item.signature)
     if (!orderId) {
-      throw new Error(`第 ${index + 1} 笔订单缺少 orderId，无法提交签名。`)
+      throw new Error(copy(`Order ${index + 1} is missing orderId, so the signature cannot be submitted.`, `第 ${index + 1} 笔订单缺少 orderId，无法提交签名。`))
     }
     if (!isHexSignature(signature)) {
-      throw new Error(`第 ${index + 1} 笔订单签名无效，请重新签名后提交。`)
+      throw new Error(copy(`Order ${index + 1} has an invalid signature. Please sign again before submitting.`, `第 ${index + 1} 笔订单签名无效，请重新签名后提交。`))
     }
     return { orderId, signature }
   })
@@ -1757,7 +2111,10 @@ function validatedSignedOrdersForSubmit(
 ): { orderId: string; signature: string }[] {
   if (preview.executionMode !== 'real') return []
   if (value.length !== preview.orders.length) {
-    throw new Error(`订单签名数量不一致：需要 ${preview.orders.length} 笔，实际 ${value.length} 笔。请重新预览并签名。`)
+    throw new Error(copy(
+      `Order signature count mismatch: expected ${preview.orders.length}, received ${value.length}. Please preview and sign again.`,
+      `订单签名数量不一致：需要 ${preview.orders.length} 笔，实际 ${value.length} 笔。请重新预览并签名。`,
+    ))
   }
   return assertSignedOrderPayloads(value)
 }
@@ -1774,7 +2131,7 @@ function orderSubmitPayload(
 
   const invalidSignedOrder = normalizedSignedOrders.find((order) => !order.orderId || !isHexSignature(order.signature))
   if (invalidSignedOrder) {
-    throw new Error('订单签名提交体无效，请重新预览并签名后再提交。')
+    throw new Error(copy('The order signature payload is invalid. Please preview, sign, and submit again.', '订单签名提交体无效，请重新预览并签名后再提交。'))
   }
 
   const body = {
@@ -1785,7 +2142,7 @@ function orderSubmitPayload(
   }
   const bodyText = JSON.stringify(body)
   if (bodyText.includes('"signedOrders":[[]]') || bodyText.includes('"signedOrders":[[')) {
-    throw new Error('订单签名提交体被异常序列化为空数组，请刷新页面后重新签名。')
+    throw new Error(copy('The order signature payload was serialized incorrectly. Refresh the page and sign again.', '订单签名提交体被异常序列化为空数组，请刷新页面后重新签名。'))
   }
   const signedOrdersShape = normalizedSignedOrders.map((order) => `object:${order.orderId}:${order.signature.length}`).join('|')
   orderDebugLog('order_submit_payload_built', {
@@ -1847,7 +2204,7 @@ function blockedQuickSetupLogs(readiness: TradingReadiness) {
   const logs = ['Checking your account status...']
   if (readiness.depositWalletAddress) logs.push(`Deposit Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
   logs.push(`Trading setup is blocked: ${readiness.reason || readiness.status}`)
-  if (readiness.status === 'disabled') logs.push('Real trading is not enabled on this environment.')
+  if (readiness.status === 'disabled') logs.push('Trading is not enabled on this environment.')
   if (!readiness.builderConfigured) logs.push('Trading wallet management is not configured on the backend.')
   logs.push('After backend configuration is updated, restart the API and sign in again.')
   return logs
@@ -1895,12 +2252,12 @@ function scriptMarketTradable(market: Pick<BackendScript['markets'][number], 'ac
 }
 
 function scriptMarketStatusLabel(market: Pick<BackendScript['markets'][number], 'active' | 'closed' | 'archived' | 'staleDetectedAt' | 'acceptingOrders' | 'enableOrderBook'>) {
-  if (market.closed) return '市场已关闭'
-  if (market.archived) return '市场已归档'
-  if (market.staleDetectedAt) return '市场数据已过期'
-  if (market.active === false) return '市场未激活'
-  if (market.acceptingOrders === false) return '暂停接单'
-  if (market.enableOrderBook === false) return '盘口未开放'
+  if (market.closed) return copy('Market closed', '市场已关闭')
+  if (market.archived) return copy('Market archived', '市场已归档')
+  if (market.staleDetectedAt) return copy('Market data is stale', '市场数据已过期')
+  if (market.active === false) return copy('Market inactive', '市场未激活')
+  if (market.acceptingOrders === false) return copy('Orders paused', '暂停接单')
+  if (market.enableOrderBook === false) return copy('Order book unavailable', '盘口未开放')
   return null
 }
 
@@ -1929,12 +2286,12 @@ function parseDraftNumber(value: string): number | null {
 }
 
 function formatUsd(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return '待计算'
+  if (value == null || Number.isNaN(value)) return copy('Pending', '待计算')
   return `$${value.toFixed(value >= 100 ? 0 : 2)}`
 }
 
 function formatShares(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return '待计算'
+  if (value == null || Number.isNaN(value)) return copy('Pending', '待计算')
   if (value >= 100) return value.toFixed(0)
   if (value >= 1) return value.toFixed(2)
   return value.toFixed(4)
@@ -2016,10 +2373,16 @@ function scriptOrderChains(script: BackendScript, rootMarketId: string): Inferen
       const direction = normalizeInferenceDirection(scriptMarket.impactDirection)
       return {
         id: scriptMarket.scriptMarketId || `script_market_${scriptMarket.marketId}_${index}`,
-        title: `${inferenceLayerLabel(scriptMarket.layer)}：${trimNodeTitle(scriptMarket.title, 30)}`,
-        summary: scriptMarket.reason || buyOutcomes[0]?.reason || 'AI 将该市场纳入可交易因果链，提交前仍需要复核实时盘口。',
+        title: copy(`${inferenceLayerLabel(scriptMarket.layer)}: ${trimNodeTitle(scriptMarket.title, 30)}`, `${inferenceLayerLabel(scriptMarket.layer)}：${trimNodeTitle(scriptMarket.title, 30)}`),
+        summary: scriptMarket.reason || buyOutcomes[0]?.reason || copy(
+          'AI included this market in a tradable causal path. Review the live order book before submitting.',
+          'AI 将该市场纳入可交易因果链，提交前仍需要复核实时盘口。',
+        ),
         confidence: scriptMarket.confidence ?? 0.5,
-        expectedReturnHint: '已生成可执行 selection，可在下方订单草稿中确认金额、数量和限价。',
+        expectedReturnHint: copy(
+          'Executable selections are ready. Confirm amount, size, and limit price in the order draft below.',
+          '已生成可执行 selection，可在下方订单草稿中确认金额、数量和限价。',
+        ),
         legs: buyOutcomes.map((outcome) => {
           return {
             marketId: scriptMarket.marketId,
@@ -2030,7 +2393,7 @@ function scriptOrderChains(script: BackendScript, rootMarketId: string): Inferen
             direction,
             impact: inferenceImpactSummary(scriptMarket.impactDirection),
             confidence: outcome.confidence ?? scriptMarket.confidence ?? 0.5,
-            rationale: outcome.reason || scriptMarket.reason || 'AI 推荐买入该 outcome。',
+            rationale: outcome.reason || scriptMarket.reason || copy('AI recommends buying this outcome.', 'AI 推荐买入该 outcome。'),
             orderHint: `Buy ${outcome.label}`,
           }
         }),
@@ -2351,7 +2714,7 @@ async function prepareTradingWalletForRealOrders(input: {
     }
 
     if (readiness.tradingAccountType !== 'deposit_wallet') {
-      throw new Error('Real orders currently require Deposit Wallet + POLY_1271. Refresh the wallet status and try again.')
+      throw new Error('Trading wallet setup is not ready. Refresh the wallet status and try again.')
     }
 
     if (!readiness.depositWalletDeployed) {
@@ -2413,7 +2776,7 @@ async function prepareTradingWalletForRealOrders(input: {
       throw new Error(readiness.reason || `Deposit Wallet still needs enough funds and permissions for at least ${formatUsd(requiredUsd)}.`)
     }
 
-    updateActivity('done', 'Deposit Wallet is ready for real orders.')
+    updateActivity('done', 'Deposit Wallet is ready for Polymarket orders.')
     return readiness
   } catch (error) {
     updateActivity('error', errorMessage(error))
@@ -2517,7 +2880,7 @@ async function sleepWithAbort(ms: number, signal: AbortSignal) {
 async function runBackendInference(market: Market, settings: InferenceSettingsState, signal: AbortSignal): Promise<InferenceResult> {
   const token = getAccessToken()
   if (!token) {
-    throw new Error('需要先完成钱包登录，前端拿到 Bearer Token 后才能启动正式 AI 推演。')
+    throw new Error(copy('Sign in with your wallet before starting AI inference.', '需要先完成钱包登录，前端拿到 Bearer Token 后才能启动正式 AI 推演。'))
   }
   const inferenceMarket = await loadMarketForInference(market, signal)
   const rootOutcome =
@@ -2525,7 +2888,7 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
     ?? marketInferenceOutcome(inferenceMarket)
   const rootOutcomeId = rootOutcome?.outcomeId
   if (!rootOutcomeId) {
-    throw new Error('当前市场缺少 outcomeId，请等待市场详情加载完成后再启动推演。')
+    throw new Error(copy('This market is missing outcomeId data. Wait for market details to finish loading before starting inference.', '当前市场缺少 outcomeId，请等待市场详情加载完成后再启动推演。'))
   }
 
   const createRun = await fetch(`${API_PREFIX}/inference-runs`, {
@@ -2536,7 +2899,7 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
       rootMarketId: inferenceMarket.id,
       rootOutcomeId,
       depth: settings.depth,
-      maxMarketsPerLayer: settings.depth >= 3 ? 8 : 6,
+      maxMarketsPerLayer: inferenceMaxMarketsPerLayer(settings.depth),
       confidenceThreshold: settings.confidenceThreshold,
       model: inferenceModel(settings),
       cacheEnabled: true,
@@ -2567,7 +2930,7 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
   }
 
   if (!status.scriptId) {
-    throw new Error('AI 推演已创建，但脚本尚未生成，请稍后刷新。')
+    throw new Error(copy('AI inference was created, but the script is not ready yet. Refresh again shortly.', 'AI 推演已创建，但脚本尚未生成，请稍后刷新。'))
   }
 
   const script = await fetch(`${API_PREFIX}/scripts/${status.scriptId}`, {
@@ -2576,6 +2939,10 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
   }).then((response) => readApiData<BackendScript>(response))
 
   return scriptToInferenceResult(script, status, inferenceMarket, settings)
+}
+
+function inferenceMaxMarketsPerLayer(depth: InferenceDepth) {
+  return depth >= 3 ? 3 : 4
 }
 
 async function fetchInferenceCapability(signal: AbortSignal): Promise<BackendInferenceCapability> {
@@ -2720,7 +3087,7 @@ function scriptListItemMarket(item: BackendScriptListItem, index = 0): Market {
     volume: formatCompactMoney(item.rootVolume),
     volumeValue: item.rootVolume,
     liquidity: item.rootLiquidity,
-    traders: item.rootVolume24hr == null ? '24h 暂无数据' : `24h ${formatCompactMoney(item.rootVolume24hr)}`,
+    traders: item.rootVolume24hr == null ? copy('24h no data', '24h 暂无数据') : `24h ${formatCompactMoney(item.rootVolume24hr)}`,
     outcomes: item.rootOutcomeLabel
       ? [{ outcomeId: item.rootOutcomeId, label: item.rootOutcomeLabel, price: item.rootPrice, tokenId: null }]
       : [],
@@ -2760,7 +3127,7 @@ function scriptRootMarket(script: BackendScript, fallback?: BackendScriptListIte
     volume: formatCompactMoney(volume),
     volumeValue: volume,
     liquidity,
-    traders: volume24hr == null ? '24h 暂无数据' : `24h ${formatCompactMoney(volume24hr)}`,
+    traders: volume24hr == null ? copy('24h no data', '24h 暂无数据') : `24h ${formatCompactMoney(volume24hr)}`,
     bestAsk: rootScriptMarket?.bestAsk ?? null,
     lastTradePrice: rootScriptMarket?.lastTradePrice ?? null,
     orderMinSize: rootScriptMarket?.orderMinSize ?? null,
@@ -2778,9 +3145,9 @@ function scriptRootMarket(script: BackendScript, fallback?: BackendScriptListIte
 }
 
 function scriptStatusLabel(status: string) {
-  if (status === 'active') return '已提交'
-  if (status === 'archived') return '已归档'
-  if (status === 'draft') return '草稿'
+  if (status === 'active') return copy('Submitted', '已提交')
+  if (status === 'archived') return copy('Archived', '已归档')
+  if (status === 'draft') return copy('Draft', '草稿')
   return status
 }
 
@@ -2846,9 +3213,9 @@ function scriptToInferenceResult(script: BackendScript, run: BackendInferenceSta
     relatedMarkets,
     orderCandidates,
     logs: [
-      '已创建后端 inference-runs 任务。',
-      `任务状态：${run.status}，进度：${run.progress}%。`,
-      '已读取生成的 causal script。',
+      copy('Backend inference run created.', '已创建后端 inference-runs 任务。'),
+      copy(`Run status: ${run.status}, progress: ${run.progress}%.`, `任务状态：${run.status}，进度：${run.progress}%。`),
+      copy('Generated causal script loaded.', '已读取生成的 causal script。'),
     ],
     generatedAt: run.completedAt || script.updatedAt,
   }
@@ -2879,20 +3246,20 @@ type MarketFlowEdge = Edge<MarketFlowEdgeData, 'causal'>
 type HoverPlacement = 'right' | 'left' | 'bottom' | 'top'
 
 const rootMarket: Market = {
-  id: 'placeholder-market',
-  title: '请选择一个真实 Polymarket 市场',
+  id: 'empty-market-selection',
+  title: copy('Select a Polymarket market', '请选择一个真实 Polymarket 市场'),
   category: 'Polymarket',
   icon: 'globe',
   price: 0,
   change: 0,
-  volume: '暂无数据',
-  traders: '暂无数据',
+  volume: copy('No data', '暂无数据'),
+  traders: copy('No data', '暂无数据'),
   x: 48,
   y: 46,
   tone: 'purple',
 }
 
-const markets: Market[] = [rootMarket]
+const markets: Market[] = []
 
 const categoryTones: Record<string, Market['tone']> = {
   政治: 'blue',
@@ -2914,33 +3281,20 @@ const categoryTones: Record<string, Market['tone']> = {
   other: 'purple',
 }
 
-const fallbackCategories: ApiMarketCategory[] = [
-  { key: 'all', label: 'All', count: 0 },
-  { key: 'hot', label: 'Hot', count: 0 },
-  { key: 'new', label: 'New', count: 0 },
-  { key: 'politics', label: 'Politics', count: 0 },
-  { key: 'sports', label: 'Sports', count: 0 },
-  { key: 'macro', label: 'Macro', count: 0 },
-  { key: 'crypto', label: 'Crypto', count: 0 },
-  { key: 'tech', label: 'Technology', count: 0 },
-  { key: 'entertainment', label: 'Entertainment', count: 0 },
-  { key: 'other', label: 'Other', count: 0 },
-]
-
 const primaryMarketCategoryKeys = ['hot', 'new'] as const
 const primaryMarketCategoryKeySet = new Set<string>(primaryMarketCategoryKeys)
 
 function orderVisibleMarketCategories(categories: ApiMarketCategory[]) {
   const byKey = new Map(categories.map((category) => [category.key, category]))
   const primary = primaryMarketCategoryKeys
-    .map((key) => byKey.get(key) ?? fallbackCategories.find((category) => category.key === key))
+    .map((key) => byKey.get(key))
     .filter((category): category is ApiMarketCategory => Boolean(category))
   const secondary = categories.filter((category) => category.key !== 'all' && !primaryMarketCategoryKeySet.has(category.key))
   return [...primary, ...secondary]
 }
 
 function formatCompactMoney(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return '暂无数据'
+  if (value == null || Number.isNaN(value)) return copy('No data', '暂无数据')
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`
@@ -2955,17 +3309,17 @@ function formatCompactCount(value: number | null | undefined) {
 }
 
 function formatDate(value: string | null | undefined) {
-  if (!value) return '未提供'
+  if (!value) return copy('Not provided', '未提供')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+  return date.toLocaleDateString(isChinesePreviewEnabled() ? 'zh-CN' : 'en-US', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
 function formatDateTime(value: string | null | undefined) {
-  if (!value) return '未提供'
+  if (!value) return copy('Not provided', '未提供')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleString(isChinesePreviewEnabled() ? 'zh-CN' : 'en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function formatProbability(value: number | null | undefined) {
@@ -2973,14 +3327,14 @@ function formatProbability(value: number | null | undefined) {
 }
 
 function formatMarketPercent(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return '暂无价格'
+  if (value == null || Number.isNaN(value)) return copy('No price', '暂无价格')
   if (value > 0 && value < 1) return '<1%'
   if (value % 1 === 0) return `${value}%`
   return `${value.toFixed(1)}%`
 }
 
 function formatConfidence(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return '暂无'
+  if (value == null || Number.isNaN(value)) return copy('N/A', '暂无')
   return `${Math.round(value * 100)}%`
 }
 
@@ -2994,34 +3348,34 @@ function normalizeInferenceDirection(value: string | null | undefined) {
 
 function directionLabel(value: string | null | undefined) {
   const normalized = (value || '').toLowerCase()
-  if (['supports', 'support'].includes(normalized)) return '正向支持'
-  if (['causes', 'cause'].includes(normalized)) return '因果影响'
-  if (['opposes', 'oppose', 'contradicts', 'contradict'].includes(normalized)) return '反向影响'
-  if (['hedges', 'hedge'].includes(normalized)) return '对冲影响'
-  if (['correlates', 'correlate'].includes(normalized)) return '相关影响'
-  if (['unclear', 'unknown'].includes(normalized)) return '影响不明确'
-  if (normalized === 'positive') return '正向'
-  if (normalized === 'negative') return '反向'
-  if (normalized === 'conditional') return '条件影响'
-  return '影响不明确'
+  if (['supports', 'support'].includes(normalized)) return copy('Supports', '正向支持')
+  if (['causes', 'cause'].includes(normalized)) return copy('Causal impact', '因果影响')
+  if (['opposes', 'oppose', 'contradicts', 'contradict'].includes(normalized)) return copy('Opposes', '反向影响')
+  if (['hedges', 'hedge'].includes(normalized)) return copy('Hedge', '对冲影响')
+  if (['correlates', 'correlate'].includes(normalized)) return copy('Correlated', '相关影响')
+  if (['unclear', 'unknown'].includes(normalized)) return copy('Unclear impact', '影响不明确')
+  if (normalized === 'positive') return copy('Positive', '正向')
+  if (normalized === 'negative') return copy('Negative', '反向')
+  if (normalized === 'conditional') return copy('Conditional', '条件影响')
+  return copy('Unclear impact', '影响不明确')
 }
 
 function inferenceLayerLabel(layer: number | null | undefined) {
-  if (layer == null || !Number.isFinite(layer)) return '关联市场'
-  if (layer <= 0) return '核心市场'
-  if (layer === 1) return '一级联动'
-  if (layer === 2) return '二级联动'
-  if (layer === 3) return '三级联动'
-  return `第 ${layer} 层联动`
+  if (layer == null || !Number.isFinite(layer)) return copy('Related market', '关联市场')
+  if (layer <= 0) return copy('Root market', '核心市场')
+  if (layer === 1) return copy('Layer 1 link', '一级联动')
+  if (layer === 2) return copy('Layer 2 link', '二级联动')
+  if (layer === 3) return copy('Layer 3 link', '三级联动')
+  return copy(`Layer ${layer} link`, `第 ${layer} 层联动`)
 }
 
 function inferenceImpactSummary(direction: string | null | undefined) {
   const normalized = (direction || '').toLowerCase()
-  if (['supports', 'support', 'positive', 'causes', 'cause'].includes(normalized)) return '提高目标结果概率'
-  if (['opposes', 'oppose', 'negative', 'contradicts', 'contradict'].includes(normalized)) return '压低目标结果概率'
-  if (['hedges', 'hedge'].includes(normalized)) return '用于对冲根市场风险'
-  if (['correlates', 'correlate', 'conditional'].includes(normalized)) return '相关性需结合条件复核'
-  return '影响方向不明确'
+  if (['supports', 'support', 'positive', 'causes', 'cause'].includes(normalized)) return copy('Raises the target outcome probability', '提高目标结果概率')
+  if (['opposes', 'oppose', 'negative', 'contradicts', 'contradict'].includes(normalized)) return copy('Lowers the target outcome probability', '压低目标结果概率')
+  if (['hedges', 'hedge'].includes(normalized)) return copy('Hedges root-market risk', '用于对冲根市场风险')
+  if (['correlates', 'correlate', 'conditional'].includes(normalized)) return copy('Correlation requires condition review', '相关性需结合条件复核')
+  return copy('Impact direction is unclear', '影响方向不明确')
 }
 
 function defaultOrderHintForDirection(direction: string | null | undefined) {
@@ -3039,22 +3393,22 @@ function scriptMarketPricePercent(scriptMarket: BackendScript['markets'][number]
 
 function scriptMarketVolumeLabel(scriptMarket: BackendScript['markets'][number]) {
   const volume = scriptMarket.volume24hr ?? scriptMarket.volume
-  return volume == null || Number.isNaN(volume) ? '暂无成交量' : formatCompactMoney(volume)
+  return volume == null || Number.isNaN(volume) ? copy('No volume', '暂无成交量') : formatCompactMoney(volume)
 }
 
 function marketSubtitle(market: Market) {
   return [market.category, market.eventTitle, market.officialCategory || market.tags?.[0]]
     .filter(Boolean)
     .slice(0, 3)
-    .join(' · ') || 'Polymarket 市场'
+    .join(' · ') || copy('Polymarket market', 'Polymarket 市场')
 }
 
 function marketRuleCopy(market: Market) {
-  return market.rules?.trim() || market.description?.trim() || 'Polymarket 未提供详细规则说明。'
+  return market.rules?.trim() || market.description?.trim() || copy('Polymarket has not provided detailed rules for this market.', 'Polymarket 未提供详细规则说明。')
 }
 
 function marketDescriptionCopy(market: Market) {
-  return market.description?.trim() || market.rules?.trim() || '该市场来自 Polymarket，当前没有额外描述。'
+  return market.description?.trim() || market.rules?.trim() || copy('This market comes from Polymarket. No additional description is currently available.', '该市场来自 Polymarket，当前没有额外描述。')
 }
 
 function marketInferenceOutcome(market: Market): MarketOutcome | null {
@@ -3073,11 +3427,11 @@ function unitPriceToPercent(price: number | null | undefined) {
 
 function formatUnitPercent(price: number | null | undefined) {
   const percent = unitPriceToPercent(price)
-  return percent == null ? '暂无价格' : `${percent}%`
+  return percent == null ? copy('No price', '暂无价格') : `${percent}%`
 }
 
 function formatCents(price: number | null | undefined) {
-  if (price == null || Number.isNaN(price)) return '暂无报价'
+  if (price == null || Number.isNaN(price)) return copy('No quote', '暂无报价')
   const cents = clamp(price, 0, 1) * 100
   const precision = cents < 1 || cents > 99 || cents % 1 ? 1 : 0
   return `${cents.toFixed(precision)}¢`
@@ -3178,7 +3532,7 @@ function compactHistory(points: PricePoint[]) {
 }
 
 function formatToken(tokenId: string | null | undefined) {
-  if (!tokenId) return '未提供'
+  if (!tokenId) return copy('Not provided', '未提供')
   return `${tokenId.slice(0, 6)}...${tokenId.slice(-6)}`
 }
 
@@ -3671,7 +4025,7 @@ function buildMarketFlowGraph(
 }
 
 function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
-  const category = node.category || '其他'
+  const category = node.category || copy('Other', '其他')
   const categoryKey = node.categoryKey || category
   const price = node.price == null ? 0 : Math.round(node.price <= 1 ? node.price * 100 : node.price)
   return {
@@ -3714,7 +4068,7 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
     volume: formatCompactMoney(node.volume),
     volumeValue: node.volume,
     liquidity: node.liquidity,
-    traders: node.volume24hr ? formatCompactMoney(node.volume24hr) : '24h 暂无数据',
+    traders: node.volume24hr ? formatCompactMoney(node.volume24hr) : copy('24h no data', '24h 暂无数据'),
     x: node.x ?? 50,
     y: node.y ?? 50,
     tone: categoryTones[categoryKey] || categoryTones[category] || (index % 5 === 0 ? 'purple' : index % 3 === 0 ? 'orange' : index % 2 === 0 ? 'green' : 'blue'),
@@ -3723,6 +4077,7 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
 
 function App() {
   const auth = useCausewayAuth()
+  const membershipState = useMembershipState(auth)
   const [view, setView] = useState<View>('network')
   const [selectedMarket, setSelectedMarket] = useState<Market>(rootMarket)
   const [inferenceResult, setInferenceResult] = useState<InferenceResult | null>(null)
@@ -3781,11 +4136,11 @@ function App() {
     <TradingWalletActivityContext.Provider value={tradingWalletActivity}>
       <div className={introVisible ? 'app-shell app-intro-active' : 'app-shell'}>
         {introVisible ? <IntroLoader /> : null}
-        <Header activeNav={activeNav} auth={auth} onNavigate={setView} />
+        <Header activeNav={activeNav} auth={auth} membershipState={membershipState} onNavigate={setView} />
         <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
           {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
           {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={openInferenceSettings} />}
-          {view === 'infer' && <InferenceSettings auth={auth} initialSettings={inferenceSettings} market={selectedMarket} onBack={() => setView('detail')} onStart={startInference} />}
+          {view === 'infer' && <InferenceSettings auth={auth} initialSettings={inferenceSettings} market={selectedMarket} membershipState={membershipState} onBack={() => setView('detail')} onStart={startInference} />}
           {view === 'progress' && (
             <InferenceProgress
               market={selectedMarket}
@@ -3826,12 +4181,22 @@ function IntroLoader() {
   )
 }
 
-function Header({ activeNav, auth, onNavigate }: { activeNav: string; auth: CausewayAuth; onNavigate: (view: View) => void }) {
+function Header({
+  activeNav,
+  auth,
+  membershipState,
+  onNavigate,
+}: {
+  activeNav: string
+  auth: CausewayAuth
+  membershipState: MembershipState
+  onNavigate: (view: View) => void
+}) {
   const navItems = [
-    { id: 'network', label: '市场网络', view: 'network' as View },
-    { id: 'discover', label: '发现', view: 'infer' as View },
-    { id: 'monitor', label: '监控', view: 'progress' as View },
-    { id: 'scripts', label: '我的脚本', view: 'scripts' as View },
+    { id: 'network', label: copy('Market Network', '市场网络'), view: 'network' as View },
+    { id: 'discover', label: copy('Discover', '发现'), view: 'infer' as View },
+    { id: 'monitor', label: copy('Monitor', '监控'), view: 'progress' as View },
+    { id: 'scripts', label: copy('My Scripts', '我的脚本'), view: 'scripts' as View },
   ]
 
   return (
@@ -3857,16 +4222,276 @@ function Header({ activeNav, auth, onNavigate }: { activeNav: string; auth: Caus
         <button className="arc-audit-button" type="button" onClick={() => onNavigate('scripts')}>
           <ShieldCheck size={16} /> Arc Proof
         </button>
+        <MembershipControl auth={auth} membershipState={membershipState} />
         <BridgeWalletControl auth={auth} />
-        <button className="icon-button" aria-label="搜索" type="button">
+        <button className="icon-button" aria-label={copy('Search', '搜索')} type="button">
           <Search size={20} />
         </button>
-        <button className="icon-button has-dot" aria-label="通知" type="button">
+        <button className="icon-button has-dot" aria-label={copy('Notifications', '通知')} type="button">
           <Bell size={20} />
         </button>
         <AccountControls auth={auth} />
       </div>
     </header>
+  )
+}
+
+function MembershipControl({ auth, membershipState }: { auth: CausewayAuth; membershipState: MembershipState }) {
+  const { chainId } = useAccount()
+  const { openConnectModal } = useConnectModal()
+  const { switchChainAsync } = useSwitchChain()
+  const { writeContractAsync } = useWriteContract()
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [paymentStatus, setPaymentStatus] = useState<string | null>(null)
+  const [paymentTxHash, setPaymentTxHash] = useState<string | null>(null)
+  const [pendingPayment, setPendingPayment] = useState<StoredArcPayment | null>(() => readStoredArcPayment())
+  const [error, setError] = useState<string | null>(null)
+  const membership = membershipState.membership
+  const membershipCatalog = membershipState.catalog
+  const catalogLoading = membershipState.catalogLoading
+  const refreshMembershipCatalog = membershipState.refreshCatalog
+  const refreshMembership = membershipState.refreshMembership
+  const displayError = error ?? membershipState.error
+
+  const handleAuthenticate = useCallback(async () => {
+    setError(null)
+    if (!auth.isConnected) {
+      openConnectModal?.()
+      return
+    }
+    try {
+      await auth.signIn()
+      await refreshMembership()
+    } catch (authError) {
+      setError(errorMessage(authError))
+    }
+  }, [auth, openConnectModal, refreshMembership])
+
+  const handleOpen = useCallback(() => {
+    setOpen(true)
+    setError(null)
+    setPendingPayment(readStoredArcPayment())
+    void refreshMembershipCatalog().catch((fetchError) => setError(errorMessage(fetchError)))
+    if (auth.isAuthenticated) {
+      void refreshMembership().catch((fetchError) => setError(errorMessage(fetchError)))
+    }
+  }, [auth.isAuthenticated, refreshMembership, refreshMembershipCatalog])
+
+  const completePaymentVerification = useCallback(async (token: string, storedPayment: StoredArcPayment) => {
+    setPaymentTxHash(storedPayment.txHash)
+    setPaymentStatus('Payment submitted on Arc. Waiting for confirmation...')
+    const verified = await verifyArcPaymentIntentWithRetry(token, storedPayment.intentId, storedPayment.txHash, setPaymentStatus)
+    clearStoredArcPayment()
+    setPendingPayment(null)
+    membershipState.setMembership(verified.membership)
+    membershipState.setError(null)
+    setPaymentStatus(`Payment confirmed. Premium is active${verified.intent.txHash ? `: ${shortAddress(verified.intent.txHash)}` : '.'}`)
+    return verified
+  }, [membershipState])
+
+  const handlePay = useCallback(async (sku: MembershipPlan['sku']) => {
+    setError(null)
+    setPaymentStatus(null)
+    setPaymentTxHash(null)
+    setLoading(true)
+    try {
+      if (!auth.isConnected) {
+        openConnectModal?.()
+        return
+      }
+      if (!auth.isAuthenticated) {
+        await auth.signIn()
+      }
+      const storedSession = readStoredAuthSession()
+      const token = auth.accessToken ?? storedSession?.accessToken ?? null
+      const payerAddress = auth.walletAddress ?? storedSession?.walletAddress ?? null
+      if (!token) throw new Error('Sign in before starting an Arc USDC payment.')
+      if (!payerAddress || !isHexAddress(payerAddress)) throw new Error('Connected wallet address is unavailable.')
+      const intent = await createArcPaymentIntent(token, sku)
+      setPaymentStatus(`Created payment intent. Switching wallet to Arc Testnet...`)
+      if (chainId !== arcTestnet.id) {
+        await switchChainAsync({ chainId: arcTestnet.id })
+      }
+      setPaymentStatus(`Confirm ${intent.payment.amountUsd} USDC in your wallet.`)
+      const txHash = await writeContractAsync({
+        chainId: arcTestnet.id,
+        address: intent.payment.tokenAddress as HexAddress,
+        abi: erc20Abi,
+        functionName: 'transfer',
+        args: [intent.payment.receiverAddress as HexAddress, BigInt(intent.payment.amountMicroUsd)],
+        account: payerAddress as HexAddress,
+      })
+      setPaymentTxHash(txHash)
+      const storedPayment: StoredArcPayment = {
+        intentId: intent.id,
+        txHash,
+        sku,
+        amountUsd: intent.payment.amountUsd,
+        expiresAt: intent.expiresAt,
+        storedAt: new Date().toISOString(),
+      }
+      writeStoredArcPayment(storedPayment)
+      setPendingPayment(storedPayment)
+      await completePaymentVerification(token, storedPayment)
+    } catch (paymentError) {
+      if (isArcPaymentPermanentError(paymentError)) {
+        clearStoredArcPayment()
+        setPendingPayment(null)
+      }
+      setError(errorMessage(paymentError))
+    } finally {
+      setLoading(false)
+    }
+  }, [auth, chainId, completePaymentVerification, openConnectModal, switchChainAsync, writeContractAsync])
+
+  const handleResumePayment = useCallback(async () => {
+    setError(null)
+    setLoading(true)
+    try {
+      if (!auth.isConnected) {
+        openConnectModal?.()
+        return
+      }
+      if (!auth.isAuthenticated) {
+        await auth.signIn()
+      }
+      const token = auth.accessToken ?? readStoredAuthSession()?.accessToken ?? null
+      const storedPayment = readStoredArcPayment()
+      if (!token) throw new Error('Sign in before resuming Arc payment verification.')
+      if (!storedPayment) throw new Error('No pending Arc payment is available to verify.')
+      setPendingPayment(storedPayment)
+      await completePaymentVerification(token, storedPayment)
+    } catch (resumeError) {
+      if (isArcPaymentPermanentError(resumeError)) {
+        clearStoredArcPayment()
+        setPendingPayment(null)
+      }
+      setError(errorMessage(resumeError))
+    } finally {
+      setLoading(false)
+    }
+  }, [auth, completePaymentVerification, openConnectModal])
+
+  const visibleMembership = auth.isAuthenticated ? membership : null
+  const isPremium = visibleMembership?.tier === 'premium'
+  const paymentInfo = visibleMembership?.payment ?? membershipCatalog?.payment ?? null
+  const plans = paymentInfo?.plans ?? []
+  const paymentsDisabled = paymentInfo?.enabled === false
+  const planActionLabel = auth.isAuthenticated ? 'Pay with Arc USDC' : 'Sign in to pay'
+  const paymentNetworkLabel = `Arc Testnet · Chain ${paymentInfo?.chainId ?? arcTestnet.id}`
+  return (
+    <div className="membership-control">
+      <button className={isPremium ? 'membership-pill premium' : 'membership-pill'} type="button" onClick={handleOpen}>
+        <Star size={15} />
+        {isPremium ? 'Premium' : 'Free'}
+      </button>
+      {open ? (
+        <BodyPortal>
+          <div className="wallet-modal-backdrop membership-modal-backdrop" role="presentation" onMouseDown={() => !loading && setOpen(false)}>
+            <div className="wallet-modal membership-modal" role="dialog" aria-modal="true" aria-label="Membership" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="wallet-modal-head">
+                <div>
+                  <span><Star size={18} /> Membership</span>
+                  <small>Arc USDC payments unlock premium Causeway features without changing trading flow.</small>
+                </div>
+                <button aria-label="Close membership dialog" className="modal-close-button" type="button" disabled={loading} onClick={() => setOpen(false)}>
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="membership-testnet-banner">
+                <span>TESTNET</span>
+                <b>{paymentNetworkLabel}</b>
+                <small>Membership is currently unlocked with testnet USDC only. Do not send mainnet USDC or Polygon USDC to this payment flow.</small>
+              </div>
+              <div className="membership-summary">
+                <div>
+                  <span>Current plan</span>
+                  <b>{isPremium ? 'Premium' : 'Free'}</b>
+                </div>
+                <div>
+                  <span>Valid until</span>
+                  <b>{visibleMembership?.expiresAt ? formatDateTime(visibleMembership.expiresAt) : 'No paid plan'}</b>
+                </div>
+              </div>
+              <div className="membership-benefit-grid">
+                <div className="membership-benefit-card">
+                  <div className="membership-benefit-title">
+                    <span>Free</span>
+                    <b>Included</b>
+                  </div>
+                  <ul>
+                    <li><CheckCircle2 size={15} /> DeepSeek v4 Flash inference</li>
+                    <li><CheckCircle2 size={15} /> 1-layer causal market exploration</li>
+                    <li><CheckCircle2 size={15} /> Market network, scripts, and trading flow</li>
+                  </ul>
+                </div>
+                <div className="membership-benefit-card premium">
+                  <div className="membership-benefit-title">
+                    <span>Premium</span>
+                    <b>Arc USDC</b>
+                  </div>
+                  <ul>
+                    <li><CheckCircle2 size={15} /> DeepSeek v4 Pro inference</li>
+                    <li><CheckCircle2 size={15} /> 2-3 layer causal reasoning paths</li>
+                    <li><CheckCircle2 size={15} /> Premium AI settings without changing trading custody</li>
+                  </ul>
+                </div>
+              </div>
+              {!auth.isAuthenticated ? (
+                <button className="primary-button full-width" type="button" onClick={() => void handleAuthenticate()}>
+                  {auth.isConnected ? 'Sign in to upgrade' : 'Connect wallet to upgrade'}
+                </button>
+              ) : null}
+              {paymentsDisabled ? (
+                <div className="status-note warning wallet-status-note">Arc Testnet USDC payments are not enabled on this backend.</div>
+              ) : null}
+              {displayError ? <div className="status-note error wallet-status-note">{displayError}</div> : null}
+              {paymentStatus ? <div className="status-note wallet-status-note">{paymentStatus}</div> : null}
+              {pendingPayment ? (
+                <button className="outline-button full-width" disabled={loading} type="button" onClick={() => void handleResumePayment()}>
+                  Resume verification for {pendingPayment.amountUsd} USDC
+                </button>
+              ) : null}
+              <div className="membership-plan-head">
+                <span>Premium plans</span>
+                {paymentInfo ? <small>Paid in testnet {paymentInfo.currency} on {paymentNetworkLabel}</small> : <small>Loading plan availability</small>}
+              </div>
+              <div className="membership-plan-list">
+                {plans.map((plan) => (
+                  <button
+                    className="membership-plan"
+                    disabled={loading || paymentsDisabled}
+                    key={plan.sku}
+                    type="button"
+                    onClick={() => void (auth.isAuthenticated ? handlePay(plan.sku) : handleAuthenticate())}
+                  >
+                    <span>
+                      <b>{plan.label}</b>
+                      <small>{plan.durationDays} days - {planActionLabel}</small>
+                    </span>
+                    <strong>{plan.amountUsd} USDC</strong>
+                  </button>
+                ))}
+              </div>
+              {plans.length === 0 ? (
+                <div className="membership-empty-note">
+                  {catalogLoading ? 'Loading Arc USDC plans...' : 'Premium plans are temporarily unavailable. Free inference remains available.'}
+                </div>
+              ) : null}
+              <div className="soft-note">
+                This payment unlocks membership content only. It does not place a Polymarket order and does not authorize Causeway to trade for you.
+              </div>
+              {paymentTxHash ? (
+                <a className="link-button" href={arcExplorerTx(paymentTxHash)} rel="noreferrer" target="_blank">
+                  View Arc transaction <ExternalLink size={14} />
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </BodyPortal>
+      ) : null}
+    </div>
   )
 }
 
@@ -4009,11 +4634,11 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   const [quickSetupLogs, setQuickSetupLogs] = useState<string[]>([])
 
   const ensureTradingToken = useCallback(async () => {
-    if (!auth.isConnected) throw new Error('请先连接钱包。')
+    if (!auth.isConnected) throw new Error(copy('Connect your wallet first.', '请先连接钱包。'))
     if (!auth.isAuthenticated) await auth.signIn()
     const session = readStoredAuthSession()
     const token = session?.accessToken ?? auth.accessToken
-    if (!token) throw new Error('钱包认证尚未完成，请先签名登录。')
+    if (!token) throw new Error(copy('Wallet authentication is not complete. Sign in with your wallet first.', '钱包认证尚未完成，请先签名登录。'))
     return token
   }, [auth])
 
@@ -4150,15 +4775,15 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     const walletAddress = readStoredAuthSession()?.walletAddress ?? auth.walletAddress
     const asset = supportedAssets.find((item) => assetOptionKey(item) === withdrawAssetKey)
     if (!amountUsd) {
-      setBridgeError('请输入有效的提现金额。')
+      setBridgeError(copy('Enter a valid withdrawal amount.', '请输入有效的提现金额。'))
       return
     }
     if (!asset) {
-      setBridgeError('请选择接收链和接收代币。')
+      setBridgeError(copy('Select the receiving chain and token.', '请选择接收链和接收代币。'))
       return
     }
     if (!withdrawRecipient.trim()) {
-      setBridgeError('请输入收款地址。')
+      setBridgeError(copy('Enter a recipient address.', '请输入收款地址。'))
       return
     }
     if (withdrawAvailable != null && amountUsd > withdrawAvailable + Number.EPSILON) {
@@ -4166,7 +4791,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       return
     }
     if (!walletAddress) {
-      setBridgeError('缺少已连接的钱包地址，请重新登录。')
+      setBridgeError(copy('Connected wallet address is missing. Sign in again.', '缺少已连接的钱包地址，请重新登录。'))
       return
     }
     setIsLoadingBridge(true)
@@ -4353,8 +4978,8 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
             <div className="wallet-modal bridge-wallet-modal" role="dialog" aria-modal="true" aria-label="Wallet funds" onMouseDown={(event) => event.stopPropagation()}>
               <div className="wallet-modal-head">
                 <div>
-                  <span><WalletCards size={18} /> 钱包资金</span>
-                  <small>通过 Polymarket Bridge API 生成充值和提现地址；交易准备使用 Deposit Wallet + POLY_1271。</small>
+                  <span><WalletCards size={18} /> {copy('Wallet Funds', '钱包资金')}</span>
+                  <small>{copy('Manage deposit, withdrawal, and trading wallet setup for Polymarket orders.', '管理 Polymarket 下单所需的充值、提现和交易钱包准备。')}</small>
                 </div>
                 <button className="modal-close-button" type="button" onClick={() => setWalletOpen(false)}>×</button>
               </div>
@@ -4368,9 +4993,9 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               {bridgeError ? <div className="status-note error wallet-status-note">{bridgeError}</div> : null}
 
               <div className="bridge-wallet-tabs">
-                <button className={walletTab === 'deposit' ? 'active' : ''} type="button" onClick={() => setWalletTab('deposit')}>充值</button>
-                <button className={walletTab === 'withdraw' ? 'active' : ''} type="button" onClick={() => setWalletTab('withdraw')}>提现</button>
-                <button className={walletTab === 'trade' ? 'active' : ''} type="button" onClick={() => setWalletTab('trade')}>交易准备</button>
+                <button className={walletTab === 'deposit' ? 'active' : ''} type="button" onClick={() => setWalletTab('deposit')}>{copy('Deposit', '充值')}</button>
+                <button className={walletTab === 'withdraw' ? 'active' : ''} type="button" onClick={() => setWalletTab('withdraw')}>{copy('Withdraw', '提现')}</button>
+                <button className={walletTab === 'trade' ? 'active' : ''} type="button" onClick={() => setWalletTab('trade')}>{copy('Trading Setup', '交易准备')}</button>
               </div>
 
               {walletTab === 'deposit' ? (
@@ -4413,14 +5038,14 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                     </div>
                   ) : null}
                   <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected} type="button" onClick={() => void handleCreateDeposit()}>
-                    {isLoadingBridge ? '加载中...' : bridgeDeposit ? '刷新充值地址' : '加载官方充值地址'}
+                    {isLoadingBridge ? copy('Loading...', '加载中...') : bridgeDeposit ? copy('Refresh Deposit Address', '刷新充值地址') : copy('Load Official Deposit Address', '加载官方充值地址')}
                   </button>
                   <div className="bridge-single-address">
                     <span>Your Deposit Address</span>
-                    <b>{selectedDepositAddress ?? '还没有生成地址。'}</b>
+                    <b>{selectedDepositAddress ?? copy('No address generated yet.', '还没有生成地址。')}</b>
                     <button className="outline-button" disabled={!selectedDepositAddress} type="button" onClick={() => void handleCopy(selectedDepositAddress)}>
                       <Copy size={15} />
-                      {copiedAddress === selectedDepositAddress ? '已复制' : 'Copy Address'}
+                      {copiedAddress === selectedDepositAddress ? copy('Copied', '已复制') : 'Copy Address'}
                     </button>
                     <button className="outline-button" disabled={!selectedDepositAddress} type="button" onClick={() => void handleCheckStatus(selectedDepositAddress)}>
                       <Activity size={15} />
@@ -4438,8 +5063,8 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               {walletTab === 'withdraw' ? (
                 <div className="deposit-path-card">
                   <div className="deposit-path-head">
-                    <span><ArrowRight size={16} /> 转移 pUSD</span>
-                    <small>从当前 Polymarket 钱包直接转出 pUSD，不再生成 Bridge 提现地址。</small>
+                    <span><ArrowRight size={16} /> {copy('Transfer pUSD', '转移 pUSD')}</span>
+                    <small>{copy('Transfer pUSD directly from the current Polymarket wallet without creating a separate Bridge withdrawal address.', '从当前 Polymarket 钱包直接转出 pUSD，不再生成 Bridge 提现地址。')}</small>
                   </div>
                   <div className="withdraw-available-panel">
                     <span>Deposit Wallet available</span>
@@ -4468,21 +5093,21 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                     </label>
                   </div>
                   <label className="bridge-field">
-                    <span>转账金额（美元）</span>
+                    <span>{copy('Transfer Amount (USD)', '转账金额（美元）')}</span>
                     <div className="bridge-input-action">
                       <input className="bridge-input" inputMode="decimal" value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} placeholder="0.00" />
                       <button disabled={withdrawAvailable == null} type="button" onClick={() => setWithdrawAmount(withdrawAvailable != null ? withdrawAvailable.toFixed(2) : '')}>Max</button>
                     </div>
                   </label>
                   <label className="bridge-field">
-                    <span>目标地址</span>
+                    <span>{copy('Recipient Address', '目标地址')}</span>
                     <div className="bridge-input-action">
                       <input className="bridge-input" value={withdrawRecipient} onChange={(event) => setWithdrawRecipient(event.target.value)} placeholder="0x..." />
-                      <button type="button" onClick={() => setWithdrawRecipient(auth.walletAddress ?? '')}>使用关联钱包</button>
+                      <button type="button" onClick={() => setWithdrawRecipient(auth.walletAddress ?? '')}>{copy('Use Connected Wallet', '使用关联钱包')}</button>
                     </div>
                   </label>
                   <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected || withdrawAvailable == null} type="button" onClick={() => void handleSubmitWithdrawTransfer()}>
-                    {isLoadingBridge ? '提交中...' : '提交转账'}
+                    {isLoadingBridge ? copy('Submitting...', '提交中...') : copy('Submit Transfer', '提交转账')}
                   </button>
                 </div>
               ) : null}
@@ -4508,8 +5133,8 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               {bridgeStatus ? (
                 <div className="deposit-path-card">
                   <div className="deposit-path-head">
-                    <span><Activity size={16} /> Bridge 状态</span>
-                    <small>{statusAddress ? shortAddress(statusAddress) : '最近查询'}</small>
+                    <span><Activity size={16} /> {copy('Bridge Status', 'Bridge 状态')}</span>
+                    <small>{statusAddress ? shortAddress(statusAddress) : copy('Recent query', '最近查询')}</small>
                   </div>
                   <div className="bridge-status-list">
                     {bridgeStatus.transactions.length ? bridgeStatus.transactions.map((transaction, index) => (
@@ -4517,7 +5142,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                         <b>{transaction.status ?? 'UNKNOWN'}</b>
                         <small>{transaction.fromAmountBaseUnit ?? '-'} · {transaction.fromChainId ?? '?'} → {transaction.toChainId ?? '?'}</small>
                       </div>
-                    )) : <small>暂无交易记录。</small>}
+                    )) : <small>{copy('No transactions yet.', '暂无交易记录。')}</small>}
                   </div>
                 </div>
               ) : null}
@@ -4545,7 +5170,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               <div className="deposit-path-card recommended">
                 <div className="deposit-path-head">
                   <span><Bot size={16} /> Prepare Your Trading Wallet</span>
-                  <small>New wallets need this once before real Polymarket trading. You stay in control of every required wallet signature.</small>
+                  <small>New wallets need this once before placing Polymarket orders. You stay in control of every required wallet signature.</small>
                 </div>
                 <div className="quick-setup-console">
                   {(quickSetupLogs.length ? quickSetupLogs : ['Ready to check your account status.']).map((line, index) => (
@@ -4570,7 +5195,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               <div className="wallet-modal-head">
                 <div>
                   <span><ListOrdered size={18} /> Open Orders</span>
-                  <small>Live limit orders from Polymarket CLOB. Cancel here if you no longer want the order resting on the book.</small>
+                  <small>Live limit orders from Polymarket. Cancel here if you no longer want the order resting on the book.</small>
                 </div>
                 <button className="modal-close-button" type="button" onClick={() => setOrdersOpen(false)}>×</button>
               </div>
@@ -4629,7 +5254,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               <div className="wallet-modal-head">
                 <div>
                   <span><Activity size={18} /> Activity</span>
-                  <small>当前浏览器会话内的钱包准备、Bridge 和订单操作。</small>
+                  <small>{copy('Wallet setup, Bridge, and order activity in this browser session.', '当前浏览器会话内的钱包准备、Bridge 和订单操作。')}</small>
                 </div>
                 <button className="modal-close-button" type="button" onClick={() => setActivityOpen(false)}>×</button>
               </div>
@@ -4692,22 +5317,18 @@ function uniqueBridgeChains(assets: BridgeSupportedAsset[]) {
 }
 
 function ResourceMenu() {
+  const visibleResources = externalResources.filter(
+    (resource): resource is ExternalResource & { href: string } => Boolean(resource.href) && (!resource.locale || resource.locale === uiLocale),
+  )
+
   return (
     <div className="resource-menu">
       <button className="resource-trigger" type="button">
         <ExternalLink size={16} />
-        白皮书
+        {copy('Whitepaper', '白皮书')}
       </button>
       <div className="resource-popover">
-        {externalResources.map((resource) => {
-          if (!resource.href) {
-            return (
-              <span className="resource-item pending" key={resource.id}>
-                <b>{resource.label}</b>
-                <small>{resource.description}</small>
-              </span>
-            )
-          }
+        {visibleResources.map((resource) => {
           return (
             <a className="resource-item" href={resource.href} key={resource.id} rel="noreferrer" target="_blank">
               <b>{resource.label}</b>
@@ -4723,7 +5344,7 @@ function ResourceMenu() {
 function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) => void }) {
   const searchAreaRef = useRef<HTMLDivElement | null>(null)
   const [activeCategory, setActiveCategory] = useState('hot')
-  const [categories, setCategories] = useState<ApiMarketCategory[]>(fallbackCategories)
+  const [categories, setCategories] = useState<ApiMarketCategory[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedSearch, setSelectedSearch] = useState<MarketSearchResult | null>(null)
   const [searchResults, setSearchResults] = useState<MarketSearchResult[]>([])
@@ -4733,10 +5354,10 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
   const [networkMarkets, setNetworkMarkets] = useState<Market[]>([])
   const [networkEdges, setNetworkEdges] = useState<ApiMarketEdge[]>([])
   const [networkSummary, setNetworkSummary] = useState<NetworkSummary>({
-    total: markets.length,
+    total: 0,
     totalEvents: null,
-    totalMarkets: markets.length,
-    returned: markets.length,
+    totalMarkets: 0,
+    returned: 0,
     limit: 25,
     hasMore: false,
     category: 'hot',
@@ -4761,7 +5382,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
         if (data.categories.length) setCategories(data.categories)
       })
       .catch(() => {
-        if (!controller.signal.aborted) setCategories(fallbackCategories)
+        if (!controller.signal.aborted) setCategories([])
       })
     return () => controller.abort()
   }, [])
@@ -4860,7 +5481,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       .catch((fetchError: Error) => {
         if (cancelled) return
         if (fetchError.name === 'AbortError' && !timedOut) return
-        setError(timedOut ? '市场网络加载超时，请稍后重试。' : fetchError.message)
+        setError(timedOut ? copy('Market network timed out. Please try again later.', '市场网络加载超时，请稍后重试。') : fetchError.message)
         setNetworkMarkets([])
         setNetworkEdges([])
       })
@@ -4899,7 +5520,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
           <div className="searchbox">
             <Search size={18} />
             <input
-              aria-label="搜索市场、事件或主题"
+              aria-label={copy('Search markets, events, or topics', '搜索市场、事件或主题')}
               onChange={(event) => {
                 const nextValue = event.target.value
                 setSelectedSearch(null)
@@ -4918,12 +5539,12 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
                 if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0])
                 if (event.key === 'Escape') setSearchOpen(false)
               }}
-              placeholder="搜索市场、事件、主题或粘贴 Polymarket 链接..."
+              placeholder={copy('Search markets, events, topics, or paste a Polymarket link...', '搜索市场、事件、主题或粘贴 Polymarket 链接...')}
               type="text"
               value={searchQuery}
             />
             {searchQuery ? (
-              <button className="search-clear" type="button" aria-label="清空搜索" onClick={clearSearch}>
+              <button className="search-clear" type="button" aria-label={copy('Clear search', '清空搜索')} onClick={clearSearch}>
                 ×
               </button>
             ) : null}
@@ -4963,7 +5584,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       </div>
       <div className="network-stage">
         <NetworkMap edges={networkEdges} loading={loading} markets={networkMarkets} onConfirmMarket={onConfirmMarket} />
-        {error ? <div className="network-error">后端数据暂不可用：{error}</div> : null}
+        {error ? <div className="network-error">{copy(`Backend data is temporarily unavailable: ${error}`, `后端数据暂不可用：${error}`)}</div> : null}
       </div>
     </section>
   )
@@ -5052,16 +5673,16 @@ function MarketDetail({
               <div className="market-page-meta">
                 <span>{displayMarket.officialCategory || displayMarket.category}</span>
                 {eventMarkets.length > 1 ? <span>{displayMarket.eventTitle || eventSummaryMarket.title}</span> : displayMarket.eventTitle ? <span>{displayMarket.eventTitle}</span> : null}
-                {eventMarkets.length > 1 ? <span>{detailMarkets.length} 个盘口</span> : null}
+                {eventMarkets.length > 1 ? <span>{copy(`${detailMarkets.length} market${detailMarkets.length === 1 ? '' : 's'}`, `${detailMarkets.length} 个盘口`)}</span> : null}
               </div>
               <h1>{displayMarket.title}</h1>
             </div>
             <div className="market-head-actions">
-              <button className="outline-button square" type="button" aria-label="收藏">
+              <button className="outline-button square" type="button" aria-label={copy('Save market', '收藏')}>
                 <Star size={18} />
               </button>
               <button className="outline-button" type="button">
-                <Share2 size={17} /> 分享
+                <Share2 size={17} /> {copy('Share', '分享')}
               </button>
             </div>
           </div>
@@ -5069,20 +5690,20 @@ function MarketDetail({
           <Card className="market-live-card">
             <div className="market-live-strip">
               <div>
-                <span>{eventMarkets.length > 1 ? '领先盘口' : '当前概率'}</span>
+                <span>{eventMarkets.length > 1 ? copy('Leading Market', '领先盘口') : copy('Current Probability', '当前概率')}</span>
                 <strong>{primaryMarket.price}%</strong>
                 <em className={primaryMarket.change >= 0 ? 'green-text' : 'red-text'}>{eventMarkets.length > 1 ? marketDisplayLabel(primaryMarket) : marketChangeText(primaryMarket)}</em>
               </div>
               <div>
-                <span>成交量</span>
+                <span>{copy('Volume', '成交量')}</span>
                 <strong>{displayMarket.volume}</strong>
               </div>
               <div>
-                <span>流动性</span>
+                <span>{copy('Liquidity', '流动性')}</span>
                 <strong>{formatCompactMoney(displayMarket.liquidity)}</strong>
               </div>
               <div>
-                <span>结束时间</span>
+                <span>{copy('End Date', '结束时间')}</span>
                 <strong>{formatDate(displayMarket.endDate)}</strong>
               </div>
             </div>
@@ -5101,37 +5722,39 @@ function MarketDetail({
 
         <aside className="market-detail-side">
           <Card className="market-side-card">
-            <SectionHeader title="规则说明" />
+            <SectionHeader title={copy('Rules', '规则说明')} />
             <div className="market-rule-copy">
               <p>{descriptionCopy}</p>
               {ruleCopy !== descriptionCopy ? <p>{ruleCopy}</p> : null}
             </div>
           </Card>
           <Card className="market-side-card">
-            <SectionHeader title="市场信息" />
+            <SectionHeader title={copy('Market Info', '市场信息')} />
             <InfoTable
               rows={[
-                ['市场 ID', market.id],
-                ['事件', displayMarket.eventTitle || '未提供'],
-                ['到期时间', formatDate(displayMarket.endDate)],
-                ['类别', displayMarket.category],
-                ['来源', 'Polymarket'],
-                ['合约类型', detailMarkets.length > 1 ? 'Event 多盘口' : '二元事件'],
-                ['交易状态', detailMarkets.some((item) => item.acceptingOrders !== false) ? '可交易' : '暂停接单'],
-                ['最小下单', market.orderMinSize ? `${market.orderMinSize}` : '未提供'],
-                ['最小报价单位', market.tickSize ? `${market.tickSize}` : '未提供'],
-                ['同步时间', formatDate(displayMarket.syncedAt)],
+                [copy('Market ID', '市场 ID'), market.id],
+                [copy('Event', '事件'), displayMarket.eventTitle || copy('Not provided', '未提供')],
+                [copy('End Date', '到期时间'), formatDate(displayMarket.endDate)],
+                [copy('Category', '类别'), displayMarket.category],
+                [copy('Source', '来源'), 'Polymarket'],
+                [copy('Contract Type', '合约类型'), detailMarkets.length > 1 ? copy('Event with multiple markets', 'Event 多盘口') : copy('Binary market', '二元事件')],
+                [copy('Trading Status', '交易状态'), detailMarkets.some((item) => item.acceptingOrders !== false) ? copy('Tradable', '可交易') : copy('Orders paused', '暂停接单')],
+                [copy('Minimum Order', '最小下单'), market.orderMinSize ? `${market.orderMinSize}` : copy('Not provided', '未提供')],
+                [copy('Minimum Tick', '最小报价单位'), market.tickSize ? `${market.tickSize}` : copy('Not provided', '未提供')],
+                [copy('Synced At', '同步时间'), formatDate(displayMarket.syncedAt)],
               ]}
             />
           </Card>
           <Card className="market-side-card">
-            <SectionHeader title="相关市场" />
+            <SectionHeader title={copy('Related Markets', '相关市场')} />
             <RelatedMarketList currentMarket={market} />
           </Card>
         </aside>
       </div>
       <button className="primary-action" type="button" onClick={() => onInfer(inferenceMarket, activeSelectedOutcome?.outcomeId ?? null)} disabled={!inferenceReady}>
-        <BrainCircuit size={20} /> {activeSelectedOutcome ? `设定 ${activeSelectedOutcome.label} 作为推演节点` : '先选择 Yes / No 推演方向'}
+        <BrainCircuit size={20} /> {activeSelectedOutcome
+          ? copy(`Use ${activeSelectedOutcome.label} as inference root`, `设定 ${activeSelectedOutcome.label} 作为推演节点`)
+          : copy('Select an outcome to start inference', '先选择 Yes / No 推演方向')}
       </button>
     </section>
   )
@@ -5139,38 +5762,28 @@ function MarketDetail({
 
 function scopeLabel(scope: InferenceScope) {
   return {
-    news: '相关新闻',
-    markets: '相关市场',
-    social: '社交媒体',
-    all: '全部',
+    markets: copy('Related Markets', '相关市场'),
+    all: copy('Polymarket Context', 'Polymarket 上下文'),
   }[scope]
 }
 
 function timeRangeLabel(range: InferenceSettingsState['timeRange'], market: Market) {
   return {
-    until_close: `至市场结束：${formatDate(market.endDate)}`,
-    '24h': '最近 24 小时',
-    '7d': '最近 7 天',
-    '30d': '最近 30 天',
+    until_close: copy(`Until market close: ${formatDate(market.endDate)}`, `至市场结束：${formatDate(market.endDate)}`),
+    '24h': copy('Last 24 hours', '最近 24 小时'),
+    '7d': copy('Last 7 days', '最近 7 天'),
+    '30d': copy('Last 30 days', '最近 30 天'),
   }[range]
 }
 
 function modelPreferenceLabel(model: InferenceModelPreference) {
-  return {
-    'mock-causeway-v1': 'Mock Causeway v1',
-    auto: 'DeepSeek（默认）',
-    'deepseek-v4-pro': 'DeepSeek v4 Pro',
-    'deepseek-v4-flash': 'DeepSeek v4 Flash',
-  }[model]
+  if (model === 'deepseek-v4-pro') return 'DeepSeek v4 Pro'
+  return 'DeepSeek v4 Flash'
 }
 
 function modelPreferenceHint(model: InferenceModelPreference) {
-  return {
-    'mock-causeway-v1': '使用本地 demo 推演，适合验证前后端流程',
-    auto: '使用后端默认模型，适合稳定推演',
-    'deepseek-v4-pro': '高质量推演，速度和成本高于 Flash',
-    'deepseek-v4-flash': '快速推演，适合日常分析和联调',
-  }[model]
+  if (model === 'deepseek-v4-pro') return 'Premium model for higher quality reasoning.'
+  return 'Free default model for standard inference.'
 }
 
 function modelPreferenceFromProviderModel(model: string): InferenceModelPreference | null {
@@ -5179,32 +5792,38 @@ function modelPreferenceFromProviderModel(model: string): InferenceModelPreferen
 }
 
 function inferenceModelOptions(capability: BackendInferenceCapability | null): InferenceModelPreference[] {
-  const options: InferenceModelPreference[] = ['auto']
+  const options: InferenceModelPreference[] = []
   for (const model of capability?.models ?? []) {
     const preference = modelPreferenceFromProviderModel(model)
     if (preference && !options.includes(preference)) options.push(preference)
   }
-  options.push('mock-causeway-v1')
-  return options
+  if (!options.includes('deepseek-v4-flash')) options.unshift('deepseek-v4-flash')
+  return options.sort((left, right) => modelSortWeight(left) - modelSortWeight(right))
+}
+
+function modelSortWeight(model: InferenceModelPreference) {
+  return model === 'deepseek-v4-flash' ? 0 : 1
+}
+
+function inferenceModelRequiresPremium(model: InferenceModelPreference) {
+  return model !== 'deepseek-v4-flash'
 }
 
 function confidenceModeLabel(mode: ConfidenceMode) {
   return {
-    broad: '更广覆盖',
-    balanced: '平衡（推荐）',
-    strict: '高置信',
+    broad: copy('Broad coverage', '更广覆盖'),
+    balanced: copy('Balanced (Recommended)', '平衡（推荐）'),
+    strict: copy('High confidence', '高置信'),
   }[mode]
 }
 
 function estimateInference(settings: InferenceSettingsState) {
-  const scopeCost = settings.scope === 'all' ? 12 : settings.scope === 'markets' ? 5 : 8
+  const scopeCost = settings.scope === 'all' ? 8 : 5
   const depthCost = settings.depth * 5
-  const modelCost = settings.modelPreference === 'mock-causeway-v1' ? 1 : settings.modelPreference === 'deepseek-v4-pro' ? 8 : 4
-  const minutes = settings.modelPreference === 'mock-causeway-v1'
-    ? '<1 分钟'
-    : settings.modelPreference === 'deepseek-v4-pro'
-      ? settings.depth === 3 ? '3-6 分钟' : '2-4 分钟'
-      : settings.depth === 3 ? '2-5 分钟' : '1-3 分钟'
+  const modelCost = settings.modelPreference === 'deepseek-v4-pro' ? 8 : 4
+  const minutes = settings.modelPreference === 'deepseek-v4-pro'
+    ? settings.depth === 3 ? '3-6 min' : '2-4 min'
+    : settings.depth === 3 ? '2-5 min' : '1-3 min'
   return { minutes, points: scopeCost + depthCost + modelCost }
 }
 
@@ -5212,12 +5831,14 @@ function InferenceSettings({
   auth,
   initialSettings,
   market,
+  membershipState,
   onBack,
   onStart,
 }: {
   auth: CausewayAuth
   initialSettings: InferenceSettingsState
   market: Market
+  membershipState: MembershipState
   onBack: () => void
   onStart: (settings: InferenceSettingsState) => void
 }) {
@@ -5236,7 +5857,7 @@ function InferenceSettings({
         setCapabilityError(null)
         setSettings((current) => {
           const options = inferenceModelOptions(nextCapability)
-          return options.includes(current.modelPreference) ? current : { ...current, modelPreference: 'auto' }
+          return options.includes(current.modelPreference) ? current : { ...current, modelPreference: 'deepseek-v4-flash' }
         })
       })
       .catch((error) => {
@@ -5253,8 +5874,13 @@ function InferenceSettings({
   }, [updateSettings])
   const estimate = estimateInference(settings)
   const canStartInference = Boolean(marketInferenceOutcome(market))
+  const isPremium = auth.isAuthenticated && membershipState.membership?.tier === 'premium'
+  const advancedModelLocked = inferenceModelRequiresPremium(settings.modelPreference) && !isPremium
+  const advancedDepthLocked = settings.depth > 1 && !isPremium
+  const advancedSettingsLocked = advancedModelLocked || advancedDepthLocked
   const handleStartInference = useCallback(() => {
     if (!canStartInference) return
+    if (advancedSettingsLocked) return
     if (!auth.isConnected) {
       openConnectModal?.()
       return
@@ -5264,54 +5890,52 @@ function InferenceSettings({
       return
     }
     onStart(settings)
-  }, [auth, canStartInference, onStart, openConnectModal, settings])
+  }, [advancedSettingsLocked, auth, canStartInference, onStart, openConnectModal, settings])
   const scopeOptions: Array<[InferenceScope, string, string]> = [
-    ['news', '相关新闻', '新闻报道和媒体'],
-    ['markets', '相关市场', 'Polymarket 市场'],
-    ['social', '社交媒体', '社交讨论和情绪'],
-    ['all', '全部', '所有可用数据源'],
+    ['markets', copy('Related Markets', '相关市场'), copy('Related Polymarket markets only', '仅相关 Polymarket 市场')],
+    ['all', copy('Polymarket Context', 'Polymarket 上下文'), copy('Root market, same-event markets, and related markets', '根市场、同事件市场和相关市场')],
   ]
   const modelOptions = inferenceModelOptions(capability)
   const capabilityHint = capabilityError
-    ? `模型能力读取失败：${capabilityError}`
+    ? copy(`Model capability check failed: ${capabilityError}`, `模型能力读取失败：${capabilityError}`)
     : capability?.status === 'available'
-      ? `默认 ${capability.defaultModel ?? '未配置'}`
+      ? copy(`Default ${capability.defaultModel ?? 'Not configured'}`, `默认 ${capability.defaultModel ?? '未配置'}`)
       : capability?.reason ?? modelPreferenceHint(settings.modelPreference)
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId) ?? market.outcomes?.find((outcome) => outcome.outcomeId)
   return (
     <section className="page">
       <BackButton onClick={onBack} />
-      <PageTitle title="AI 推演设置" subtitle="配置推演参数，AI 将为您分析事件的潜在影响。" />
+      <PageTitle title={copy('AI Inference Settings', 'AI 推演设置')} subtitle={copy('Configure the inference parameters before AI analyzes potential market impacts.', '配置推演参数，AI 将为您分析事件的潜在影响。')} />
       <div className="content-grid settings-grid">
         <Card className="span-8 settings-panel">
-          <SectionHeader title="根节点市场" />
+          <SectionHeader title={copy('Root Market', '根节点市场')} />
           <div className="root-market-card">
             <MarketIcon market={market} size="medium" />
             <div>
               <h3>{market.title}</h3>
               <p>{marketSubtitle(market)}</p>
-              {selectedOutcome ? <span className="root-outcome-pill">推演方向：{selectedOutcome.label}</span> : null}
+              {selectedOutcome ? <span className="root-outcome-pill">{copy(`Inference direction: ${selectedOutcome.label}`, `推演方向：${selectedOutcome.label}`)}</span> : null}
             </div>
             <strong>{market.price}%</strong>
             <span className={market.change >= 0 ? 'green-text' : 'red-text'}>{marketChangeText(market)}</span>
             <div className="mini-stat">
               <b>{market.volume}</b>
-              <span>成交量</span>
+              <span>{copy('Volume', '成交量')}</span>
             </div>
             <div className="mini-stat">
               <b>{formatCompactMoney(market.liquidity)}</b>
-              <span>流动性</span>
+              <span>{copy('Liquidity', '流动性')}</span>
             </div>
           </div>
           <Divider />
-          <SectionHeader title="推演范围" note="选择要纳入分析的数据源范围。" />
-          <div className="option-grid four">
+          <SectionHeader title={copy('Inference Scope', '推演范围')} note={copy('Choose the data context to include in the analysis.', '选择要纳入分析的数据源范围。')} />
+          <div className="option-grid two">
             {scopeOptions.map(([scope, title, subtitle], index) => (
               <button
                 className={settings.scope === scope ? 'option-card selected' : 'option-card'}
                 key={scope}
                 type="button"
-                onClick={() => updateSettings({ scope, includeWebSearch: scope !== 'markets' })}
+                onClick={() => updateSettings({ scope, includeWebSearch: false })}
               >
                 <span className="option-icon">{index + 1}</span>
                 <b>{title}</b>
@@ -5322,47 +5946,57 @@ function InferenceSettings({
           <Divider />
           <div className="form-grid">
             <label className="field">
-              <span>时间周期</span>
+              <span>{copy('Time Range', '时间周期')}</span>
               <select value={settings.timeRange} onChange={(event) => updateSettings({ timeRange: event.target.value as InferenceSettingsState['timeRange'] })}>
-                <option value="until_close">至市场结束</option>
-                <option value="24h">最近 24 小时</option>
-                <option value="7d">最近 7 天</option>
-                <option value="30d">最近 30 天</option>
+                <option value="until_close">{copy('Until market close', '至市场结束')}</option>
+                <option value="24h">{copy('Last 24 hours', '最近 24 小时')}</option>
+                <option value="7d">{copy('Last 7 days', '最近 7 天')}</option>
+                <option value="30d">{copy('Last 30 days', '最近 30 天')}</option>
               </select>
               <small>{timeRangeLabel(settings.timeRange, market)}</small>
             </label>
             <label className="field">
-              <span>AI 模型</span>
+              <span>{copy('AI Model', 'AI 模型')}</span>
               <select value={settings.modelPreference} onChange={(event) => updateSettings({ modelPreference: event.target.value as InferenceModelPreference })}>
                 {modelOptions.map((model) => (
-                  <option key={model} value={model}>{modelPreferenceLabel(model)}</option>
+                  <option disabled={inferenceModelRequiresPremium(model) && !isPremium} key={model} value={model}>
+                    {modelPreferenceLabel(model)}{inferenceModelRequiresPremium(model) ? ' - Premium' : ' - Free'}
+                  </option>
                 ))}
               </select>
               <small>{modelPreferenceHint(settings.modelPreference)} · {capabilityHint}</small>
             </label>
             <label className="field">
-              <span>置信度偏好</span>
+              <span>{copy('Confidence Preference', '置信度偏好')}</span>
               <select value={settings.confidenceMode} onChange={(event) => selectConfidenceMode(event.target.value as ConfidenceMode)}>
-                <option value="broad">更广覆盖</option>
-                <option value="balanced">平衡（推荐）</option>
-                <option value="strict">高置信</option>
+                <option value="broad">{copy('Broad coverage', '更广覆盖')}</option>
+                <option value="balanced">{copy('Balanced (Recommended)', '平衡（推荐）')}</option>
+                <option value="strict">{copy('High confidence', '高置信')}</option>
               </select>
-              <small>{confidenceModeLabel(settings.confidenceMode)} · 阈值 {settings.confidenceThreshold.toFixed(2)}</small>
+              <small>{confidenceModeLabel(settings.confidenceMode)} · {copy('Threshold', '阈值')} {settings.confidenceThreshold.toFixed(2)}</small>
             </label>
           </div>
-          <SectionHeader title="推演层数" note="控制 AI 生成的解释和洞察的详细程度。" />
+          <SectionHeader title={copy('Inference Depth', '推演层数')} note={copy('Control how much explanation and downstream reasoning AI generates.', '控制 AI 生成的解释和洞察的详细程度。')} />
           <div className="segmented">
             {[1, 2, 3].map((depth) => (
-              <button className={settings.depth === depth ? 'active' : ''} key={depth} type="button" onClick={() => updateSettings({ depth: depth as InferenceDepth })}>{depth} 层</button>
+              <button
+                className={settings.depth === depth ? 'active' : ''}
+                disabled={depth > 1 && !isPremium}
+                key={depth}
+                type="button"
+                onClick={() => updateSettings({ depth: depth as InferenceDepth })}
+              >
+                {depth} layer{depth > 1 ? ' - Premium' : ' - Free'}
+              </button>
             ))}
           </div>
           <div className="range-block">
             <div className="range-label">
-              <span>置信度阈值</span>
+              <span>{copy('Confidence Threshold', '置信度阈值')}</span>
               <b>{settings.confidenceThreshold.toFixed(2)}</b>
             </div>
             <input
-              aria-label="置信度阈值"
+              aria-label={copy('Confidence threshold', '置信度阈值')}
               className="confidence-slider"
               max="0.85"
               min="0.1"
@@ -5375,63 +6009,74 @@ function InferenceSettings({
               <span style={{ width: `${(settings.confidenceThreshold / 0.85) * 100}%` }} />
             </div>
             <div className="range-scale">
-              <span>更广覆盖</span>
-              <span>平衡</span>
-              <span>高置信</span>
+              <span>{copy('Broad', '更广覆盖')}</span>
+              <span>{copy('Balanced', '平衡')}</span>
+              <span>{copy('Strict', '高置信')}</span>
             </div>
           </div>
           <div className="estimate-strip">
             <span>
-              <Bot size={18} /> 预计处理时间：{estimate.minutes}
+              <Bot size={18} /> {copy(`Estimated time: ${estimate.minutes}`, `预计处理时间：${estimate.minutes}`)}
             </span>
             <span>
-              <ShieldCheck size={18} /> 预计消耗积分：{estimate.points} 积分
+              <ShieldCheck size={18} /> {copy(`Estimated points: ${estimate.points}`, `预计消耗积分：${estimate.points} 积分`)}
             </span>
           </div>
           {!auth.isAuthenticated ? (
             <div className="soft-note auth-note">
               <ShieldCheck size={18} />
-              AI 推演需要先用钱包签名登录，后端会用 Bearer Token 保护你的脚本、订单和组合数据。
+              {copy('AI inference requires wallet sign-in. The backend protects your scripts, orders, and portfolio data with a bearer token.', 'AI 推演需要先用钱包签名登录，后端会用 Bearer Token 保护你的脚本、订单和组合数据。')}
             </div>
           ) : null}
           {!canStartInference ? (
             <div className="soft-note auth-note">
               <Info size={18} />
-              市场详情还在加载 outcome 数据，请返回详情页等待按钮变为可用后再启动推演。
+              {copy('Market outcome data is still loading. Return to details and wait until inference is available.', '市场详情还在加载 outcome 数据，请返回详情页等待按钮变为可用后再启动推演。')}
+            </div>
+          ) : null}
+          {advancedSettingsLocked ? (
+            <div className="soft-note auth-note">
+              <Star size={18} />
+              Premium membership is required for DeepSeek v4 Pro or inference deeper than 1 layer.
+            </div>
+          ) : null}
+          {auth.isAuthenticated && membershipState.error ? (
+            <div className="soft-note auth-note">
+              <Info size={18} />
+              Membership status is unavailable: {membershipState.error}
             </div>
           ) : null}
           <button
             className="primary-action inside"
             type="button"
             onClick={handleStartInference}
-            disabled={auth.isSigningIn || !canStartInference}
+            disabled={auth.isSigningIn || !canStartInference || advancedSettingsLocked}
           >
-            <Play size={18} /> 启动 AI 推演
+            <Play size={18} /> {copy('Start AI Inference', '启动 AI 推演')}
           </button>
         </Card>
         <div className="side-stack">
           <Card>
-            <SectionHeader title="推演设置预览" note="以下是您将要运行的推演配置摘要。" />
+            <SectionHeader title={copy('Settings Preview', '推演设置预览')} note={copy('Summary of the inference run you are about to start.', '以下是您将要运行的推演配置摘要。')} />
             <PreviewList market={market} settings={settings} />
           </Card>
           <Card>
-            <SectionHeader title="预期分析内容" />
+            <SectionHeader title={copy('Expected Analysis', '预期分析内容')} />
             <Checklist
               items={[
-                '直接影响的相关市场变化',
-                '中长期因果链路与传导路径',
-                '社交媒体情绪与观点变化',
-                '关键事件节点与时间线',
-                '风险因素与不确定性分析',
+                copy('Directly affected related markets', '直接影响的相关市场变化'),
+                copy('Medium and long-term causal pathways', '中长期因果链路与传导路径'),
+                copy('Key event triggers and timeline', '关键事件节点与时间线'),
+                copy('Risk factors and uncertainty analysis', '风险因素与不确定性分析'),
               ]}
             />
           </Card>
           <Card className="tip-card">
-            <SectionHeader title="使用小贴士" />
+            <SectionHeader title={copy('Tips', '使用小贴士')} />
             <ul>
-              <li>范围越广，发现的潜在影响越多，但耗时越长。</li>
-              <li>建议使用 30%-50% 强度进行首次探索。</li>
-              <li>推演结果将基于历史数据和 AI 推理生成。</li>
+              <li>{copy('Broader scope can discover more potential impacts, but takes longer.', '范围越广，发现的潜在影响越多，但耗时越长。')}</li>
+              <li>{copy('Use balanced confidence for the first exploration.', '建议使用 30%-50% 强度进行首次探索。')}</li>
+              <li>{copy('Inference results are generated from market data and AI reasoning.', '推演结果将基于历史数据和 AI 推理生成。')}</li>
             </ul>
           </Card>
         </div>
@@ -5457,7 +6102,13 @@ function InferenceProgress({
   result: InferenceResult | null
   settings: InferenceSettingsState
 }) {
-  const steps = ['已选择根节点', '候选市场召回', '逐市场证据核实', 'AI 关联度打分', '生成因果脚本']
+  const steps = [
+    copy('Root selected', '已选择根节点'),
+    copy('Candidate retrieval', '候选市场召回'),
+    copy('Evidence verification', '逐市场证据核实'),
+    copy('AI relevance scoring', 'AI 关联度打分'),
+    copy('Causal script generation', '生成因果脚本'),
+  ]
   const [loading, setLoading] = useState(!result)
   const [error, setError] = useState<string | null>(null)
   const hasCurrentResult = result?.rootMarket?.id === market.id
@@ -5472,7 +6123,7 @@ function InferenceProgress({
     }
     if (!auth.isAuthenticated) {
       const timer = window.setTimeout(() => {
-        setError('请先连接钱包并签名登录，然后再启动 AI 推演。')
+        setError(copy('Connect and sign in with your wallet before starting AI inference.', '请先连接钱包并签名登录，然后再启动 AI 推演。'))
         setLoading(false)
       }, 0)
       return () => window.clearTimeout(timer)
@@ -5502,8 +6153,8 @@ function InferenceProgress({
     <section className="page">
       <BackButton onClick={onBack} />
       <PageTitle
-        title={hasCurrentResult ? 'AI 推演已完成' : 'AI 推演进行中...'}
-        subtitle={`正在基于「${market.title}」核实相关市场并构建因果链条。`}
+        title={hasCurrentResult ? copy('AI Inference Complete', 'AI 推演已完成') : copy('AI Inference Running...', 'AI 推演进行中...')}
+        subtitle={copy(`Verifying related markets and building causal paths from "${market.title}".`, `正在基于「${market.title}」核实相关市场并构建因果链条。`)}
       />
       <div className="progress-steps">
         {steps.map((step, index) => {
@@ -5513,7 +6164,7 @@ function InferenceProgress({
           <div className={done ? 'step done' : current ? 'step current' : 'step'} key={step}>
             <div className="step-circle">{done ? <CheckCircle2 size={26} /> : index + 1}</div>
             <strong>{step}</strong>
-            <span>{done ? '已完成' : current ? '处理中' : `等待中`}</span>
+            <span>{done ? copy('Complete', '已完成') : current ? copy('Processing', '处理中') : copy('Waiting', '等待中')}</span>
           </div>
         )})}
       </div>
@@ -5521,36 +6172,35 @@ function InferenceProgress({
         <span style={{ width: `${progress}%` }} />
       </div>
       <div className="progress-caption">
-        <span>{hasCurrentResult ? '推演完成' : error ? '推演异常' : '推演中...'} <b>{progress}%</b></span>
-        <span>{result?.model ? `模型：${result.model}` : 'DeepSeek 正在核实候选市场与外部信息'}</span>
+        <span>{hasCurrentResult ? copy('Inference complete', '推演完成') : error ? copy('Inference error', '推演异常') : copy('Inference running...', '推演中...')} <b>{progress}%</b></span>
+        <span>{result?.model ? copy(`Model: ${result.model}`, `模型：${result.model}`) : copy('DeepSeek is verifying Polymarket candidate markets', 'DeepSeek 正在核实 Polymarket 候选市场')}</span>
       </div>
-      {error ? <div className="status-note error">推演请求失败：{error}</div> : null}
-      {result?.status === 'fallback' ? <div className="status-note warning">当前 AI 调用不可用，已使用本地市场数据生成结构化推演。{result.error ? `原因：${result.error}` : null}</div> : null}
+      {error ? <div className="status-note error">{copy(`Inference request failed: ${error}`, `推演请求失败：${error}`)}</div> : null}
       <div className="content-grid progress-grid">
         <Card>
           <SectionHeader
-            title="AI 核实后的相关市场"
-            note={result?.verification ? `候选 ${result.verification.candidateCount || 0} · 保留 ${result.verification.verifiedCount || result.relatedMarkets.length} · 排除 ${result.verification.excludedCount || 0}` : undefined}
+            title={copy('AI-Verified Related Markets', 'AI 核实后的相关市场')}
+            note={result?.verification ? copy(`Candidates ${result.verification.candidateCount || 0} · Kept ${result.verification.verifiedCount || result.relatedMarkets.length} · Excluded ${result.verification.excludedCount || 0}`, `候选 ${result.verification.candidateCount || 0} · 保留 ${result.verification.verifiedCount || result.relatedMarkets.length} · 排除 ${result.verification.excludedCount || 0}`) : undefined}
           />
           <DiscoveryTable market={market} relatedMarkets={displayedRelatedMarkets} />
           <button className="link-button" type="button">
-            {displayedRelatedMarkets ? `共 ${displayedRelatedMarkets.length} 个已核实市场` : '正在核实真实市场'} <ArrowRight size={15} />
+            {displayedRelatedMarkets ? copy(`${displayedRelatedMarkets.length} verified markets`, `共 ${displayedRelatedMarkets.length} 个已核实市场`) : copy('Verifying live markets', '正在核实真实市场')} <ArrowRight size={15} />
           </button>
         </Card>
         <Card>
-          <SectionHeader title="实时推演日志" />
+          <SectionHeader title={copy('Live Inference Log', '实时推演日志')} />
           <LogList logs={result?.logs} loading={loading && !hasCurrentResult} />
         </Card>
       </div>
       <Card>
-        <SectionHeader title="当前推演信息" />
+        <SectionHeader title={copy('Current Inference Info', '当前推演信息')} />
         <div className="info-strip-grid">
           {[ 
-            ['根节点市场', market.title],
-            ['推演深度', `${settings.depth} 阶关联`],
-            ['时间范围', timeRangeLabel(settings.timeRange, market)],
-            ['分析维度', scopeLabel(settings.scope)],
-            ['AI 模型', result?.model || 'DeepSeek v4 Pro'],
+            [copy('Root Market', '根节点市场'), market.title],
+            [copy('Inference Depth', '推演深度'), copy(`${settings.depth} layer${settings.depth > 1 ? 's' : ''}`, `${settings.depth} 阶关联`)],
+            [copy('Time Range', '时间范围'), timeRangeLabel(settings.timeRange, market)],
+            [copy('Analysis Scope', '分析维度'), scopeLabel(settings.scope)],
+            [copy('AI Model', 'AI 模型'), result?.model || 'DeepSeek v4 Pro'],
           ].map(([label, value]) => (
             <div className="info-item" key={label}>
               <div className="info-icon">
@@ -5561,10 +6211,13 @@ function InferenceProgress({
             </div>
         ))}
         </div>
-        <div className="soft-note">{result?.verification?.summary || result?.summary || '提示：AI 会综合 Polymarket 盘口、相关市场、新闻和社交信息生成因果推演。'}</div>
+        <div className="soft-note">{englishTextOrFallback(
+          result?.verification?.summary || result?.summary,
+          copy('AI combines Polymarket order books, same-event markets, and related market context to generate causal inference.', '提示：AI 会综合 Polymarket 盘口、同事件市场和相关市场生成因果推演。'),
+        )}</div>
       </Card>
       <button className="floating-next" type="button" onClick={onDone} disabled={!hasCurrentResult}>
-        查看已生成脚本 <ArrowRight size={18} />
+        {copy('View Generated Script', '查看已生成脚本')} <ArrowRight size={18} />
       </button>
     </section>
   )
@@ -5586,52 +6239,62 @@ function CausalScript({
   const openOrderPanel = useCallback(() => {
     document.getElementById('script-order-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [])
+  const scriptSubtitleFallback = copy(
+    `AI-generated causal script showing which tradable Polymarket books may react if "${market.title}" occurs.`,
+    `基于 AI 分析的因果剧本链，展示「${market.title}」发生后可能影响的真实市场盘口。`,
+  )
+  const scriptSubtitle = englishTextOrFallback(result?.thesis, scriptSubtitleFallback)
+  const causalPathSummaryFallback = copy(
+    'Based on current market prices, volume, and structured causal modeling, AI identified the main impact paths and logic below.',
+    '基于当前市场价格、成交量和结构化因果模型，AI 识别出以下主要影响路径及逻辑关系。',
+  )
+  const causalPathSummary = englishTextOrFallback(result?.summary, causalPathSummaryFallback)
 
   return (
     <section className="page">
       <BackButton onClick={onBack} />
       <div className="script-header">
         <PageTitle
-          title="因果脚本"
-          subtitle={result?.thesis || `基于 AI 分析的因果剧本链，展示「${market.title}」发生后可能影响的真实市场盘口。`}
+          title={copy('Causal Script', '因果脚本')}
+          subtitle={scriptSubtitle}
         />
         <div className="script-actions">
           <button className="outline-button" type="button">
-            <Download size={17} /> 导出图谱
+            <Download size={17} /> {copy('Export Map', '导出图谱')}
           </button>
           <button className="outline-button" type="button">
-            <Share2 size={17} /> 分享
+            <Share2 size={17} /> {copy('Share', '分享')}
           </button>
         </div>
       </div>
       <div className="tabbar">
-        <button className="active" type="button">图谱视图</button>
-        <button type="button">脚本详情</button>
+        <button className="active" type="button">{copy('Graph View', '图谱视图')}</button>
+        <button type="button">{copy('Script Detail', '脚本详情')}</button>
       </div>
       <div className="content-grid script-grid">
         <Card className="script-map-card">
           <CausalMap market={market} onOpenOrderPanel={openOrderPanel} result={result} />
         </Card>
         <Card>
-          <SectionHeader title="因果链路摘要" />
-          <p className="body-copy">{result?.summary || '基于当前市场价格、成交量和结构化因果模型，AI 识别出以下主要影响路径及逻辑关系。'}</p>
+          <SectionHeader title={copy('Causal Path Summary', '因果链路摘要')} />
+          <p className="body-copy">{causalPathSummary}</p>
           <SummaryList market={market} result={result} />
-          <div className="soft-note">以上为 AI 基于当前数据与模型的推演结果，不构成任何投资建议，市场有风险，决策需谨慎。</div>
+          <div className="soft-note">{copy('This is AI-generated scenario analysis based on current data and models. It is not financial advice. Markets involve risk.', '以上为 AI 基于当前数据与模型的推演结果，不构成任何投资建议，市场有风险，决策需谨慎。')}</div>
         </Card>
       </div>
       <ArcProofPanel auth={auth} scriptId={result?.scriptId ?? null} />
       <ScriptOrderPanel auth={auth} result={result} />
       <Card className="script-footer-card">
         <div className="footer-meta">
-          <span><BrainCircuit size={16} /> 推演模型：{result?.model || 'DeepSeek / local-fallback'}</span>
-          <span><Globe2 size={16} /> 数据来源：Polymarket / 新闻搜索 / 相关市场</span>
-          <span><Activity size={16} /> 推演时间：{formatDateTime(result?.generatedAt)}</span>
-          <span><Bot size={16} /> 置信度：{formatConfidence(result?.confidence)}</span>
+          <span><BrainCircuit size={16} /> {copy(`Inference model: ${result?.model || 'DeepSeek'}`, `推演模型：${result?.model || 'DeepSeek'}`)}</span>
+          <span><Globe2 size={16} /> {copy('Data source: Polymarket markets and order books', '数据来源：Polymarket 市场和订单簿')}</span>
+          <span><Activity size={16} /> {copy(`Inference time: ${formatDateTime(result?.generatedAt)}`, `推演时间：${formatDateTime(result?.generatedAt)}`)}</span>
+          <span><Bot size={16} /> {copy(`Confidence: ${formatConfidence(result?.confidence)}`, `置信度：${formatConfidence(result?.confidence)}`)}</span>
         </div>
         <div className="footer-actions">
-          <span className="script-saved-pill"><CheckCircle2 size={16} /> 已自动保存</span>
-          <button className="outline-button" type="button" onClick={onScripts}>查看我的脚本</button>
-          <button className="primary-button" type="button"><RotateCw size={17} /> 重新推演</button>
+          <span className="script-saved-pill"><CheckCircle2 size={16} /> {copy('Auto-saved', '已自动保存')}</span>
+          <button className="outline-button" type="button" onClick={onScripts}>{copy('View My Scripts', '查看我的脚本')}</button>
+          <button className="primary-button" type="button"><RotateCw size={17} /> {copy('Run Again', '重新推演')}</button>
         </div>
       </Card>
     </section>
@@ -5670,8 +6333,13 @@ function ArcProofPanel({ auth, scriptId }: { auth: CausewayAuth; scriptId: strin
 
   useEffect(() => {
     const controller = new AbortController()
-    void loadProof(controller.signal)
-    return () => controller.abort()
+    const timer = window.setTimeout(() => {
+      void loadProof(controller.signal)
+    }, 0)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
   }, [loadProof])
 
   const anchorProof = useCallback(async () => {
@@ -5812,7 +6480,7 @@ function ScriptOrderPanelState({
   const { signMessageAsync } = useSignMessage()
   const { data: walletClient } = useWalletClient({ chainId: supportedChain.id })
   const { addActivity, updateActivity } = useTradingWalletActivity()
-  const [executionMode, setExecutionMode] = useState<OrderExecutionMode>('dry_run')
+  const executionMode: OrderExecutionMode = 'real'
   const tradingAccountType: TradingAccountType = 'auto'
   const [drafts, setDrafts] = useState<OrderDraftSelection[]>(() => buildDefaultOrderDrafts(candidates))
   const [preview, setPreview] = useState<OrderPreview | null>(null)
@@ -5837,13 +6505,6 @@ function ScriptOrderPanelState({
     setDrafts((current) => current.map((draft) => (draft.selectionId === selectionId ? { ...draft, ...patch } : draft)))
     setPreview(null)
     setSubmitResult(null)
-  }, [])
-
-  const setOrderExecutionMode = useCallback((mode: OrderExecutionMode) => {
-    setExecutionMode(mode)
-    setPreview(null)
-    setSubmitResult(null)
-    setError(null)
   }, [])
 
   const setDraftOrderMode = useCallback((draft: OrderDraftSelection, orderMode: OrderMode) => {
@@ -5880,21 +6541,30 @@ function ScriptOrderPanelState({
   }, [updateDraft])
 
   const validateDrafts = useCallback(() => {
-    if (!scriptId) return '当前脚本缺少 scriptId，请先完成一次后端 AI 推演。'
-    if (!activeDrafts.length) return '至少选择一个要买入的 outcome。'
+    if (!scriptId) return copy('Current script is missing scriptId. Complete an AI inference run first.', '当前脚本缺少 scriptId，请先完成一次后端 AI 推演。')
+    if (!activeDrafts.length) return copy('Select at least one outcome to buy.', '至少选择一个要买入的 outcome。')
     for (const draft of activeDrafts) {
       if (!draft.isTradable) {
-        return `${orderDraftContextLabel(draft)} ${draft.marketStatus || '市场暂不可交易'}，请从脚本中移除或等待数据刷新。`
+        return copy(
+          `${orderDraftContextLabel(draft)} ${draft.marketStatus || 'Market is temporarily not tradable'}. Remove it from the script or wait for data refresh.`,
+          `${orderDraftContextLabel(draft)} ${draft.marketStatus || '市场暂不可交易'}，请从脚本中移除或等待数据刷新。`,
+        )
       }
       const sizingValue = draft.sizingMode === 'size' ? positiveNumberOrNull(draft.size) : positiveNumberOrNull(draft.amountUsd)
-      if (sizingValue == null) return `${draft.outcomeLabel} 缺少有效的${draft.sizingMode === 'size' ? '数量' : '金额'}。`
+      if (sizingValue == null) return copy(
+        `${draft.outcomeLabel} is missing a valid ${draft.sizingMode === 'size' ? 'size' : 'amount'}.`,
+        `${draft.outcomeLabel} 缺少有效的${draft.sizingMode === 'size' ? '数量' : '金额'}。`,
+      )
       const minOrderAmount = positiveNumberOrNull(draft.minOrderSize)
       const estimatedAmount = estimateDraftAmountUsd(draft)
       if (minOrderAmount != null && estimatedAmount != null && estimatedAmount < minOrderAmount) {
-        return `${draft.outcomeLabel} 低于最小下单金额 ${formatUsd(minOrderAmount)}（当前 ${formatUsd(estimatedAmount)}）。`
+        return copy(
+          `${draft.outcomeLabel} is below the minimum order amount ${formatUsd(minOrderAmount)} (current ${formatUsd(estimatedAmount)}).`,
+          `${draft.outcomeLabel} 低于最小下单金额 ${formatUsd(minOrderAmount)}（当前 ${formatUsd(estimatedAmount)}）。`,
+        )
       }
       if (draft.orderMode === 'limit' && positiveNumberOrNull(draft.limitPrice) == null) {
-        return `${draft.outcomeLabel} 缺少有效限价。`
+        return copy(`${draft.outcomeLabel} is missing a valid limit price.`, `${draft.outcomeLabel} 缺少有效限价。`)
       }
     }
     return null
@@ -5907,7 +6577,7 @@ function ScriptOrderPanelState({
     const session = readStoredAuthSession()
     const token = session?.accessToken ?? auth.accessToken
     if (!token) {
-      throw new Error('钱包认证尚未完成，请先连接钱包并签名登录。')
+      throw new Error(copy('Wallet authentication is not complete. Connect and sign in with your wallet first.', '钱包认证尚未完成，请先连接钱包并签名登录。'))
     }
     return { token, session }
   }, [auth])
@@ -6002,12 +6672,12 @@ function ScriptOrderPanelState({
     const nextPreview = executionMode === 'real' ? await buildPreview() : preview ?? await buildPreview()
     if (!nextPreview) return
     if (!nextPreview.orders.every((order) => order.valid)) {
-      setError(invalidOrderPreviewMessage(nextPreview) || '预览中存在无效订单，请修正金额、数量、限价或盘口状态。')
+      setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.', '预览中存在无效订单，请修正金额、数量、限价或盘口状态。'))
       return
     }
     if (nextPreview.executionMode === 'real') {
       if (nextPreview.submitMode !== 'signed_clob_order' || !nextPreview.requiresSignature) {
-        setError(nextPreview.tradingCapabilityReason || '当前后端真实 CLOB 下单能力不可用。')
+        setError(nextPreview.tradingCapabilityReason || copy('Polymarket order submission is currently unavailable.', '当前 Polymarket 下单服务不可用。'))
         return
       }
       if (!window.confirm(realOrderConfirmationText(nextPreview))) {
@@ -6022,8 +6692,8 @@ function ScriptOrderPanelState({
       if (nextPreview.executionMode === 'real') {
         const walletAddress = session?.walletAddress ?? auth.walletAddress
         const chainId = session?.chainId ?? auth.chainId ?? supportedChain.id
-        if (!walletAddress) throw new Error('真实下单缺少已认证的钱包地址。')
-        orderActivityId = addActivity('提交真实订单', `等待钱包签名 ${nextPreview.orders.length} 笔 Polymarket CLOB 订单。`, 'pending')
+        if (!walletAddress) throw new Error(copy('Order submission is missing an authenticated wallet address.', '下单缺少已认证的钱包地址。'))
+        orderActivityId = addActivity(copy('Submit order', '提交订单'), copy(`Waiting for wallet signature for ${nextPreview.orders.length} Polymarket order(s).`, `等待钱包签名 ${nextPreview.orders.length} 笔 Polymarket 订单。`), 'pending')
         setStatus('signing')
         const prepared = await prepareOrderSignatures(nextPreview, walletAddress, chainId, token)
         orderDebugLog('prepare_order_signatures_result', {
@@ -6040,7 +6710,7 @@ function ScriptOrderPanelState({
           })),
         })
         if (prepared.signingStatus !== 'ready') {
-          throw new Error(prepared.error || '订单签名 payload 尚不可用。')
+          throw new Error(prepared.error || copy('Order signing payload is not available yet.', '订单签名 payload 尚不可用。'))
         }
         const rawSignedOrders = await Promise.all(prepared.payloads.map(async (payload) => ({
           orderId: payload.orderId,
@@ -6061,7 +6731,7 @@ function ScriptOrderPanelState({
           })),
         })
         signedOrders = validatedSignedOrdersForSubmit(nextPreview, rawSignedOrders)
-        updateActivity(orderActivityId, 'pending', '订单签名完成，正在提交 Polymarket CLOB。')
+        updateActivity(orderActivityId, 'pending', copy('Order signature complete. Submitting to Polymarket.', '订单签名完成，正在提交 Polymarket。'))
       }
       setStatus('submitting')
       const submitted = await submitOrderIntent(nextPreview, signedOrders, token)
@@ -6070,7 +6740,7 @@ function ScriptOrderPanelState({
         window.dispatchEvent(new CustomEvent('causeway:orders-changed'))
       }
       if (nextPreview.executionMode === 'real' && orderActivityId) {
-        updateActivity(orderActivityId, 'done', `已提交 ${submitted.orders.length} 笔真实订单。`)
+        updateActivity(orderActivityId, 'done', copy(`${submitted.orders.length} order(s) submitted.`, `已提交 ${submitted.orders.length} 笔订单。`))
       }
     } catch (submitError) {
       if (orderActivityId) {
@@ -6103,55 +6773,45 @@ function ScriptOrderPanelState({
 
   const statusLabel = {
     idle: '',
-    saving: '正在保存脚本选择...',
-    previewing: '正在生成订单预览...',
-    signing: '等待钱包签署 EIP-712 订单...',
-    submitting: '正在提交订单...',
+    saving: copy('Saving script selections...', '正在保存脚本选择...'),
+    previewing: copy('Generating order preview...', '正在生成订单预览...'),
+    signing: copy('Waiting for wallet confirmation...', '等待钱包确认...'),
+    submitting: copy('Submitting orders...', '正在提交订单...'),
   }[status]
 
   return (
     <Card className="script-order-panel" id="script-order-panel">
       <div className="order-panel-head">
         <SectionHeader
-          title="订单草稿"
-          note={scriptId ? `${activeDrafts.length} 个 outcome 已选择` : '需要后端脚本 selectionId'}
+          title={copy('Order Draft', '订单草稿')}
+          note={scriptId ? copy(`${activeDrafts.length} outcome(s) selected`, `${activeDrafts.length} 个 outcome 已选择`) : copy('Backend script selectionId required', '需要后端脚本 selectionId')}
         />
-        <div className="order-execution-toggle" aria-label="订单执行模式">
-          <button className={executionMode === 'dry_run' ? 'active' : ''} type="button" onClick={() => setOrderExecutionMode('dry_run')}>
-            Dry-run
-          </button>
-          <button className={executionMode === 'real' ? 'active' : ''} type="button" onClick={() => setOrderExecutionMode('real')}>
-            真实下单
-          </button>
-        </div>
       </div>
 
       {!candidates.length ? (
-        <div className="soft-note">当前页面还没有可下单 selection。请先从后端 AI 推演生成脚本，再回到这里预览和提交订单。</div>
+        <div className="soft-note">{copy('This page has no tradable selections yet. Generate a backend AI script first, then return here to preview and submit orders.', '当前页面还没有可下单 selection。请先从后端 AI 推演生成脚本，再回到这里预览和提交订单。')}</div>
       ) : (
         <>
           <div className="order-panel-summary">
-            <span><WalletCards size={16} /> 钱包：{auth.walletAddress ? shortAddress(auth.walletAddress) : '未登录'}</span>
-            <span><ShieldCheck size={16} /> 模式：{executionMode === 'dry_run' ? '仅本地记录，不提交 Polymarket' : '签名后提交 Polymarket CLOB'}</span>
-            <span><Activity size={16} /> 金额草稿：{totalDraftAmount > 0 ? formatUsd(totalDraftAmount) : '按数量估算'}</span>
+            <span><WalletCards size={16} /> {copy(`Wallet: ${auth.walletAddress ? shortAddress(auth.walletAddress) : 'Not signed in'}`, `钱包：${auth.walletAddress ? shortAddress(auth.walletAddress) : '未登录'}`)}</span>
+            <span><ShieldCheck size={16} /> {copy('Wallet confirmation required before submission', '提交前需要钱包确认')}</span>
+            <span><Activity size={16} /> {copy(`Draft amount: ${totalDraftAmount > 0 ? formatUsd(totalDraftAmount) : 'estimated from size'}`, `金额草稿：${totalDraftAmount > 0 ? formatUsd(totalDraftAmount) : '按数量估算'}`)}</span>
           </div>
 
-          {executionMode === 'real' ? (
-            <div className="trading-wallet-card">
-              <div className="trading-wallet-card-title">
-                <WalletCards size={18} />
-                <div>
-                  <span>交易钱包：Deposit Wallet</span>
-                  <small>真实下单固定使用 Deposit Wallet + POLY_1271；Safe 仅作为已有 Polymarket 余额的资金来源。</small>
-                </div>
-              </div>
-              <div className="trading-wallet-card-metrics">
-                <div><span>本次预估需要</span><b>{formatUsd(Math.max(estimatedRequiredUsd, TRADING_WALLET_MIN_READY_USD))}</b></div>
-                <div><span>最低交易准备</span><b>{formatUsd(TRADING_WALLET_MIN_READY_USD)}</b></div>
-                <div><span>准备入口</span><b>顶部 + Deposit</b></div>
+          <div className="trading-wallet-card">
+            <div className="trading-wallet-card-title">
+              <WalletCards size={18} />
+              <div>
+                <span>{copy('Trading Wallet', '交易钱包')}</span>
+                <small>{copy('Orders use your Polymarket trading wallet. Existing Polymarket balance can be used as a funding source.', '订单使用你的 Polymarket 交易钱包；已有 Polymarket 余额可作为资金来源。')}</small>
               </div>
             </div>
-          ) : null}
+            <div className="trading-wallet-card-metrics">
+              <div><span>{copy('Estimated Required', '本次预估需要')}</span><b>{formatUsd(Math.max(estimatedRequiredUsd, TRADING_WALLET_MIN_READY_USD))}</b></div>
+              <div><span>{copy('Minimum Ready', '最低交易准备')}</span><b>{formatUsd(TRADING_WALLET_MIN_READY_USD)}</b></div>
+              <div><span>{copy('Setup Entry', '准备入口')}</span><b>{copy('Top + Deposit', '顶部 + Deposit')}</b></div>
+            </div>
+          </div>
 
           <div className="order-draft-list">
             {drafts.map((draft) => (
@@ -6163,31 +6823,31 @@ function ScriptOrderPanelState({
                     onChange={(event) => updateDraft(draft.selectionId, { enabled: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>{!draft.isTradable ? '不可交易' : draft.enabled ? '买入' : '跳过'}</span>
+                  <span>{!draft.isTradable ? copy('Not tradable', '不可交易') : draft.enabled ? copy('Buy', '买入') : copy('Skip', '跳过')}</span>
                 </label>
                 <div className="order-draft-main">
                   <b>{draft.marketTitle}</b>
-                  <small>{[draft.eventTitle, draft.outcomeLabel, draft.aiAction === 'buy' ? 'AI 推荐' : 'AI 避免', formatConfidence(draft.confidence), draft.marketStatus].filter(Boolean).join(' · ')}</small>
-                  <p>{draft.reason || '暂无推荐原因。'}</p>
+                  <small>{[draft.eventTitle, draft.outcomeLabel, draft.aiAction === 'buy' ? copy('AI recommends', 'AI 推荐') : copy('AI avoids', 'AI 避免'), formatConfidence(draft.confidence), draft.marketStatus].filter(Boolean).join(' · ')}</small>
+                  <p>{draft.reason || copy('No recommendation reason available.', '暂无推荐原因。')}</p>
                 </div>
                 <div className="order-draft-controls">
                   <div className="order-toggle-group">
                     <button className={draft.orderMode === 'market' ? 'active' : ''} disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => setDraftOrderMode(draft, 'market')}>
-                      市价
+                      {copy('Market', '市价')}
                     </button>
                     <button className={draft.orderMode === 'limit' ? 'active' : ''} disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => setDraftOrderMode(draft, 'limit')}>
-                      限价
+                      {copy('Limit', '限价')}
                     </button>
                   </div>
                   <label>
-                    <span>数量类型</span>
+                    <span>{copy('Sizing Type', '数量类型')}</span>
                     <select disabled={!draft.enabled || !draft.isTradable} value={draft.sizingMode} onChange={(event) => setDraftSizingMode(draft, event.target.value as OrderSizingMode)}>
-                      <option value="amountUsd">金额 USD</option>
-                      <option value="size">数量 Shares</option>
+                      <option value="amountUsd">{copy('Amount USD', '金额 USD')}</option>
+                      <option value="size">{copy('Size Shares', '数量 Shares')}</option>
                     </select>
                   </label>
                   <label>
-                    <span>{draft.sizingMode === 'size' ? '数量' : '金额'}</span>
+                    <span>{draft.sizingMode === 'size' ? copy('Size', '数量') : copy('Amount', '金额')}</span>
                     <input
                       disabled={!draft.enabled || !draft.isTradable}
                       min={draft.sizingMode === 'size' ? '0.000001' : '0.01'}
@@ -6200,7 +6860,7 @@ function ScriptOrderPanelState({
                       }}
                     />
                   </label>
-                  <div className="order-step-row" aria-label="调整金额或数量">
+                  <div className="order-step-row" aria-label={copy('Adjust amount or size', '调整金额或数量')}>
                     {[-100, -10, 10, 100].map((delta) => (
                         <button disabled={!draft.enabled || !draft.isTradable} key={delta} type="button" onClick={() => adjustDraftSizing(draft, delta)}>
                         {delta > 0 ? `+${delta}` : delta}
@@ -6209,7 +6869,7 @@ function ScriptOrderPanelState({
                   </div>
                   {draft.orderMode === 'limit' ? (
                     <label>
-                      <span>限价</span>
+                      <span>{copy('Limit Price', '限价')}</span>
                       <div className="order-price-input">
                         <button disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => adjustLimitPrice(draft, -1)}>-</button>
                         <input
@@ -6230,7 +6890,7 @@ function ScriptOrderPanelState({
                   ) : null}
                   {draft.orderMode === 'limit' ? (
                     <label>
-                      <span>订单类型</span>
+                      <span>{copy('Order Type', '订单类型')}</span>
                       <select disabled={!draft.enabled || !draft.isTradable} value={draft.orderType} onChange={(event) => updateDraft(draft.selectionId, { orderType: event.target.value as LimitOrderType })}>
                         <option value="GTC">GTC</option>
                         <option value="GTD">GTD</option>
@@ -6246,10 +6906,10 @@ function ScriptOrderPanelState({
 
           <div className="order-panel-actions">
             <button className="outline-button" disabled={busy || !activeDrafts.length} type="button" onClick={handlePreview}>
-              生成预览
+              {copy('Generate Preview', '生成预览')}
             </button>
             <button className="primary-button" disabled={busy || !activeDrafts.length} type="button" onClick={handleSubmit}>
-              {executionMode === 'real' ? '签名并提交' : '提交 Dry-run'}
+              {copy('Sign and Submit', '签名并提交')}
             </button>
             {currentIntentId ? (
               <button className="outline-button" disabled={busy} type="button" onClick={() => void refreshIntent()}>
@@ -6272,13 +6932,13 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
   return (
     <div className="order-preview-block">
       <div className="order-preview-metrics">
-        <div><span>总金额</span><b>{formatUsd(preview.totalAmountUsd)}</b></div>
-        <div><span>最大收益份额</span><b>{formatShares(preview.estimatedMaxPayout)}</b></div>
-        <div><span>最大亏损</span><b>{formatUsd(preview.estimatedMaxLoss)}</b></div>
-        <div><span>签名</span><b>{preview.requiresSignature ? '需要' : '不需要'}</b></div>
+        <div><span>{copy('Total Amount', '总金额')}</span><b>{formatUsd(preview.totalAmountUsd)}</b></div>
+        <div><span>{copy('Max Payout Shares', '最大收益份额')}</span><b>{formatShares(preview.estimatedMaxPayout)}</b></div>
+        <div><span>{copy('Max Loss', '最大亏损')}</span><b>{formatUsd(preview.estimatedMaxLoss)}</b></div>
+        <div><span>{copy('Signature', '签名')}</span><b>{preview.requiresSignature ? copy('Required', '需要') : copy('Not required', '不需要')}</b></div>
       </div>
       <div className={preview.submitMode === 'unavailable' ? 'status-note warning' : 'status-note'}>
-        交易能力：{preview.tradingCapability}。{preview.tradingCapabilityReason || `预览有效期至 ${formatDateTime(preview.expiresAt)}`}
+        {orderPreviewStatusText(preview)}
       </div>
       <div className="order-preview-list">
         {preview.orders.map((order) => {
@@ -6289,7 +6949,7 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
               <div>
                 <b>{draft?.marketTitle || order.marketId}</b>
                 {draft?.eventTitle ? <small>{draft.eventTitle}</small> : null}
-                <span>{order.outcomeLabel} · {order.orderMode === 'market' ? '市价' : `限价 ${formatLimitPrice(order.limitPrice)}`}</span>
+                <span>{order.outcomeLabel} · {order.orderMode === 'market' ? copy('Market', '市价') : copy(`Limit ${formatLimitPrice(order.limitPrice)}`, `限价 ${formatLimitPrice(order.limitPrice)}`)}</span>
               </div>
               <strong>{formatUsd(order.amountUsd)}</strong>
               <span>{formatShares(order.size)} shares</span>
@@ -6300,6 +6960,14 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
       </div>
     </div>
   )
+}
+
+function orderPreviewStatusText(preview: OrderPreview) {
+  if (preview.submitMode === 'unavailable') {
+    return preview.tradingCapabilityReason || copy('This order cannot be submitted right now. Refresh market data and try again.', '当前订单暂不可提交，请刷新市场数据后重试。')
+  }
+  const signatureText = preview.requiresSignature ? copy('Wallet signature required before submission', '提交前需要钱包签名') : copy('No wallet signature required before submission', '提交前无需钱包签名')
+  return copy(`${signatureText}. Preview valid until ${formatDateTime(preview.expiresAt)}`, `${signatureText}。预览有效期至 ${formatDateTime(preview.expiresAt)}`)
 }
 
 function OrderSubmitBlock({ result }: { result: OrderSubmitResult }) {
@@ -6321,7 +6989,7 @@ function OrderSubmitBlock({ result }: { result: OrderSubmitResult }) {
 }
 
 function orderSubmitTitle(result: OrderSubmitResult) {
-  if (result.status === 'dry_run_completed') return 'Dry-run completed'
+  if (result.status === 'dry_run_completed') return 'Order saved'
   if (result.status === 'submitted') return 'Order submitted to Polymarket'
   if (result.status === 'partially_submitted') return 'Some orders were submitted'
   if (result.status === 'unknown') return 'Submission status is being verified'
@@ -6331,7 +6999,7 @@ function orderSubmitTitle(result: OrderSubmitResult) {
 function orderSubmitSubtitle(result: OrderSubmitResult) {
   if (result.status === 'unknown') return 'Refresh open orders before submitting the same order again.'
   if (result.status === 'failed') return 'No successful Polymarket order was confirmed.'
-  return `Intent: ${result.intentId}`
+  return `Reference: ${shortAddress(result.intentId)}`
 }
 
 function orderSubmitOrderLine(order: OrderSubmitResult['orders'][number]) {
@@ -6396,7 +7064,7 @@ function MyScripts({
       })
       .catch((loadError: unknown) => {
         if (loadError instanceof DOMException && loadError.name === 'AbortError') return
-        setError(loadError instanceof Error ? loadError.message : '脚本列表加载失败')
+        setError(loadError instanceof Error ? loadError.message : copy('Script list failed to load.', '脚本列表加载失败'))
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
@@ -6426,10 +7094,10 @@ function MyScripts({
     const archived = visibleItems.filter((item) => item.status === 'archived').length
     const orderIntents = visibleItems.reduce((total, item) => total + item.orderIntentCount, 0)
     return [
-      ['当前页脚本', String(visibleItems.length), '来自后端真实记录', 'blue', <Star size={19} />],
-      ['草稿', String(drafts), '可继续调整订单', 'orange', <Play size={19} />],
-      ['已提交', String(active), '已完成订单流程', 'green', <CheckCircle2 size={19} />],
-      [statusFilter === 'archived' ? '已归档' : '订单意向', String(statusFilter === 'archived' ? archived : orderIntents), statusFilter === 'archived' ? '历史脚本' : '由脚本生成', 'purple', <ExternalLink size={19} />],
+      [copy('Scripts', '当前页脚本'), String(visibleItems.length), copy('Real backend records', '来自后端真实记录'), 'blue', <Star size={19} />],
+      [copy('Drafts', '草稿'), String(drafts), copy('Orders can still be adjusted', '可继续调整订单'), 'orange', <Play size={19} />],
+      [copy('Submitted', '已提交'), String(active), copy('Order flow completed', '已完成订单流程'), 'green', <CheckCircle2 size={19} />],
+      [statusFilter === 'archived' ? copy('Archived', '已归档') : copy('Order Intents', '订单意向'), String(statusFilter === 'archived' ? archived : orderIntents), statusFilter === 'archived' ? copy('Historical scripts', '历史脚本') : copy('Generated by scripts', '由脚本生成'), 'purple', <ExternalLink size={19} />],
     ] as const
   }, [auth.accessToken, auth.isAuthenticated, debouncedQuery, items, itemsAccessToken, itemsQuery, itemsStatusFilter, statusFilter])
 
@@ -6446,7 +7114,7 @@ function MyScripts({
       })
       setNextCursor(data.nextCursor)
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '更多脚本加载失败')
+      setError(loadError instanceof Error ? loadError.message : copy('More scripts failed to load.', '更多脚本加载失败'))
     } finally {
       setLoadingMore(false)
     }
@@ -6466,7 +7134,7 @@ function MyScripts({
       const market = scriptRootMarket(script, item)
       onOpen(market, scriptToInferenceResult(script, scriptCompletedRun(script), market, settings))
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '脚本详情加载失败')
+      setError(loadError instanceof Error ? loadError.message : copy('Script detail failed to load.', '脚本详情加载失败'))
     } finally {
       setOpeningScriptId(null)
     }
@@ -6475,9 +7143,9 @@ function MyScripts({
   return (
     <section className="page">
       <div className="scripts-headline">
-        <PageTitle title="我的脚本" subtitle="管理和回顾您的事件推演脚本与分析历史。" />
+        <PageTitle title={copy('My Scripts', '我的脚本')} subtitle={copy('Manage and review your event inference scripts and analysis history.', '管理和回顾您的事件推演脚本与分析历史。')} />
         <button className="primary-button" type="button" onClick={onNew}>
-          <Plus size={17} /> 新建推演
+          <Plus size={17} /> {copy('New Inference', '新建推演')}
         </button>
       </div>
       <div className="stats-row">
@@ -6495,10 +7163,10 @@ function MyScripts({
       <div className="scripts-toolbar">
         <div className="tabbar inline">
           {[
-            ['all', '全部'],
-            ['draft', '草稿'],
-            ['active', '已提交'],
-            ['archived', '归档'],
+            ['all', copy('All', '全部')],
+            ['draft', copy('Drafts', '草稿')],
+            ['active', copy('Submitted', '已提交')],
+            ['archived', copy('Archived', '归档')],
           ].map(([value, label]) => (
             <button
               className={statusFilter === value ? 'active' : ''}
@@ -6513,30 +7181,30 @@ function MyScripts({
         <div className="searchbox narrow">
           <Search size={17} />
           <input
-            aria-label="搜索脚本"
+            aria-label={copy('Search scripts', '搜索脚本')}
             value={query}
-            placeholder="搜索脚本名称、关键词..."
+            placeholder={copy('Search script names or keywords...', '搜索脚本名称、关键词...')}
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
-        <span className="scripts-sort-label">最新创建</span>
+        <span className="scripts-sort-label">{copy('Newest first', '最新创建')}</span>
       </div>
       {auth.isAuthenticated && error ? <div className="script-list-message error">{error}</div> : null}
       {!auth.isAuthenticated ? (
         <div className="script-list-message">
-          <b>登录钱包后查看真实脚本</b>
-          <span>这里不会展示演示数据；完成钱包签名后会读取当前用户已保存的后端脚本。</span>
+          <b>{copy('Sign in to view your scripts', '登录钱包后查看真实脚本')}</b>
+          <span>{copy('No demo data is shown here. After wallet sign-in, the app loads saved backend scripts for the current user.', '这里不会展示演示数据；完成钱包签名后会读取当前用户已保存的后端脚本。')}</span>
           <button className="primary-button" type="button" onClick={() => void auth.signIn()} disabled={auth.isSigningIn}>
-            <WalletCards size={17} /> {auth.isSigningIn ? '等待签名' : '登录钱包'}
+            <WalletCards size={17} /> {auth.isSigningIn ? copy('Waiting for signature', '等待签名') : copy('Sign in with wallet', '登录钱包')}
           </button>
         </div>
       ) : null}
       <div className="script-list">
-        {auth.isAuthenticated && loading ? <div className="script-list-message">正在从后端加载真实脚本...</div> : null}
+        {auth.isAuthenticated && loading ? <div className="script-list-message">{copy('Loading scripts from the backend...', '正在从后端加载真实脚本...')}</div> : null}
         {auth.isAuthenticated && !loading && !filteredItems.length ? (
           <div className="script-list-message">
-            <b>{query.trim() ? '没有匹配的脚本' : '暂无真实脚本'}</b>
-            <span>{query.trim() ? '请调整搜索关键词。' : '完成一次 AI 推演后，生成的脚本会出现在这里。'}</span>
+            <b>{query.trim() ? copy('No matching scripts', '没有匹配的脚本') : copy('No scripts yet', '暂无真实脚本')}</b>
+            <span>{query.trim() ? copy('Adjust your search keywords.', '请调整搜索关键词。') : copy('Generated scripts will appear here after you complete an AI inference.', '完成一次 AI 推演后，生成的脚本会出现在这里。')}</span>
           </div>
         ) : null}
         {auth.isAuthenticated && !loading && filteredItems.map((item, index) => (
@@ -6552,15 +7220,15 @@ function MyScripts({
               <b>{item.title}</b>
               {item.rootEventTitle ? <small>{item.rootEventTitle}</small> : null}
               <span>
-                创建时间：{formatDateTime(item.createdAt)}
-                {item.rootOutcomeLabel ? ` · 根结果：${item.rootOutcomeLabel}` : ''}
+                {copy(`Created: ${formatDateTime(item.createdAt)}`, `创建时间：${formatDateTime(item.createdAt)}`)}
+                {item.rootOutcomeLabel ? copy(` · Root outcome: ${item.rootOutcomeLabel}`, ` · 根结果：${item.rootOutcomeLabel}`) : ''}
               </span>
             </div>
             <span className={`status-badge ${scriptStatusClass(item.status)}`}>{scriptStatusLabel(item.status)}</span>
             <div className="script-row-metrics">
-              <span>价格 <b>{formatUnitPercent(item.rootPrice)}</b></span>
+              <span>{copy('Price', '价格')} <b>{formatUnitPercent(item.rootPrice)}</b></span>
               <span>24h <b>{formatCompactMoney(item.rootVolume24hr)}</b></span>
-              <span>市场 <b>{item.marketCount}</b></span>
+              <span>{copy('Markets', '市场')} <b>{item.marketCount}</b></span>
             </div>
             <span className="script-row-proof"><ShieldCheck size={15} /> Arc proof</span>
             <div className="row-actions">
@@ -6571,10 +7239,10 @@ function MyScripts({
       </div>
       {auth.isAuthenticated ? (
         <div className="pagination">
-          <span>当前 {filteredItems.length} 条</span>
+          <span>{copy(`${filteredItems.length} shown`, `当前 ${filteredItems.length} 条`)}</span>
           {itemsAccessToken === auth.accessToken && itemsStatusFilter === statusFilter && itemsQuery === debouncedQuery && nextCursor ? (
             <button type="button" onClick={() => void handleLoadMore()} disabled={loadingMore}>
-              {loadingMore ? '加载中' : '更多'}
+              {loadingMore ? copy('Loading', '加载中') : copy('More', '更多')}
             </button>
           ) : null}
         </div>
@@ -6782,14 +7450,14 @@ function NetworkMap({
           onMouseLeave={handleIconMouseLeave}
         />
       ) : null}
-      {loading ? <div className="network-loading">正在从 SQLite / Polymarket 同步市场网络...</div> : null}
-      {!loading && !visibleMarkets.length ? <div className="network-empty">暂无市场网络数据</div> : null}
+      {loading ? <div className="network-loading">{copy('Syncing market network from Polymarket...', '正在从 SQLite / Polymarket 同步市场网络...')}</div> : null}
+      {!loading && !visibleMarkets.length ? <div className="network-empty">{copy('No market network data yet', '暂无市场网络数据')}</div> : null}
       <div className="legend">
-        <span><i className="dot blue" />政治</span>
-        <span><i className="dot green" />宏观经济</span>
-        <span><i className="dot orange" />加密货币</span>
-        <span><i className="line solid" />强相关</span>
-        <span><i className="line dashed" />中等相关</span>
+        <span><i className="dot blue" />{copy('Politics', '政治')}</span>
+        <span><i className="dot green" />{copy('Macro', '宏观经济')}</span>
+        <span><i className="dot orange" />{copy('Crypto', '加密货币')}</span>
+        <span><i className="line solid" />{copy('Strong relation', '强相关')}</span>
+        <span><i className="line dashed" />{copy('Medium relation', '中等相关')}</span>
       </div>
     </div>
   )
@@ -6886,10 +7554,10 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
       if (!target) return []
       return [{
         id: `fallback_chain_${index + 1}`,
-        title: `${directionLabel(link.direction)}：${trimNodeTitle(target.title, 26)}`,
-        summary: link.rationale || target.reason || '根节点发生后，该盘口可能出现联动重定价。',
+        title: copy(`${directionLabel(link.direction)}: ${trimNodeTitle(target.title, 26)}`, `${directionLabel(link.direction)}：${trimNodeTitle(target.title, 26)}`),
+        summary: englishTextOrFallback(link.rationale || target.reason, copy('This book may reprice if the root outcome occurs.', '根节点发生后，该盘口可能出现联动重定价。')),
         confidence: link.confidence,
-        expectedReturnHint: '按当前盘口方向加入交易草稿前，仍需确认实时深度和滑点。',
+        expectedReturnHint: copy('Confirm live depth and slippage before adding this direction to an order draft.', '按当前盘口方向加入交易草稿前，仍需确认实时深度和滑点。'),
         legs: [{
           marketId: target.id,
           marketTitle: target.title,
@@ -6899,7 +7567,7 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
           direction: link.direction,
           impact: link.impact || inferenceImpactSummary(link.direction),
           confidence: link.confidence,
-          rationale: link.rationale || target.reason || target.evidenceSummary || 'AI 已核实该市场与根节点有关联。',
+          rationale: englishTextOrFallback(link.rationale || target.reason || target.evidenceSummary, copy('AI verified that this market is related to the root node.', 'AI 已核实该市场与根节点有关联。')),
           orderHint: defaultOrderHintForDirection(link.direction),
           evidenceIds: link.evidenceIds || target.evidenceIds || [],
         }],
@@ -6910,10 +7578,10 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
   if (related.length) {
     return related.map((item, index) => ({
       id: `related_chain_${index + 1}`,
-      title: `链路 ${index + 1}：${trimNodeTitle(item.title, 28)}`,
-      summary: item.reason || item.evidenceSummary || '该市场已通过相关性核实，可作为根节点发生后的观察链路。',
+      title: copy(`Path ${index + 1}: ${trimNodeTitle(item.title, 28)}`, `链路 ${index + 1}：${trimNodeTitle(item.title, 28)}`),
+      summary: englishTextOrFallback(item.reason || item.evidenceSummary, copy('This market passed relevance checks and can be monitored as a downstream path.', '该市场已通过相关性核实，可作为根节点发生后的观察链路。')),
       confidence: item.verificationScore || item.confidence,
-      expectedReturnHint: '该链路由相关市场自动编排，交易前需复核实时盘口。',
+      expectedReturnHint: copy('This path is assembled from related markets. Review live books before trading.', '该链路由相关市场自动编排，交易前需复核实时盘口。'),
       legs: [{
         marketId: item.id,
         marketTitle: item.title,
@@ -6923,7 +7591,7 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
         direction: item.direction || 'unknown',
         impact: item.impact || inferenceImpactSummary(item.direction),
         confidence: item.verificationScore || item.confidence,
-        rationale: item.reason || item.evidenceSummary || 'AI 已核实该市场与根节点有关联。',
+        rationale: item.reason || item.evidenceSummary || copy('AI verified that this market is related to the root node.', 'AI 已核实该市场与根节点有关联。'),
         orderHint: defaultOrderHintForDirection(item.direction),
         evidenceIds: item.evidenceIds || [],
       }],
@@ -6931,10 +7599,10 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
   }
   return [{
     id: 'pending_chain',
-    title: '等待 AI 生成剧本链',
-    summary: `推演完成后，这里会展示「${market.title}」发生后影响哪些真实 Polymarket 盘口。`,
+    title: copy('Waiting for AI script path', '等待 AI 生成剧本链'),
+    summary: copy(`After inference completes, this section will show which tradable Polymarket books may react if "${market.title}" occurs.`, `推演完成后，这里会展示「${market.title}」发生后影响哪些真实 Polymarket 盘口。`),
     confidence: 0.5,
-    expectedReturnHint: '暂无可执行盘口。',
+    expectedReturnHint: copy('No executable market yet.', '暂无可执行盘口。'),
     legs: [],
   }]
 }
@@ -6963,21 +7631,21 @@ function CausalMap({
   return (
     <div className="causal-map script-chain-map">
       <div className="script-map-head">
-        <span>根因事件</span>
+        <span>{copy('Root Event', '根因事件')}</span>
         <div>
-          <span><i className="line green" />正向影响</span>
-          <span><i className="line red" />负向影响</span>
-          <span><i className="line orange" />条件传导</span>
+          <span><i className="line green" />{copy('Positive impact', '正向影响')}</span>
+          <span><i className="line red" />{copy('Negative impact', '负向影响')}</span>
+          <span><i className="line orange" />{copy('Conditional path', '条件传导')}</span>
         </div>
       </div>
       <div className="script-root-card">
         <MarketIcon market={market} size="medium" />
         <div>
-          <small>根节点市场</small>
+          <small>{copy('Root Market', '根节点市场')}</small>
           <b>{market.title}</b>
           {market.eventTitle ? <small>{market.eventTitle}</small> : null}
           <strong>{market.price}% <span>{formatConfidence(result?.confidence)}</span></strong>
-          <em>同步于 {formatDate(market.syncedAt)}</em>
+          <em>{copy(`Synced ${formatDate(market.syncedAt)}`, `同步于 ${formatDate(market.syncedAt)}`)}</em>
         </div>
       </div>
       <svg className="script-chain-lines" viewBox="0 0 1000 310" preserveAspectRatio="none" aria-hidden="true">
@@ -7017,7 +7685,7 @@ function CausalMap({
                 <b>{chain.title}</b>
                 <strong>{formatConfidence(chain.confidence)}</strong>
               </div>
-              <p>{chain.summary}</p>
+              <p>{englishTextOrFallback(chain.summary, 'This path was generated from related Polymarket markets and should be checked against live books before trading.')}</p>
               <div className="script-leg-stack">
                 {chain.legs.map((leg, legIndex) => {
                   const related = relatedById.get(leg.marketId)
@@ -7049,17 +7717,17 @@ function CausalMap({
       </div>
       <div className="script-chain-action">
         <div>
-          <b>已选择剧本链：{selectedChain?.title || '暂无'}</b>
-          <span>{selectedChain?.expectedReturnHint || '选择一条剧本链后，可将其中所有盘口方向加入交易草稿。'}</span>
+          <b>{copy(`Selected path: ${selectedChain?.title || 'None'}`, `已选择剧本链：${selectedChain?.title || '暂无'}`)}</b>
+          <span>{selectedChain?.expectedReturnHint || copy('Choose a script path to add all included market directions to the order draft.', '选择一条剧本链后，可将其中所有盘口方向加入交易草稿。')}</span>
         </div>
-        <button type="button" disabled={!selectedChain?.legs.length} onClick={onOpenOrderPanel}>买入该剧本链盘口</button>
+        <button type="button" disabled={!selectedChain?.legs.length} onClick={onOpenOrderPanel}>{copy('Buy This Path', '买入该剧本链盘口')}</button>
       </div>
       <div className="confidence-legend">
-        <b>置信度说明</b>
-        <span><i className="dot green" />高置信度 ≥ 0.65</span>
-        <span><i className="dot orange" />较高置信度 0.45 - 0.64</span>
-        <span><i className="dot red" />中等置信度 0.25 - 0.44</span>
-        <span><i className="dot purple" />较低置信度 0.10 - 0.24</span>
+        <b>{copy('Confidence Guide', '置信度说明')}</b>
+        <span><i className="dot green" />{copy('High confidence >= 0.65', '高置信度 ≥ 0.65')}</span>
+        <span><i className="dot orange" />{copy('Elevated confidence 0.45 - 0.64', '较高置信度 0.45 - 0.64')}</span>
+        <span><i className="dot red" />{copy('Medium confidence 0.25 - 0.44', '中等置信度 0.25 - 0.44')}</span>
+        <span><i className="dot purple" />{copy('Lower confidence 0.10 - 0.24', '较低置信度 0.10 - 0.24')}</span>
       </div>
     </div>
   )
@@ -7125,7 +7793,7 @@ function MarketHoverCard({
     ? `${market.marketsCount ?? market.topMarkets?.length ?? 0} markets - ${market.category}`
     : market.eventTitle || market.category
   const topMarketLabel = topMarket?.groupItemTitle || topMarket?.title
-  const rulesText = rules || description || 'Polymarket 未提供详细规则说明。'
+  const rulesText = rules || description || copy('Polymarket has not provided detailed rules for this market.', 'Polymarket 未提供详细规则说明。')
   return (
     <aside
       className={`market-hover-card ${placement}`}
@@ -7143,25 +7811,25 @@ function MarketHoverCard({
         </div>
       </div>
       <div className="hover-card-stats">
-        <div><span>价格</span><b>{market.price}%</b></div>
-        <div><span>成交量</span><b>{market.volume}</b></div>
-        <div><span>流动性</span><b>{formatCompactMoney(market.liquidity)}</b></div>
-        <div><span>结束时间</span><b>{formatDate(market.endDate)}</b></div>
+        <div><span>{copy('Price', '价格')}</span><b>{market.price}%</b></div>
+        <div><span>{copy('Volume', '成交量')}</span><b>{market.volume}</b></div>
+        <div><span>{copy('Liquidity', '流动性')}</span><b>{formatCompactMoney(market.liquidity)}</b></div>
+        <div><span>{copy('End Date', '结束时间')}</span><b>{formatDate(market.endDate)}</b></div>
       </div>
       <div className="hover-card-body" tabIndex={0}>
         {hasDistinctSummary ? (
           <section className="hover-card-section">
-            <span>简介</span>
+            <span>{copy('Summary', '简介')}</span>
             <p>{description}</p>
           </section>
         ) : null}
         <section className="hover-card-section">
-          <span>规则说明</span>
+          <span>{copy('Rules', '规则说明')}</span>
           <p>{rulesText}</p>
         </section>
       </div>
       <div className="hover-card-footer">
-        <span className={market.acceptingOrders === false ? 'closed' : 'open'}>{market.acceptingOrders === false ? '暂停接单' : '可交易'}</span>
+        <span className={market.acceptingOrders === false ? 'closed' : 'open'}>{market.acceptingOrders === false ? copy('Orders paused', '暂停接单') : copy('Tradable', '可交易')}</span>
         {topMarket ? <span>{topMarketLabel}: {formatUnitPercent(topMarket.price)}</span> : topOutcome ? <span>{topOutcome.label}: {formatUnitPercent(topOutcome.price)}</span> : null}
       </div>
     </aside>
@@ -7193,7 +7861,7 @@ function SectionHeader({ title, note }: { title: string; note?: string }) {
 function BackButton({ onClick }: { onClick: () => void }) {
   return (
     <button className="back-button" type="button" onClick={onClick}>
-      <ArrowLeft size={17} /> 返回
+      <ArrowLeft size={17} /> {copy('Back', '返回')}
     </button>
   )
 }
@@ -7214,9 +7882,9 @@ function SearchPopover({
   results: MarketSearchResult[]
 }) {
   const tabs: Array<{ type: SearchResultType; label: string }> = [
-    { type: 'market', label: '盘口' },
-    { type: 'event', label: '事件' },
-    { type: 'topic', label: '主题' },
+    { type: 'market', label: copy('Markets', '盘口') },
+    { type: 'event', label: copy('Events', '事件') },
+    { type: 'topic', label: copy('Topics', '主题') },
   ]
   const filteredResults = results.filter((result) => result.type === activeType)
   return (
@@ -7239,25 +7907,25 @@ function SearchPopover({
             </span>
             <span className="search-result-main">
               <b>{result.title}</b>
-              <small>{result.subtitle || result.category || 'Polymarket 市场'}</small>
+              <small>{result.subtitle || result.category || copy('Polymarket market', 'Polymarket 市场')}</small>
             </span>
             <span className="search-result-meta">
               <b>{formatProbability(result.price)}</b>
-              <small>{result.type === 'topic' ? '主题' : result.endDate ? formatDate(result.endDate) : formatCompactMoney(result.volume)}</small>
+              <small>{result.type === 'topic' ? copy('Topic', '主题') : result.endDate ? formatDate(result.endDate) : formatCompactMoney(result.volume)}</small>
             </span>
           </button>
         ))}
-        {!loading && !filteredResults.length ? <div className="search-empty">没有找到 “{query}” 的{searchTypeLabel(activeType)}结果</div> : null}
-        {loading ? <div className="search-empty">正在搜索 Polymarket 市场...</div> : null}
+        {!loading && !filteredResults.length ? <div className="search-empty">{copy(`No ${searchTypeLabel(activeType)} results found for "${query}"`, `没有找到 “${query}” 的${searchTypeLabel(activeType)}结果`)}</div> : null}
+        {loading ? <div className="search-empty">{copy('Searching Polymarket markets...', '正在搜索 Polymarket 市场...')}</div> : null}
       </div>
     </div>
   )
 }
 
 function searchTypeLabel(type: SearchResultType) {
-  if (type === 'market') return '盘口'
-  if (type === 'event') return '事件'
-  return '主题'
+  if (type === 'market') return copy('market', '盘口')
+  if (type === 'event') return copy('event', '事件')
+  return copy('topic', '主题')
 }
 
 function CategoryChips({
@@ -7378,7 +8046,7 @@ function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Ma
           ))}
         </div>
       </div>
-      <svg viewBox="0 0 760 336" aria-label="市场价格走势">
+      <svg viewBox="0 0 760 336" aria-label={copy('Market price chart', '市场价格走势')}>
         <g className="grid-lines">
           {ticks.map((tick) => {
             const y = chartY(tick, maxPrice)
@@ -7395,7 +8063,7 @@ function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Ma
               </text>
             )
           })}
-          <text x="36" y="314">市场开始</text>
+          <text x="36" y="314">{copy('Market start', '市场开始')}</text>
           <text x="648" y="314">{formatDate(market.endDate)}</text>
         </g>
         {chartRows.map((outcome) => (
@@ -7458,7 +8126,7 @@ function marketOutcomeRows(market: Market) {
       id: market.id,
       market,
       label: marketDisplayLabel(market),
-      subtitle: `Token ${formatToken(market.outcomes?.[0]?.tokenId)} · 市场成交量 ${market.volume}`,
+      subtitle: copy(`Token ${formatToken(market.outcomes?.[0]?.tokenId)} · Market volume ${market.volume}`, `Token ${formatToken(market.outcomes?.[0]?.tokenId)} · 市场成交量 ${market.volume}`),
       index: 0,
       percent: unitPriceToPercent(yesPrice),
       bid: market.bestBid ?? yesPrice,
@@ -7472,7 +8140,7 @@ function marketOutcomeRows(market: Market) {
     id: `${outcome.label}-${outcome.index}`,
     market,
     label: outcome.label,
-    subtitle: `Token ${formatToken(outcome.tokenId)} · 市场成交量 ${market.volume}`,
+    subtitle: copy(`Token ${formatToken(outcome.tokenId)} · Market volume ${market.volume}`, `Token ${formatToken(outcome.tokenId)} · 市场成交量 ${market.volume}`),
     index: outcome.index,
     percent: outcome.percent,
     bid: outcome.index === 0 ? market.bestBid ?? outcome.yesPrice : outcome.yesPrice,
@@ -7539,7 +8207,7 @@ function MarketOrderBook({
             id: item.id,
             market: item,
             label: marketDisplayLabel(item),
-            subtitle: `Token ${formatToken(item.outcomes?.[0]?.tokenId)} · 市场成交量 ${item.volume}`,
+            subtitle: copy(`Token ${formatToken(item.outcomes?.[0]?.tokenId)} · Market volume ${item.volume}`, `Token ${formatToken(item.outcomes?.[0]?.tokenId)} · 市场成交量 ${item.volume}`),
             index,
             percent: item.price,
             bid: item.bestBid ?? item.price / 100,
@@ -7549,9 +8217,14 @@ function MarketOrderBook({
           }))
       : marketOutcomeRows(market)
   const loadedMarketCount = eventMarkets.length > 1 ? eventMarkets.length : outcomeRows.length
+  const visibleMarketCountLabel = `${outcomeRows.length}${normalizedMarketQuery ? ` / ${loadedMarketCount}` : ''}`
   const orderbookCountText = eventMarkets.length > 1
-    ? `${outcomeRows.length}${normalizedMarketQuery ? ` / ${loadedMarketCount}` : ''} 个盘口${hasMoreMarkets && totalMarkets ? `（已加载 ${loadedMarketCount} / ${formatCompactCount(totalMarkets)}）` : ''}`
-    : `${outcomeRows.length} 个盘口`
+    ? copy(
+      `${visibleMarketCountLabel} market${outcomeRows.length === 1 ? '' : 's'}${hasMoreMarkets && totalMarkets ? ` (loaded ${loadedMarketCount} / ${formatCompactCount(totalMarkets)})` : ''}`,
+      `${visibleMarketCountLabel} 个盘口${hasMoreMarkets && totalMarkets ? `（已加载 ${loadedMarketCount} / ${formatCompactCount(totalMarkets)}）` : ''}`,
+    )
+    : copy(`${outcomeRows.length} market${outcomeRows.length === 1 ? '' : 's'}`, `${outcomeRows.length} 个盘口`)
+  const orderbookStatusText = market.acceptingOrders === false ? copy('Orders paused', '暂停接单') : copy('Tradable', '可交易')
   const handleOutcomeSelect = useCallback((row: typeof outcomeRows[number], action: OrderbookOutcomeAction) => {
     if (!action.outcomeId) {
       setOrderError('Selected outcome is missing an outcomeId.')
@@ -7564,8 +8237,8 @@ function MarketOrderBook({
     <div className="market-orderbook">
       <div className="orderbook-head">
         <div>
-          <b>盘口</b>
-          <span>{loading ? '正在同步 event 盘口...' : `${orderbookCountText} · ${market.acceptingOrders === false ? '暂停接单' : '可交易'}`}</span>
+          <b>{copy('Markets', '盘口')}</b>
+          <span>{loading ? copy('Syncing event markets...', '正在同步 event 盘口...') : `${orderbookCountText} · ${orderbookStatusText}`}</span>
         </div>
         <div className="orderbook-meta">
           <span>Vol. {market.volume}</span>
@@ -7611,18 +8284,18 @@ function MarketOrderBook({
                     disabled={loading || outcome.market.acceptingOrders === false || !action.outcomeId}
                     key={action.label}
                     type="button"
-                    aria-label={`推演 ${outcome.label} ${action.label} ${formatCents(action.price)}`}
+                    aria-label={copy(`Analyze ${outcome.label} ${action.label} ${formatCents(action.price)}`, `推演 ${outcome.label} ${action.label} ${formatCents(action.price)}`)}
                     aria-pressed={selectedOutcomeId === action.outcomeId}
                     onClick={() => handleOutcomeSelect(outcome, action)}
                   >
-                    推演 {action.label} <span>{formatCents(action.price)}</span>
+                    {copy('Analyze', '推演')} {action.label} <span>{formatCents(action.price)}</span>
                   </button>
                 ))}
               </div>
             </div>
           )
         }) : (
-          <div className="orderbook-empty">{hasMoreMarkets ? '当前已加载盘口中没有匹配结果，请换个关键词或打开 Polymarket 原事件确认。' : 'No markets match this search.'}</div>
+          <div className="orderbook-empty">{hasMoreMarkets ? copy('No matches in the loaded markets. Try another keyword or open the original Polymarket event to confirm.', '当前已加载盘口中没有匹配结果，请换个关键词或打开 Polymarket 原事件确认。') : copy('No markets match this search.', '没有匹配的盘口。')}</div>
         )}
       </div>
       {orderError ? <div className="status-note error">{orderError}</div> : null}
@@ -7650,7 +8323,7 @@ function RelatedMarketList({ currentMarket }: { currentMarket: Market }) {
           <MarketIcon market={market} size="small" />
           <div>
             <b>{market.title}</b>
-            <span>成交量 {market.volume} · 交易者 {market.traders}</span>
+            <span>{copy(`Volume ${market.volume} · Traders ${market.traders}`, `成交量 ${market.volume} · 交易者 ${market.traders}`)}</span>
           </div>
           <strong>{market.price}%</strong>
           <span className={market.change > 0 ? 'green-text' : 'red-text'}>{market.change > 0 ? '+' : ''}{market.change}%</span>
@@ -7680,12 +8353,12 @@ function Divider() {
 
 function PreviewList({ market, settings }: { market: Market; settings: InferenceSettingsState }) {
   const items = [
-    ['根节点市场', market.title],
-    ['推演范围', scopeLabel(settings.scope)],
-    ['时间周期', timeRangeLabel(settings.timeRange, market)],
+    [copy('Root Market', '根节点市场'), market.title],
+    [copy('Inference Scope', '推演范围'), scopeLabel(settings.scope)],
+    [copy('Time Range', '时间周期'), timeRangeLabel(settings.timeRange, market)],
     ['Depth', `${settings.depth} layers`],
-    ['AI 模型', modelPreferenceLabel(settings.modelPreference)],
-    ['置信度偏好', `${confidenceModeLabel(settings.confidenceMode)} · ${settings.confidenceThreshold.toFixed(2)}`],
+    [copy('AI Model', 'AI 模型'), modelPreferenceLabel(settings.modelPreference)],
+    [copy('Confidence Preference', '置信度偏好'), `${confidenceModeLabel(settings.confidenceMode)} · ${settings.confidenceThreshold.toFixed(2)}`],
   ]
   return (
     <div className="preview-list">
@@ -7712,7 +8385,7 @@ function DiscoveryTable({ market, relatedMarkets }: { market?: Market; relatedMa
           const tone = categoryTones[item.category] || seedMarket.tone
           const score = item.verificationScore ?? item.confidence
           const evidenceCount = item.evidenceCount ?? item.evidenceIds?.length ?? 0
-          const relationMeta = evidenceCount > 0 ? `证据 ${evidenceCount}` : item.relation
+          const relationMeta = evidenceCount > 0 ? copy(`Evidence ${evidenceCount}`, `证据 ${evidenceCount}`) : item.relation
           return (
             <div key={item.id}>
               <MarketIcon market={{ icon: seedMarket.icon, iconUrl: item.icon || item.image || null, tone }} size="small" />
@@ -7760,19 +8433,19 @@ function LogList({ logs, loading }: { logs?: string[]; loading?: boolean }) {
   const displayLogs = logs?.length
     ? logs
     : [
-        '正在检索根节点的直接关联市场...',
-        '正在扩展二阶关联市场...',
-        '正在收集新闻和社交信息...',
-        '正在请求 DeepSeek 推演模型...',
+        copy('Retrieving directly related markets for the root node...', '正在检索根节点的直接关联市场...'),
+        copy('Expanding second-order related markets...', '正在扩展二阶关联市场...'),
+        copy('Collecting Polymarket market context...', '正在收集 Polymarket 市场上下文...'),
+        copy('Requesting the DeepSeek inference model...', '正在请求 DeepSeek 推演模型...'),
       ]
   return (
     <div className="log-list">
       {displayLogs.map((title, index) => (
         <div key={`${title}-${index}`}>
           <i className={`dot ${index > 3 ? 'green' : index > 1 ? 'cyan' : 'blue'}`} />
-          <span>{loading && index === displayLogs.length - 1 ? '进行中' : '完成'}</span>
+          <span>{loading && index === displayLogs.length - 1 ? copy('Processing', '进行中') : copy('Complete', '完成')}</span>
           <b>{title}</b>
-          <small>{index === 0 ? '根节点、同事件盘口和本地边已纳入上下文' : '用于生成因果链路、情景和风险提示'}</small>
+          <small>{index === 0 ? copy('Root node, same-event markets, and local edges are included in context.', '根节点、同事件盘口和本地边已纳入上下文') : copy('Used to generate causal paths, scenarios, and risk notes.', '用于生成因果链路、情景和风险提示')}</small>
         </div>
       ))}
     </div>
@@ -7781,20 +8454,41 @@ function LogList({ logs, loading }: { logs?: string[]; loading?: boolean }) {
 
 function SummaryList({ market, result }: { market: Market; result: InferenceResult | null }) {
   if (result) {
-    const chainItems = (result.scriptChains || []).slice(0, 5).map((chain) => [
-      chain.title,
-      `${formatConfidence(chain.confidence)} · ${chain.legs.length} 个盘口。${chain.summary}${chain.expectedReturnHint ? ` ${chain.expectedReturnHint}` : ''}`,
+    const chainItems = (result.scriptChains || []).slice(0, 5).map((chain, index) => {
+      const chainSummary = englishTextOrFallback(
+        chain.summary,
+        'This path was generated from related Polymarket markets and should be checked against live books before trading.',
+      )
+      const expectedReturnHint = englishTextOrFallback(chain.expectedReturnHint, '')
+      return [
+        englishTextOrFallback(chain.title, `Path ${index + 1}`),
+        `${formatConfidence(chain.confidence)} · ${chain.legs.length} market${chain.legs.length === 1 ? '' : 's'}. ${chainSummary}${expectedReturnHint ? ` ${expectedReturnHint}` : ''}`,
+      ]
+    })
+    const linkItems = result.causalLinks.slice(0, 5).map((link) => {
+      const impact = englishTextOrFallback(link.impact, inferenceImpactSummary(link.direction))
+      const rationale = englishTextOrFallback(link.rationale, 'This related market may reprice if the root outcome occurs.')
+      const evidenceSummary = englishTextOrFallback(link.evidenceSummary, '')
+      return [
+        `${market.title} -> ${link.target}`,
+        `${directionLabel(link.direction)} · ${formatConfidence(link.confidence)} · ${impact}. ${rationale}${evidenceSummary ? ` Evidence: ${evidenceSummary}` : ''}`,
+      ]
+    })
+    const scenarioItems = result.scenarios.slice(0, 2).map((scenario, index) => [
+      englishTextOrFallback(scenario.name, `Scenario ${index + 1}`),
+      `${scenario.probabilityShift}: ${englishTextOrFallback(scenario.description, 'AI generated this scenario from current Polymarket context.')}`,
     ])
-    const linkItems = result.causalLinks.slice(0, 5).map((link) => [
-      `${market.title} → ${link.target}`,
-      `${directionLabel(link.direction)} · ${formatConfidence(link.confidence)} · ${link.impact || inferenceImpactSummary(link.direction)}。${link.rationale}${link.evidenceSummary ? ` 证据：${link.evidenceSummary}` : ''}`,
-    ])
-    const scenarioItems = result.scenarios.slice(0, 2).map((scenario) => [scenario.name, `${scenario.probabilityShift}：${scenario.description}`])
     const excludedNote = result.excludedMarkets?.length
-      ? [[`已排除 ${result.excludedMarkets.length} 个低相关候选`, result.excludedMarkets.slice(0, 3).map((item) => `${item.title || item.id}：${item.reason}`).join('；')]]
+      ? [[
+        `Excluded ${result.excludedMarkets.length} low-relevance candidate${result.excludedMarkets.length === 1 ? '' : 's'}`,
+        result.excludedMarkets.slice(0, 3).map((item) => {
+          const reason = englishTextOrFallback(item.reason, 'Low relevance to the selected root outcome.')
+          return `${item.title || item.id}: ${reason}`
+        }).join('; '),
+      ]]
       : []
     const items = [
-      ['根市场推演结论', result.thesis],
+      [copy('Root Market Thesis', '根市场推演结论'), englishTextOrFallback(result.thesis, 'AI analyzed the selected root outcome against related Polymarket markets.')],
       ...chainItems,
       ...(chainItems.length ? [] : linkItems),
       ...scenarioItems,
@@ -7812,11 +8506,16 @@ function SummaryList({ market, result }: { market: Market; result: InferenceResu
     )
   }
   const items = [
-    [market.title, `市场当前价格为 ${market.price}%，成交量为 ${market.volume}，这是本次推演的根节点。`],
-    ['同事件市场联动', market.eventTitle ? `优先检索「${market.eventTitle}」事件下的其他盘口，判断同事件内概率迁移。` : '优先检索同主题和同分类市场，判断相近盘口的概率迁移。'],
+    [market.title, copy(`Current market price is ${market.price}% with ${market.volume} volume. This is the root node for this inference.`, `市场当前价格为 ${market.price}%，成交量为 ${market.volume}，这是本次推演的根节点。`)],
+    [
+      copy('Same-Event Market Links', '同事件市场联动'),
+      market.eventTitle
+        ? copy(`Prioritize other markets under the "${market.eventTitle}" event to evaluate probability migration inside the event.`, `优先检索「${market.eventTitle}」事件下的其他盘口，判断同事件内概率迁移。`)
+        : copy('Prioritize markets with similar topics and categories to evaluate probability migration between nearby markets.', '优先检索同主题和同分类市场，判断相近盘口的概率迁移。'),
+    ],
     ['Liquidity', `This market has ${formatCompactMoney(market.liquidity)} liquidity; review live depth before trading.`],
-    ['时间约束', `市场结束时间为 ${formatDate(market.endDate)}，推演将优先关注结束前的关键触发因素。`],
-    ['风险提示', '该脚本为基于市场数据和 AI 推理的情景分析，不构成交易建议。'],
+    [copy('Time Constraint', '时间约束'), copy(`Market end date is ${formatDate(market.endDate)}. Inference prioritizes key triggers before close.`, `市场结束时间为 ${formatDate(market.endDate)}，推演将优先关注结束前的关键触发因素。`)],
+    [copy('Risk Note', '风险提示'), copy('This script is scenario analysis based on market data and AI reasoning. It is not trading advice.', '该脚本为基于市场数据和 AI 推理的情景分析，不构成交易建议。')],
   ]
   return (
     <div className="summary-list">

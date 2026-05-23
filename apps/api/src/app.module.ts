@@ -17,6 +17,7 @@ import { MaintenanceModule } from './modules/maintenance/maintenance.module';
 import { MarketsModule } from './modules/markets/markets.module';
 import { MonitorModule } from './modules/monitor/monitor.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { PaymentsModule } from './modules/payments/payments.module';
 import { PolymarketSyncModule } from './modules/polymarket-sync/polymarket-sync.module';
 import { PortfolioModule } from './modules/portfolio/portfolio.module';
 import { ScriptsModule } from './modules/scripts/scripts.module';
@@ -46,6 +47,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     ScriptsModule,
     TradingModule,
     OrdersModule,
+    PaymentsModule,
     PortfolioModule,
     MonitorModule,
     AuditModule,

@@ -111,48 +111,68 @@ enum SyncRunStatus {
   failed
 }
 
+enum MembershipTier {
+  premium
+}
+
+enum MembershipStatus {
+  active
+  expired
+  revoked
+}
+
+enum ArcPaymentIntentStatus {
+  pending
+  confirmed
+  expired
+  failed
+  cancelled
+}
+
 model User {
-  id               String            @id @default(uuid())
-  walletAddress    String            @unique
-  displayName      String?
-  avatarUrl        String?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  sessions         WalletSession[]
-  inferenceRuns    InferenceRun[]
-  scripts          CausalScript[]
-  orderIntents     OrderIntent[]
-  orderSubmissions OrderSubmission[]
-  polymarketAccount UserPolymarketAccount?
+  id                       String                    @id @default(uuid())
+  walletAddress            String                    @unique
+  displayName              String?
+  avatarUrl                String?
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  sessions                 WalletSession[]
+  inferenceRuns            InferenceRun[]
+  scripts                  CausalScript[]
+  orderIntents             OrderIntent[]
+  orderSubmissions         OrderSubmission[]
+  polymarketAccount        UserPolymarketAccount?
   polymarketAuthChallenges PolymarketAuthChallenge[]
-  portfolioSnapshots PortfolioSnapshot[]
-  positions        ExternalPosition[]
-  auditEvents      AuditEvent[]
+  portfolioSnapshots       PortfolioSnapshot[]
+  positions                ExternalPosition[]
+  auditEvents              AuditEvent[]
+  arcPaymentIntents        ArcPaymentIntent[]
+  membershipEntitlements   MembershipEntitlement[]
 }
 
 model UserPolymarketAccount {
-  id                         String   @id @default(uuid())
-  userId                     String   @unique
-  walletAddress              String
-  chainId                    Int
-  signatureType              Int      @default(3)
-  clobApiKeyCiphertext       String?
-  clobApiSecretCiphertext    String?
+  id                          String    @id @default(uuid())
+  userId                      String    @unique
+  walletAddress               String
+  chainId                     Int
+  signatureType               Int       @default(3)
+  clobApiKeyCiphertext        String?
+  clobApiSecretCiphertext     String?
   clobApiPassphraseCiphertext String?
-  clobApiKeyPreview          String?
-  clobApiCreatedAt           DateTime?
-  depositWalletAddress       String?
-  depositWalletDeployed      Boolean  @default(false)
-  depositWalletTxId          String?
-  depositWalletTxState       String?
-  balanceRaw                 String?
-  allowanceJson              Json?
-  readinessStatus            String   @default("not_ready")
-  readinessReason            String?
-  lastReadinessCheckedAt     DateTime?
-  createdAt                  DateTime @default(now())
-  updatedAt                  DateTime @updatedAt
-  user                       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clobApiKeyPreview           String?
+  clobApiCreatedAt            DateTime?
+  depositWalletAddress        String?
+  depositWalletDeployed       Boolean   @default(false)
+  depositWalletTxId           String?
+  depositWalletTxState        String?
+  balanceRaw                  String?
+  allowanceJson               Json?
+  readinessStatus             String    @default("not_ready")
+  readinessReason             String?
+  lastReadinessCheckedAt      DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+  user                        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([walletAddress, chainId])
   @@index([readinessStatus, updatedAt(sort: Desc)])
@@ -280,21 +300,21 @@ model PolymarketMarket {
 }
 
 model PolymarketOutcome {
-  id             String           @id @default(uuid())
-  marketId       String
-  outcomeIndex   Int
-  label          String
-  clobTokenId    String           @unique
-  price          Decimal?
-  bestBid        Decimal?
-  bestAsk        Decimal?
-  lastTradePrice Decimal?
-  rawPayload     Json?
-  syncedAt       DateTime
-  market         PolymarketMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
-  selections     ScriptOutcomeSelection[]
-  orders         CausewayOrder[]
-  snapshots      MarketSnapshot[]
+  id                String                   @id @default(uuid())
+  marketId          String
+  outcomeIndex      Int
+  label             String
+  clobTokenId       String                   @unique
+  price             Decimal?
+  bestBid           Decimal?
+  bestAsk           Decimal?
+  lastTradePrice    Decimal?
+  rawPayload        Json?
+  syncedAt          DateTime
+  market            PolymarketMarket         @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  selections        ScriptOutcomeSelection[]
+  orders            CausewayOrder[]
+  snapshots         MarketSnapshot[]
   externalPositions ExternalPosition[]
 
   @@unique([marketId, outcomeIndex])
@@ -334,15 +354,15 @@ model MarketNetworkNode {
 }
 
 model MarketNetworkEdge {
-  id             String           @id @default(uuid())
+  id             String                    @id @default(uuid())
   sourceMarketId String
   targetMarketId String
   relationType   MarketNetworkRelationType
   weight         Decimal
   metadata       Json
   computedAt     DateTime
-  sourceMarket   PolymarketMarket @relation("MarketNetworkEdgeSource", fields: [sourceMarketId], references: [id], onDelete: Cascade)
-  targetMarket   PolymarketMarket @relation("MarketNetworkEdgeTarget", fields: [targetMarketId], references: [id], onDelete: Cascade)
+  sourceMarket   PolymarketMarket          @relation("MarketNetworkEdgeSource", fields: [sourceMarketId], references: [id], onDelete: Cascade)
+  targetMarket   PolymarketMarket          @relation("MarketNetworkEdgeTarget", fields: [targetMarketId], references: [id], onDelete: Cascade)
 
   @@unique([sourceMarketId, targetMarketId, relationType])
   @@index([sourceMarketId])
@@ -382,8 +402,8 @@ model InferenceRun {
 }
 
 model InferenceCacheEntry {
-  id                  String   @id @default(uuid())
-  cacheKey            String   @unique
+  id                  String    @id @default(uuid())
+  cacheKey            String    @unique
   model               String
   promptVersion       String
   outputSchemaVersion String
@@ -391,9 +411,9 @@ model InferenceCacheEntry {
   outputHash          String
   resultJson          Json
   expiresAt           DateTime
-  createdAt           DateTime @default(now())
+  createdAt           DateTime  @default(now())
   lastUsedAt          DateTime?
-  useCount            Int      @default(0)
+  useCount            Int       @default(0)
 
   @@index([expiresAt])
 }
@@ -463,11 +483,11 @@ model ScriptOutcomeSelection {
 }
 
 model OrderIntent {
-  id                      String              @id @default(uuid())
+  id                      String            @id @default(uuid())
   userId                  String
   scriptId                String
-  status                  OrderIntentStatus   @default(draft)
-  executionMode           ExecutionMode       @default(dry_run)
+  status                  OrderIntentStatus @default(draft)
+  executionMode           ExecutionMode     @default(dry_run)
   totalAmountUsd          Decimal
   cashAvailable           Decimal?
   tradingCapability       String?
@@ -477,10 +497,10 @@ model OrderIntent {
   previewJson             Json
   riskJson                Json
   previewExpiresAt        DateTime?
-  createdAt               DateTime            @default(now())
-  updatedAt               DateTime            @updatedAt
-  user                    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  script                  CausalScript        @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  user                    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  script                  CausalScript      @relation(fields: [scriptId], references: [id], onDelete: Cascade)
   orders                  CausewayOrder[]
   submissions             OrderSubmission[]
 
@@ -622,4 +642,48 @@ model AuditEvent {
   @@index([requestId])
   @@index([entityType, entityId, createdAt(sort: Desc)])
   @@index([createdAt])
+}
+
+model ArcPaymentIntent {
+  id                           String                  @id @default(uuid())
+  userId                       String
+  walletAddress                String
+  sku                          String
+  amountMicroUsd               BigInt
+  currency                     String                  @default("USDC")
+  chainId                      Int
+  tokenAddress                 String
+  receiverAddress              String
+  status                       ArcPaymentIntentStatus  @default(pending)
+  txHash                       String?                 @unique
+  failureReason                String?
+  expiresAt                    DateTime
+  confirmedAt                  DateTime?
+  metadata                     Json
+  createdAt                    DateTime                @default(now())
+  updatedAt                    DateTime                @updatedAt
+  fundedMembershipEntitlements MembershipEntitlement[] @relation("MembershipSourcePaymentIntent")
+  user                         User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, expiresAt])
+  @@index([walletAddress, chainId])
+}
+
+model MembershipEntitlement {
+  id                    String            @id @default(uuid())
+  userId                String
+  tier                  MembershipTier
+  status                MembershipStatus  @default(active)
+  startsAt              DateTime
+  expiresAt             DateTime
+  sourcePaymentIntentId String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  sourcePaymentIntent   ArcPaymentIntent? @relation("MembershipSourcePaymentIntent", fields: [sourcePaymentIntentId], references: [id], onDelete: SetNull)
+  user                  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tier])
+  @@index([userId, status, expiresAt])
+  @@index([expiresAt])
 }

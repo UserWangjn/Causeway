@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CurrentUser } from '../../src/common/decorators/current-user.decorator';
 import type { PrismaService } from '../../src/database/prisma.service';
 import type { AiClientService } from '../../src/integrations/ai/services/ai-client.service';
-import { buildMockInferenceOutput, MOCK_INFERENCE_MODEL } from '../../src/modules/inference/inference-engine';
 import { InferenceService } from '../../src/modules/inference/inference.service';
 import type { InferencePromptInput } from '../../src/modules/inference/inference.types';
+import { buildFixtureInferenceOutput } from '../support/inference-output.fixture';
 
 describe('InferenceService', () => {
-  it('rejects non-mock models when the AI provider is unavailable', async () => {
+  it('rejects inference when the AI provider is unavailable', async () => {
     const aiClient = {
       getCapability: vi.fn().mockReturnValue({
         status: 'unavailable',
@@ -28,7 +28,7 @@ describe('InferenceService', () => {
       },
     }, aiClient);
 
-    await expect(service.createRun(currentUser(), createRunDto('real-model'))).rejects.toThrow(
+    await expect(service.createRun(currentUser(), createRunDto('deepseek-v4-flash'))).rejects.toThrow(
       'AI inference client is not configured',
     );
     expect(polymarketMarketFindUnique).not.toHaveBeenCalled();
@@ -37,17 +37,18 @@ describe('InferenceService', () => {
     expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
   });
 
-  it('uses the configured AI provider for non-mock models', async () => {
+  it('uses the configured AI provider for real models', async () => {
     const tx = createPersistTransactionClient();
     const aiClient = {
       getCapability: vi.fn().mockReturnValue({
         status: 'available',
         reason: null,
-        model: 'gpt-test',
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
       }),
       runStructuredInference: vi.fn(),
       runStructuredInferenceContent: vi.fn((input: InferencePromptInput) =>
-        Promise.resolve(JSON.stringify(buildMockInferenceOutput(input))),
+        Promise.resolve(JSON.stringify(buildFixtureInferenceOutput(input))),
       ),
     };
     let createdInputJson: unknown;
@@ -77,7 +78,7 @@ describe('InferenceService', () => {
             depth: 1,
             maxMarketsPerLayer: 2,
             confidenceThreshold: 0.5,
-            model: 'gpt-test',
+            model: 'deepseek-v4-flash',
             cacheEnabled: true,
             cacheKey: 'cache_key_1',
             inputJson: createdInputJson,
@@ -91,7 +92,7 @@ describe('InferenceService', () => {
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
     }, aiClient);
 
-    const result = await service.createRun(currentUser(), createRunDto('gpt-test'));
+    const result = await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
 
     expect(result).toMatchObject({
       runId: 'run_1',
@@ -108,7 +109,7 @@ describe('InferenceService', () => {
       scriptId: 'script_1',
     });
     const providerOptions = readProviderCallOptions(aiClient.runStructuredInferenceContent, 0);
-    expect(providerOptions.model).toBe('gpt-test');
+    expect(providerOptions.model).toBe('deepseek-v4-flash');
     expect(providerOptions.prompt?.systemPrompt).toContain('structured market data provided by the backend');
   });
 
@@ -117,7 +118,8 @@ describe('InferenceService', () => {
       getCapability: vi.fn().mockReturnValue({
         status: 'available',
         reason: null,
-        model: 'gpt-test',
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
       }),
       runStructuredInference: vi.fn(),
       runStructuredInferenceContent: vi.fn(),
@@ -140,10 +142,52 @@ describe('InferenceService', () => {
     await service.createRun(currentUser(), createRunDto('auto'));
 
     expect(inferenceRunCreate).toHaveBeenCalledTimes(1);
-    expect(inferenceRunCreate.mock.calls[0]?.[0].data.model).toBe('gpt-test');
+    expect(inferenceRunCreate.mock.calls[0]?.[0].data.model).toBe('deepseek-v4-flash');
     const storedInput = readRecord(createdInputJson, 'createdInputJson');
-    expect(readStringProperty(storedInput, 'model')).toBe('gpt-test');
+    expect(readStringProperty(storedInput, 'model')).toBe('deepseek-v4-flash');
     expect(readStringProperty(storedInput, 'requestedModel')).toBe('auto');
+  });
+
+  it('caps high-depth inference output breadth before storing the prompt input', async () => {
+    const aiClient = {
+      getCapability: vi.fn().mockReturnValue({
+        status: 'available',
+        reason: null,
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      }),
+      runStructuredInference: vi.fn(),
+      runStructuredInferenceContent: vi.fn(),
+    };
+    let createdInputJson: unknown;
+    const inferenceRunCreate = vi.fn((args: InferenceRunCreateArgs) => {
+      createdInputJson = args.data.inputJson;
+      return Promise.resolve({ id: 'run_1' });
+    });
+    const service = createService({
+      polymarketMarket: {
+        findUnique: vi.fn().mockResolvedValue(rootMarket()),
+        findMany: vi.fn().mockResolvedValue([candidateMarket()]),
+      },
+      inferenceRun: {
+        create: inferenceRunCreate,
+      },
+      membershipEntitlement: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'membership_1' }),
+      },
+    }, aiClient);
+
+    await service.createRun(currentUser(), {
+      ...createRunDto('deepseek-v4-pro'),
+      depth: 3,
+      maxMarketsPerLayer: 8,
+    });
+
+    expect(inferenceRunCreate.mock.calls[0]?.[0].data.maxMarketsPerLayer).toBe(3);
+    const storedInput = readRecord(createdInputJson, 'createdInputJson');
+    const settings = readRecordProperty(storedInput, 'settings');
+    expect(readNumberProperty(settings, 'maxMarketsPerLayer')).toBe(3);
   });
 
   it('repairs invalid provider output once before completing the run', async () => {
@@ -153,12 +197,13 @@ describe('InferenceService', () => {
       getCapability: vi.fn().mockReturnValue({
         status: 'available',
         reason: null,
-        model: 'gpt-test',
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
       }),
       runStructuredInference: vi.fn(),
       runStructuredInferenceContent: vi.fn((input: InferencePromptInput) => {
         providerCallCount += 1;
-        const output = buildMockInferenceOutput(input);
+        const output = buildFixtureInferenceOutput(input);
         if (providerCallCount === 1) {
           output.nodes[1].confidence = 0.1;
         }
@@ -192,7 +237,7 @@ describe('InferenceService', () => {
             depth: 1,
             maxMarketsPerLayer: 2,
             confidenceThreshold: 0.5,
-            model: 'gpt-test',
+            model: 'deepseek-v4-flash',
             cacheEnabled: true,
             cacheKey: 'cache_key_1',
             inputJson: createdInputJson,
@@ -206,7 +251,7 @@ describe('InferenceService', () => {
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
     }, aiClient);
 
-    await service.createRun(currentUser(), createRunDto('gpt-test'));
+    await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
     const completed = await service.processQueuedRun('run_1');
 
     expect(completed).toMatchObject({ status: 'completed', scriptId: 'script_1' });
@@ -225,12 +270,13 @@ describe('InferenceService', () => {
       getCapability: vi.fn().mockReturnValue({
         status: 'available',
         reason: null,
-        model: 'gpt-test',
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
       }),
       runStructuredInference: vi.fn(),
       runStructuredInferenceContent: vi.fn((input: InferencePromptInput) => {
         providerCallCount += 1;
-        return Promise.resolve(providerCallCount === 1 ? 'not-json' : JSON.stringify(buildMockInferenceOutput(input)));
+        return Promise.resolve(providerCallCount === 1 ? 'not-json' : JSON.stringify(buildFixtureInferenceOutput(input)));
       }),
     };
     let createdInputJson: unknown;
@@ -260,7 +306,7 @@ describe('InferenceService', () => {
             depth: 1,
             maxMarketsPerLayer: 2,
             confidenceThreshold: 0.5,
-            model: 'gpt-test',
+            model: 'deepseek-v4-flash',
             cacheEnabled: true,
             cacheKey: 'cache_key_1',
             inputJson: createdInputJson,
@@ -274,7 +320,7 @@ describe('InferenceService', () => {
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
     }, aiClient);
 
-    await service.createRun(currentUser(), createRunDto('gpt-test'));
+    await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
     const completed = await service.processQueuedRun('run_1');
 
     expect(completed).toMatchObject({ status: 'completed', scriptId: 'script_1' });
@@ -292,7 +338,8 @@ describe('InferenceService', () => {
       getCapability: vi.fn().mockReturnValue({
         status: 'available',
         reason: null,
-        model: 'gpt-test',
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
       }),
       runStructuredInference: vi.fn(),
       runStructuredInferenceContent: vi.fn(() => {
@@ -324,7 +371,7 @@ describe('InferenceService', () => {
             depth: 1,
             maxMarketsPerLayer: 2,
             confidenceThreshold: 0.5,
-            model: 'gpt-test',
+            model: 'deepseek-v4-flash',
             cacheEnabled: true,
             cacheKey: 'cache_key_1',
             inputJson: createdInputJson,
@@ -336,7 +383,7 @@ describe('InferenceService', () => {
       },
     }, aiClient);
 
-    await service.createRun(currentUser(), createRunDto('gpt-test'));
+    await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
     await expect(service.processQueuedRun('run_1')).resolves.toBeNull();
 
     expect(aiClient.runStructuredInferenceContent).toHaveBeenCalledTimes(2);
@@ -357,12 +404,13 @@ describe('InferenceService', () => {
     expect(readStringProperty(readRecord(attempts[0], 'attempts.0'), 'parseError')).toContain('invalid JSON');
   });
 
-  it('rejects non-mock models that do not match the configured provider model', async () => {
+  it('rejects models that do not match the configured provider model', async () => {
     const aiClient = {
       getCapability: vi.fn().mockReturnValue({
         status: 'available',
         reason: null,
-        model: 'gpt-configured',
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash'],
       }),
       runStructuredInference: vi.fn(),
       runStructuredInferenceContent: vi.fn(),
@@ -373,8 +421,8 @@ describe('InferenceService', () => {
       },
     }, aiClient);
 
-    await expect(service.createRun(currentUser(), createRunDto('gpt-other'))).rejects.toThrow(
-      'AI model gpt-other is not configured',
+    await expect(service.createRun(currentUser(), createRunDto('unsupported-model'))).rejects.toThrow(
+      'AI model unsupported-model is not configured',
     );
     expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
   });
@@ -384,7 +432,8 @@ describe('InferenceService', () => {
       getCapability: vi.fn().mockReturnValue({
         status: 'available',
         reason: null,
-        model: 'gpt-test',
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
       }),
       runStructuredInference: vi.fn(),
       runStructuredInferenceContent: vi.fn(),
@@ -404,15 +453,74 @@ describe('InferenceService', () => {
       },
     }, aiClient);
 
-    await service.createRun(currentUser(), createRunDto('gpt-test'));
+    await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
 
     const input = readRecord(createdInputJson, 'inputJson');
     expect(readArrayProperty(input, 'candidateMarkets')).toHaveLength(0);
     expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
   });
 
-  it('queues the mock model and completes it through the inference worker', async () => {
+  it('requires premium membership for advanced models', async () => {
+    const aiClient = {
+      getCapability: vi.fn().mockReturnValue({
+        status: 'available',
+        reason: null,
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      }),
+      runStructuredInference: vi.fn(),
+      runStructuredInferenceContent: vi.fn(),
+    };
+    const service = createService({
+      polymarketMarket: {
+        findUnique: vi.fn(),
+      },
+    }, aiClient);
+
+    await expect(service.createRun(currentUser(), createRunDto('deepseek-v4-pro'))).rejects.toThrow(
+      'Premium membership is required',
+    );
+    expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
+  });
+
+  it('requires premium membership for inference depth above one layer', async () => {
+    const aiClient = {
+      getCapability: vi.fn().mockReturnValue({
+        status: 'available',
+        reason: null,
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      }),
+      runStructuredInference: vi.fn(),
+      runStructuredInferenceContent: vi.fn(),
+    };
+    const service = createService({
+      polymarketMarket: {
+        findUnique: vi.fn(),
+      },
+    }, aiClient);
+
+    await expect(service.createRun(currentUser(), {
+      ...createRunDto('deepseek-v4-flash'),
+      depth: 2,
+    })).rejects.toThrow('Premium membership is required');
+    expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
+  });
+
+  it('allows premium users to run advanced inference settings', async () => {
     const tx = createPersistTransactionClient();
+    const aiClient = {
+      getCapability: vi.fn().mockReturnValue({
+        status: 'available',
+        reason: null,
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      }),
+      runStructuredInference: vi.fn(),
+      runStructuredInferenceContent: vi.fn((input: InferencePromptInput) =>
+        Promise.resolve(JSON.stringify(buildFixtureInferenceOutput(input))),
+      ),
+    };
     let createdInputJson: unknown;
     const inferenceRunCreate = vi.fn((args: InferenceRunCreateArgs) => {
       createdInputJson = args.data.inputJson;
@@ -437,10 +545,10 @@ describe('InferenceService', () => {
             userId: 'user_1',
             rootMarketId: 'root_market',
             rootOutcomeId: 'root_outcome',
-            depth: 1,
+            depth: 2,
             maxMarketsPerLayer: 2,
             confidenceThreshold: 0.5,
-            model: MOCK_INFERENCE_MODEL,
+            model: 'deepseek-v4-pro',
             cacheEnabled: true,
             cacheKey: 'cache_key_1',
             inputJson: createdInputJson,
@@ -451,10 +559,17 @@ describe('InferenceService', () => {
         findFirst: vi.fn().mockResolvedValue(null),
         upsert: vi.fn(),
       },
+      membershipEntitlement: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findFirst: vi.fn().mockResolvedValue({ id: 'membership_1' }),
+      },
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
-    });
+    }, aiClient);
 
-    const result = await service.createRun(currentUser(), createRunDto(MOCK_INFERENCE_MODEL));
+    const result = await service.createRun(currentUser(), {
+      ...createRunDto('deepseek-v4-pro'),
+      depth: 2,
+    });
 
     expect(result).toMatchObject({
       runId: 'run_1',
@@ -470,6 +585,8 @@ describe('InferenceService', () => {
       cacheHit: false,
       scriptId: 'script_1',
     });
+    const providerOptions = readProviderCallOptions(aiClient.runStructuredInferenceContent, 0);
+    expect(providerOptions.model).toBe('deepseek-v4-pro');
     expect(tx.scriptMarket.createMany).toHaveBeenCalledTimes(1);
     const selectionCreateManyArgs: unknown = tx.scriptOutcomeSelection.createMany.mock.calls[0]?.[0];
     const selectionRows = readArrayProperty(
@@ -522,7 +639,13 @@ function createService(
     runStructuredInferenceContent: vi.fn(),
   },
 ): InferenceService {
-  return new InferenceService(prisma as PrismaService, aiClient as AiClientService);
+  return new InferenceService({
+    membershipEntitlement: {
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    ...(prisma as Record<string, unknown>),
+  } as PrismaService, aiClient as AiClientService);
 }
 
 function createPersistTransactionClient() {
@@ -562,6 +685,8 @@ function outcomePriceRows() {
 type InferenceRunCreateArgs = {
   data: {
     inputJson: unknown;
+    maxMarketsPerLayer?: number;
+    model?: string;
   };
 };
 

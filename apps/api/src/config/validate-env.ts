@@ -149,9 +149,28 @@ const envSchema = z
     AI_ALLOWED_MODELS: z.string().optional(),
     AI_THINKING_MODE: z.union([z.literal(''), z.enum(['enabled', 'disabled'])]).optional(),
     AI_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
-    AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(16_000).default(4_000),
+    AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(16_000).default(8_000),
     ENABLE_REAL_ORDERS: z.enum(['true', 'false']).default('false'),
-    DRY_RUN: z.enum(['true', 'false']).default('true'),
+    DRY_RUN: z.enum(['true', 'false']).default('false'),
+    ARC_USDC_PAYMENTS_ENABLED: z.enum(['true', 'false']).default('false'),
+    ARC_RPC_URL: z.string().url().refine(hasNoCredentialsOrFragment, {
+      message: 'ARC_RPC_URL must not include credentials or fragments',
+    }).refine(hasSupportedRpcUrlProtocol, {
+      message: 'ARC_RPC_URL must use https, or http only for local loopback development',
+    }).default('https://rpc.testnet.arc.network'),
+    ARC_CHAIN_ID: z.coerce.number().int().positive().default(5_042_002),
+    ARC_USDC_ADDRESS: z.string().default('0x3600000000000000000000000000000000000000').refine(isEthereumAddress, {
+      message: 'ARC_USDC_ADDRESS must be an Ethereum address',
+    }),
+    ARC_PAYMENT_RECEIVER_ADDRESS: z.string().optional().refine((value) => value == null || value === '' || isEthereumAddress(value), {
+      message: 'ARC_PAYMENT_RECEIVER_ADDRESS must be an Ethereum address',
+    }),
+    ARC_PAYMENT_INTENT_TTL_MS: z.coerce.number().int().min(60_000).max(86_400_000).default(900_000),
+    ARC_PAYMENT_MIN_CONFIRMATIONS: z.coerce.number().int().min(1).max(20).default(1),
+    ARC_PREMIUM_MONTHLY_MICRO_USDC: z.coerce.number().int().min(1).max(1_000_000_000).default(1_000_000),
+    ARC_PREMIUM_MONTHLY_DAYS: z.coerce.number().int().min(1).max(366).default(30),
+    ARC_PREMIUM_YEARLY_MICRO_USDC: z.coerce.number().int().min(1).max(10_000_000_000).default(10_000_000),
+    ARC_PREMIUM_YEARLY_DAYS: z.coerce.number().int().min(1).max(3660).default(365),
     CREDENTIAL_ENCRYPTION_KEY: z.string().optional(),
     INTERNAL_API_TOKEN: z.string().optional(),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'log', 'debug', 'verbose', 'silent']).default('log'),
@@ -190,6 +209,14 @@ const envSchema = z
       if (value.CREDENTIAL_ENCRYPTION_KEY) {
         addCredentialEncryptionKeyIssues(value.CREDENTIAL_ENCRYPTION_KEY, ctx);
       }
+    }
+
+    if (value.ARC_USDC_PAYMENTS_ENABLED === 'true' && !value.ARC_PAYMENT_RECEIVER_ADDRESS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ARC_PAYMENT_RECEIVER_ADDRESS'],
+        message: 'ARC_PAYMENT_RECEIVER_ADDRESS is required when ARC_USDC_PAYMENTS_ENABLED=true',
+      });
     }
 
     if (value.NODE_ENV !== 'production') {

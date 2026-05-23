@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+﻿import { describe, expect, it, vi } from 'vitest';
 import type { CurrentUser } from '../../src/common/decorators/current-user.decorator';
 import type { PrismaService } from '../../src/database/prisma.service';
 import { ScriptsService } from '../../src/modules/scripts/scripts.service';
@@ -196,7 +196,7 @@ describe('ScriptsService', () => {
         stage: 'script_generation',
         progress: 100,
         cacheHit: false,
-        model: 'mock-causeway-v1',
+        model: 'deepseek-v4-flash',
         errorMessage: null,
         createdAt: new Date('2026-05-18T00:00:00.000Z'),
         completedAt: new Date('2026-05-18T00:00:30.000Z'),
@@ -415,7 +415,7 @@ describe('ScriptsService', () => {
         stage: 'script_generation',
         progress: 100,
         cacheHit: false,
-        model: 'mock-causeway-v1',
+        model: 'deepseek-v4-flash',
         errorMessage: null,
         createdAt: '2026-05-18T00:00:00.000Z',
         completedAt: '2026-05-18T00:00:30.000Z',

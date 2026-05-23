@@ -141,22 +141,32 @@ describe('readiness hardening e2e', () => {
 
 async function createReadinessFailureApp(): Promise<INestApplication> {
   configureTestEnvironment();
-  const { AppModule } = await import('../../src/app.module');
-  const moduleRef = await Test.createTestingModule({
-    imports: [AppModule],
-  })
-    .overrideProvider(PrismaService)
-    .useValue({
-      $connect: () => Promise.resolve(),
-      $disconnect: () => Promise.resolve(),
-      $queryRaw: () => Promise.reject(new Error('postgres://user:secret@localhost/db')),
+  const previousCleanupEnabled = process.env.MAINTENANCE_CLEANUP_ENABLED;
+  process.env.MAINTENANCE_CLEANUP_ENABLED = 'false';
+  try {
+    const { AppModule } = await import('../../src/app.module');
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule],
     })
-    .compile();
+      .overrideProvider(PrismaService)
+      .useValue({
+        $connect: () => Promise.resolve(),
+        $disconnect: () => Promise.resolve(),
+        $queryRaw: () => Promise.reject(new Error('postgres://user:secret@localhost/db')),
+      })
+      .compile();
 
-  const app = moduleRef.createNestApplication();
-  configureApp(app, app.get(ConfigService));
-  await app.init();
-  return app;
+    const app = moduleRef.createNestApplication();
+    configureApp(app, app.get(ConfigService));
+    await app.init();
+    return app;
+  } finally {
+    if (previousCleanupEnabled == null) {
+      delete process.env.MAINTENANCE_CLEANUP_ENABLED;
+    } else {
+      process.env.MAINTENANCE_CLEANUP_ENABLED = previousCleanupEnabled;
+    }
+  }
 }
 
 function readProcessEnv<T extends readonly string[]>(keys: T): Partial<Record<T[number], string>> {

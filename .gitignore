@@ -9,3 +9,4 @@ config.local.json
 backend/config.local.json
 *.tsbuildinfo
 .logs
+.tmp/

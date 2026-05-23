@@ -1,109 +1,194 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../../src/database/prisma.service';
+import type { ClobClient } from '../../src/integrations/polymarket/services/clob.client';
 import { MonitorService } from '../../src/modules/monitor/monitor.service';
+import type { TradingService } from '../../src/modules/trading/trading.service';
 
 describe('MonitorService', () => {
-  it('records a degraded local order status refresh summary in batches', async () => {
+  it('records an available CLOB order status refresh summary in batches', async () => {
+    const externalOrderId = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const causewayOrderFindMany = vi.fn().mockResolvedValue([
-      {
-        id: 'order_dry_run',
-        status: 'dry_run_completed',
-        externalOrderId: null,
-        orderIntent: {
-          executionMode: 'dry_run',
-          status: 'dry_run_completed',
-        },
-      },
-      {
+      orderStatusRecord({
         id: 'order_real_submitted',
-        status: 'submitted',
-        externalOrderId: null,
-        orderIntent: {
-          executionMode: 'real',
-          status: 'submitted',
-        },
-      },
+        externalOrderId,
+      }),
     ]);
-    const syncRunCreate = vi.fn().mockResolvedValue({
-      id: 'sync_run_1',
-      jobType: 'order_status_refresh',
-      status: 'running',
-    });
-    const syncRunUpdate = vi.fn().mockResolvedValue({
-      id: 'sync_run_1',
-      jobType: 'order_status_refresh',
-      status: 'completed',
-    });
-    const service = new MonitorService({
+    const causewayOrderUpdate = vi.fn().mockResolvedValue({});
+    const orderIntentUpdate = vi.fn().mockResolvedValue({});
+    const tx = {
+      causewayOrder: {
+        update: causewayOrderUpdate,
+        findMany: vi.fn().mockResolvedValue([{ status: 'filled' }]),
+      },
+      orderIntent: {
+        update: orderIntentUpdate,
+      },
+    };
+    const prisma = {
       causewayOrder: {
         findMany: causewayOrderFindMany,
       },
       syncRun: {
-        create: syncRunCreate,
-        update: syncRunUpdate,
+        create: vi.fn().mockResolvedValue({
+          id: 'sync_run_1',
+          jobType: 'order_status_refresh',
+          status: 'running',
+        }),
+        update: vi.fn().mockResolvedValue({
+          id: 'sync_run_1',
+          jobType: 'order_status_refresh',
+          status: 'completed',
+        }),
       },
-    } as unknown as PrismaService);
+      $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
+    };
+    const clobClient = {
+      getOrder: vi.fn().mockResolvedValue({
+        id: externalOrderId,
+        status: 'MATCHED',
+        owner: null,
+        makerAddress: null,
+        market: null,
+        assetId: 'token_1',
+        side: 'BUY',
+        originalSize: '20',
+        sizeMatched: '20',
+        price: '0.50',
+        outcome: 'Yes',
+        expiration: null,
+        orderType: 'GTC',
+        associateTrades: [],
+        createdAt: null,
+        raw: {
+          id: externalOrderId,
+          status: 'MATCHED',
+        },
+      }),
+    };
+    const tradingService = {
+      getUserClobCredentials: vi.fn().mockResolvedValue({
+        key: 'key',
+        secret: 'secret',
+        passphrase: 'passphrase',
+        address: '0x1111111111111111111111111111111111111111',
+      }),
+    };
+    const service = createService(prisma, clobClient, tradingService);
 
     const result = await service.refreshOrderStatuses();
 
-    expect(syncRunCreate).toHaveBeenCalledWith({
+    expect(prisma.syncRun.create).toHaveBeenCalledWith({
       data: {
         jobType: 'order_status_refresh',
         scope: 'orders',
         status: 'running',
         metadata: {
-          capability: 'degraded',
-          source: 'local_order_state',
-          reason: 'Order status refresh uses local order state; external CLOB status refresh is not wired yet',
-          batchSize: 500,
+          capability: 'available',
+          source: 'polymarket_clob',
+          reason: 'Order status refresh uses Polymarket CLOB order detail when external order ids are available',
+          batchSize: 100,
         },
       },
     });
     expect(causewayOrderFindMany).toHaveBeenCalledWith({
       where: {
+        orderIntent: {
+          executionMode: 'real',
+        },
         status: {
-          in: ['preview_ready', 'dry_run_completed', 'submitted', 'partially_filled', 'filled', 'unknown', 'cancelled', 'failed'],
+          in: ['submitted', 'partially_filled', 'unknown'],
         },
       },
       select: {
         id: true,
         status: true,
         externalOrderId: true,
+        orderIntentId: true,
         orderIntent: {
           select: {
+            id: true,
             executionMode: true,
             status: true,
+            user: {
+              select: {
+                id: true,
+                walletAddress: true,
+                polymarketAccount: {
+                  select: {
+                    chainId: true,
+                  },
+                },
+              },
+            },
           },
         },
       },
       orderBy: { id: 'asc' },
-      take: 500,
+      take: 100,
     });
-    expect(syncRunUpdate).toHaveBeenCalledWith({
+    expect(tradingService.getUserClobCredentials).toHaveBeenCalledWith({
+      id: 'user_1',
+      sessionId: 'monitor_order_status_refresh',
+      walletAddress: '0x1111111111111111111111111111111111111111',
+      chainId: 137,
+    });
+    expect(clobClient.getOrder).toHaveBeenCalledWith(externalOrderId, {
+      key: 'key',
+      secret: 'secret',
+      passphrase: 'passphrase',
+      address: '0x1111111111111111111111111111111111111111',
+    });
+    expect(causewayOrderUpdate).toHaveBeenCalledWith({
+      where: { id: 'order_real_submitted' },
+      data: {
+        status: 'filled',
+        errorMessage: null,
+        responsePayload: {
+          source: 'polymarket_clob_order_detail',
+          refreshedAt: expect.any(String) as string,
+          order: {
+            id: externalOrderId,
+            status: 'MATCHED',
+          },
+        },
+      },
+    });
+    expect(orderIntentUpdate).toHaveBeenCalledWith({
+      where: { id: 'intent_1' },
+      data: { status: 'submitted' },
+    });
+    expect(prisma.syncRun.update).toHaveBeenCalledWith({
       where: { id: 'sync_run_1' },
       data: {
         status: 'completed',
         finishedAt: expect.any(Date) as Date,
-        fetchedCount: 2,
-        upsertedCount: 0,
+        fetchedCount: 1,
+        upsertedCount: 1,
         cursor: 'order_real_submitted',
         metadata: {
-          capability: 'degraded',
-          source: 'local_order_state',
-          reason: 'Order status refresh uses local order state; external CLOB status refresh is not wired yet',
-          batchSize: 500,
+          capability: 'available',
+          source: 'polymarket_clob',
+          reason: 'Order status refresh uses Polymarket CLOB order detail when external order ids are available',
+          batchSize: 100,
           batchCount: 1,
-          inspectedOrderCount: 2,
+          inspectedOrderCount: 1,
           statusCounts: {
-            dry_run_completed: 1,
             submitted: 1,
           },
           intentStatusCounts: {
-            dry_run_completed: 1,
             submitted: 1,
           },
+          remoteStatusCounts: {
+            MATCHED: 1,
+          },
           refreshableExternalOrderCount: 1,
-          missingExternalOrderIdCount: 1,
+          missingExternalOrderIdCount: 0,
+          remoteRefreshAttemptCount: 1,
+          remoteRefreshSuccessCount: 1,
+          remoteRefreshFailedCount: 0,
+          remoteOrderPersistedCount: 1,
+          remoteStatusUpdatedCount: 1,
+          remoteRefreshErrorCounts: {},
         },
       },
     });
@@ -111,20 +196,61 @@ describe('MonitorService', () => {
       runId: 'sync_run_1',
       jobType: 'order_status_refresh',
       status: 'completed',
-      capability: 'degraded',
-      source: 'local_order_state',
-      inspectedOrderCount: 2,
+      capability: 'available',
+      source: 'polymarket_clob',
+      inspectedOrderCount: 1,
       batchCount: 1,
       statusCounts: {
-        dry_run_completed: 1,
         submitted: 1,
       },
       refreshableExternalOrderCount: 1,
-      missingExternalOrderIdCount: 1,
+      missingExternalOrderIdCount: 0,
+      remoteRefreshAttemptCount: 1,
+      remoteRefreshSuccessCount: 1,
+      remoteOrderPersistedCount: 1,
+      remoteStatusUpdatedCount: 1,
     });
   });
 
-  it('records a failed local order status refresh run when scanning fails', async () => {
+  it('records a degraded CLOB order status refresh summary when an order has no external order id', async () => {
+    const prisma = {
+      causewayOrder: {
+        findMany: vi.fn().mockResolvedValue([orderStatusRecord({ externalOrderId: null })]),
+      },
+      syncRun: {
+        create: vi.fn().mockResolvedValue({
+          id: 'sync_run_1',
+          jobType: 'order_status_refresh',
+          status: 'running',
+        }),
+        update: vi.fn().mockResolvedValue({
+          id: 'sync_run_1',
+          jobType: 'order_status_refresh',
+          status: 'completed',
+        }),
+      },
+    };
+    const service = createService(prisma);
+
+    const result = await service.refreshOrderStatuses();
+
+    expect(result).toMatchObject({
+      capability: 'degraded',
+      source: 'polymarket_clob',
+      inspectedOrderCount: 1,
+      refreshableExternalOrderCount: 1,
+      missingExternalOrderIdCount: 1,
+      remoteRefreshAttemptCount: 0,
+    });
+    const updateArgs = vi.mocked(prisma.syncRun.update).mock.calls[0]?.[0] as {
+      data: { upsertedCount: number; metadata: { capability: string; missingExternalOrderIdCount: number } };
+    };
+    expect(updateArgs.data.upsertedCount).toBe(0);
+    expect(updateArgs.data.metadata.capability).toBe('degraded');
+    expect(updateArgs.data.metadata.missingExternalOrderIdCount).toBe(1);
+  });
+
+  it('records a failed CLOB order status refresh run when scanning fails', async () => {
     const syncRunCreate = vi.fn().mockResolvedValue({
       id: 'sync_run_failed',
       jobType: 'order_status_refresh',
@@ -135,7 +261,7 @@ describe('MonitorService', () => {
       jobType: 'order_status_refresh',
       status: 'failed',
     });
-    const service = new MonitorService({
+    const service = createService({
       causewayOrder: {
         findMany: vi.fn().mockRejectedValue(new Error('orders scan failed')),
       },
@@ -143,7 +269,7 @@ describe('MonitorService', () => {
         create: syncRunCreate,
         update: syncRunUpdate,
       },
-    } as unknown as PrismaService);
+    });
 
     const result = await service.refreshOrderStatuses();
 
@@ -157,15 +283,22 @@ describe('MonitorService', () => {
         cursor: null,
         metadata: {
           capability: 'unavailable',
-          source: 'local_order_state',
+          source: 'polymarket_clob',
           reason: 'orders scan failed',
-          batchSize: 500,
+          batchSize: 100,
           batchCount: 0,
           inspectedOrderCount: 0,
           statusCounts: {},
           intentStatusCounts: {},
+          remoteStatusCounts: {},
           refreshableExternalOrderCount: 0,
           missingExternalOrderIdCount: 0,
+          remoteRefreshAttemptCount: 0,
+          remoteRefreshSuccessCount: 0,
+          remoteRefreshFailedCount: 0,
+          remoteOrderPersistedCount: 0,
+          remoteStatusUpdatedCount: 0,
+          remoteRefreshErrorCounts: {},
         },
       },
     });
@@ -174,7 +307,7 @@ describe('MonitorService', () => {
       jobType: 'order_status_refresh',
       status: 'failed',
       capability: 'unavailable',
-      source: 'local_order_state',
+      source: 'polymarket_clob',
       reason: 'orders scan failed',
       inspectedOrderCount: 0,
       batchCount: 0,
@@ -197,7 +330,7 @@ describe('MonitorService', () => {
       jobType: 'script_market_refresh',
       status: 'completed',
     });
-    const service = new MonitorService({
+    const service = createService({
       scriptMarket: {
         findMany: scriptMarketFindMany,
       },
@@ -208,7 +341,7 @@ describe('MonitorService', () => {
         create: syncRunCreate,
         update: syncRunUpdate,
       },
-    } as unknown as PrismaService);
+    });
 
     const result = await service.refreshScriptMarkets();
 
@@ -320,7 +453,7 @@ describe('MonitorService', () => {
       jobType: 'script_market_refresh',
       status: 'failed',
     });
-    const service = new MonitorService({
+    const service = createService({
       scriptMarket: {
         findMany: vi.fn().mockResolvedValue([scriptMarketRecord('script_market_1')]),
       },
@@ -331,7 +464,7 @@ describe('MonitorService', () => {
         create: syncRunCreate,
         update: syncRunUpdate,
       },
-    } as unknown as PrismaService);
+    });
 
     const result = await service.refreshScriptMarkets();
 
@@ -368,6 +501,46 @@ describe('MonitorService', () => {
     });
   });
 });
+
+function createService(
+  prisma: unknown,
+  clobClient: Partial<ClobClient> = {},
+  tradingService: Partial<TradingService> = {},
+): MonitorService {
+  return new MonitorService(
+    prisma as PrismaService,
+    clobClient as ClobClient,
+    tradingService as TradingService,
+  );
+}
+
+function orderStatusRecord(overrides: Partial<ReturnType<typeof baseOrderStatusRecord>> = {}) {
+  return {
+    ...baseOrderStatusRecord(),
+    ...overrides,
+  };
+}
+
+function baseOrderStatusRecord() {
+  return {
+    id: 'order_1',
+    status: 'submitted',
+    externalOrderId: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    orderIntentId: 'intent_1',
+    orderIntent: {
+      id: 'intent_1',
+      executionMode: 'real',
+      status: 'submitted',
+      user: {
+        id: 'user_1',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        polymarketAccount: {
+          chainId: 137,
+        },
+      },
+    },
+  };
+}
 
 function scriptMarketRecord(id: string) {
   return {

@@ -23,6 +23,11 @@
     "test:api:integration": "npm --workspace @causeway/api run test:integration",
     "test:api:contract": "npm --workspace @causeway/api run test:contract",
     "test:api:e2e": "npm --workspace @causeway/api run test:e2e",
+    "arc:cli": "node scripts/dev/arc-canteen.mjs",
+    "arc:check": "node scripts/dev/arc-canteen.mjs check",
+    "arc:rpc": "node scripts/dev/arc-canteen.mjs rpc-url",
+    "arc:context": "node scripts/dev/arc-canteen.mjs context sync",
+    "arc:status": "node scripts/dev/arc-canteen.mjs status",
     "smoke:api:polymarket": "npm --workspace @causeway/api run smoke:polymarket",
     "smoke:api:ai": "npm --workspace @causeway/api run smoke:ai",
     "smoke:api:real-orders": "npm --workspace @causeway/api run smoke:real-orders",
@@ -30,8 +35,7 @@
     "quality:api:full": "npm run quality:api && npm run test:api:integration && npm run test:api:contract && npm run test:api:e2e",
     "db:generate": "npm --workspace @causeway/api run db:generate",
     "db:migrate": "npm --workspace @causeway/api run db:migrate",
-    "db:deploy": "npm --workspace @causeway/api run db:deploy",
-    "db:seed:demo": "npm --workspace @causeway/api run db:seed:demo"
+    "db:deploy": "npm --workspace @causeway/api run db:deploy"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.2.11",

@@ -135,7 +135,7 @@ export class AiClientService {
         allowedModels: readAllowedModels(this.config.get<string>('ai.allowedModels'), defaultModel),
         thinkingMode: this.config.get<string>('ai.thinkingMode')?.trim() || undefined,
         timeoutMs: this.config.get<number>('ai.httpTimeoutMs', 30_000),
-        maxOutputTokens: this.config.get<number>('ai.maxOutputTokens', 4_000),
+        maxOutputTokens: this.config.get<number>('ai.maxOutputTokens', 8_000),
       },
     };
   }

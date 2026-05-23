@@ -16,7 +16,6 @@
     "smoke:polymarket": "ts-node scripts/smoke/polymarket.ts",
     "smoke:ai": "ts-node scripts/smoke/ai.ts",
     "smoke:real-orders": "ts-node scripts/smoke/real-orders.ts",
-    "db:seed:demo": "ts-node scripts/dev/seed-demo.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",

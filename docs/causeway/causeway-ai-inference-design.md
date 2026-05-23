@@ -177,12 +177,12 @@ type AiEdge = {
 
 - `AI_BASE_URL`：provider base URL，例如 `https://provider.example.com/v1`；不得包含 credentials、query 参数或 fragment。生产环境必须使用 HTTPS；开发/测试环境只允许 localhost/loopback provider 使用 HTTP。
 - `AI_API_KEY`：provider bearer token。
-- `AI_MODEL`：默认非 mock 推演模型；请求体中的 `model="auto"` 会解析为该模型。
+- `AI_MODEL`：默认真实推演模型；请求体中的 `model="auto"` 会解析为当前可用真实默认模型。
 - `AI_ALLOWED_MODELS`：逗号分隔的显式可选模型列表，始终自动包含 `AI_MODEL`；例如同时允许 `deepseek-v4-flash,deepseek-v4-pro`。
 - `AI_HTTP_TIMEOUT_MS`：provider 请求超时。
 - `AI_MAX_OUTPUT_TOKENS`：结构化输出 token 上限。
 
-默认本地和测试环境可以不配置真实 provider；此时只有 `mock-causeway-v1` 可用。真实 provider 返回结果必须先解析为 JSON，再通过后端 `AiInferenceOutput` schema 和 market/outcome 引用校验，失败则推演任务进入 `failed`，不能生成脚本。
+默认本地和测试环境也不提供运行时 mock 推演。未配置真实 provider 时，推演能力为 unavailable。provider 返回结果必须先解析为 JSON，再通过后端 `AiInferenceOutput` schema 和 market/outcome 引用校验，失败则推演任务进入 `failed`，不能生成脚本。`deepseek-v4-flash` 且 1 层推演免费；其他真实模型或 2/3 层推演需要 Premium 会员。
 
 ## 6. Outcome 选择规则
 

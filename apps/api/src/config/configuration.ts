@@ -68,11 +68,26 @@ export const configuration = () => ({
     allowedModels: process.env.AI_ALLOWED_MODELS,
     thinkingMode: process.env.AI_THINKING_MODE,
     httpTimeoutMs: Number(process.env.AI_HTTP_TIMEOUT_MS ?? 30_000),
-    maxOutputTokens: Number(process.env.AI_MAX_OUTPUT_TOKENS ?? 4_000),
+    maxOutputTokens: Number(process.env.AI_MAX_OUTPUT_TOKENS ?? 8_000),
   },
   orders: {
     enableRealOrders: process.env.ENABLE_REAL_ORDERS === 'true',
-    dryRun: process.env.DRY_RUN !== 'false',
+    dryRun: process.env.DRY_RUN === 'true',
+  },
+  arc: {
+    payments: {
+      enabled: process.env.ARC_USDC_PAYMENTS_ENABLED === 'true',
+      rpcUrl: process.env.ARC_RPC_URL ?? 'https://rpc.testnet.arc.network',
+      chainId: Number(process.env.ARC_CHAIN_ID ?? 5_042_002),
+      usdcAddress: process.env.ARC_USDC_ADDRESS ?? '0x3600000000000000000000000000000000000000',
+      receiverAddress: process.env.ARC_PAYMENT_RECEIVER_ADDRESS,
+      intentTtlMs: Number(process.env.ARC_PAYMENT_INTENT_TTL_MS ?? 900_000),
+      minConfirmations: Number(process.env.ARC_PAYMENT_MIN_CONFIRMATIONS ?? 1),
+      premiumMonthlyMicroUsd: Number(process.env.ARC_PREMIUM_MONTHLY_MICRO_USDC ?? 1_000_000),
+      premiumMonthlyDays: Number(process.env.ARC_PREMIUM_MONTHLY_DAYS ?? 30),
+      premiumYearlyMicroUsd: Number(process.env.ARC_PREMIUM_YEARLY_MICRO_USDC ?? 10_000_000),
+      premiumYearlyDays: Number(process.env.ARC_PREMIUM_YEARLY_DAYS ?? 365),
+    },
   },
   security: {
     credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY,

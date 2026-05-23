@@ -38,7 +38,7 @@ describe('PortfolioService', () => {
     });
     expect(causewayOrderFindMany).toHaveBeenCalledWith({
       where: {
-        orderIntent: { userId: 'user_1' },
+        orderIntent: { userId: 'user_1', executionMode: 'real' },
         status: { in: ['submitted', 'partially_filled'] },
       },
       select: { amountUsd: true },
@@ -159,8 +159,8 @@ describe('PortfolioService', () => {
     const orderIntentFindMany = vi.fn().mockResolvedValue([
       {
         id: 'intent_1',
-        status: 'dry_run_completed',
-        executionMode: 'dry_run',
+        status: 'submitted',
+        executionMode: 'real',
         totalAmountUsd: '10',
         createdAt: new Date('2026-05-18T00:00:00.000Z'),
         updatedAt: new Date('2026-05-18T00:01:00.000Z'),
@@ -177,8 +177,8 @@ describe('PortfolioService', () => {
             estimatedFillPrice: '0.5',
             size: '20',
             amountUsd: '10',
-            externalOrderId: null,
-            status: 'dry_run_completed',
+            externalOrderId: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            status: 'filled',
             errorMessage: null,
             market: {
               id: 'market_1',
@@ -216,7 +216,12 @@ describe('PortfolioService', () => {
         AND: [
           {
             userId: 'user_1',
-            status: { in: [OrderIntentStatus.dry_run_completed] },
+            executionMode: 'real',
+            orders: {
+              some: {
+                status: { in: ['filled', 'partially_filled'] },
+              },
+            },
           },
           {
             OR: [
@@ -275,8 +280,8 @@ describe('PortfolioService', () => {
       items: [
         {
           intentId: 'intent_1',
-          status: 'dry_run_completed',
-          executionMode: 'dry_run',
+          status: 'submitted',
+          executionMode: 'real',
           totalAmountUsd: 10,
           orders: [
             {
@@ -284,7 +289,7 @@ describe('PortfolioService', () => {
               limitPrice: 0.5,
               size: 20,
               amountUsd: 10,
-              status: 'dry_run_completed',
+              status: 'filled',
             },
           ],
         },
@@ -306,6 +311,7 @@ describe('PortfolioService', () => {
       expect.objectContaining({
         where: {
           userId: 'user_1',
+          executionMode: 'real',
           status: {
             in: [
               OrderIntentStatus.preview_ready,
@@ -737,7 +743,7 @@ describe('PortfolioService', () => {
     expect(getCurrentPositions).not.toHaveBeenCalled();
   });
 
-  it('lists local completed orders as degraded trade history', async () => {
+  it('lists monitored real filled orders as degraded trade history', async () => {
     const causewayOrderFindMany = vi.fn().mockResolvedValue([
       {
         id: 'order_1',
@@ -752,13 +758,13 @@ describe('PortfolioService', () => {
         estimatedFillPrice: '0.51',
         size: '20',
         amountUsd: '10.20',
-        externalOrderId: null,
-        status: 'dry_run_completed',
+        externalOrderId: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        status: 'filled',
         updatedAt: new Date('2026-05-18T00:02:00.000Z'),
         orderIntent: {
           id: 'intent_1',
-          executionMode: 'dry_run',
-          status: 'dry_run_completed',
+          executionMode: 'real',
+          status: 'submitted',
         },
         market: {
           id: 'market_1',
@@ -792,8 +798,8 @@ describe('PortfolioService', () => {
       where: {
         AND: [
           {
-            orderIntent: { userId: 'user_1' },
-            status: { in: ['dry_run_completed', 'filled', 'partially_filled'] },
+            orderIntent: { userId: 'user_1', executionMode: 'real' },
+            status: { in: ['filled', 'partially_filled'] },
           },
           {
             OR: [
@@ -846,17 +852,17 @@ describe('PortfolioService', () => {
       dataSource: 'local',
       nextCursor: null,
       hasMore: false,
-      error: 'real trade history source is not wired yet; returning local completed orders',
+      error: 'trade history is based on monitored Causeway orders; external non-Causeway trades are excluded',
       items: [
         {
           tradeId: 'order_1',
           orderId: 'order_1',
           intentId: 'intent_1',
-          executionMode: 'dry_run',
+          executionMode: 'real',
           price: 0.51,
           size: 20,
           amountUsd: 10.2,
-          status: 'dry_run_completed',
+          status: 'filled',
           tradedAt: '2026-05-18T00:02:00.000Z',
         },
       ],
@@ -881,12 +887,12 @@ describe('PortfolioService', () => {
     });
 
     expect(result).toMatchObject({
-      capability: 'degraded',
+      capability: 'available',
       dataSource: 'local',
       items: [],
       nextCursor: null,
       hasMore: false,
-      error: 'real trade history source is not wired yet; returning local completed orders',
+      error: null,
     });
   });
 });

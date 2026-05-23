@@ -173,6 +173,41 @@ describe('OrdersService', () => {
     expect(transaction).not.toHaveBeenCalled();
   });
 
+  it('rejects dry-run previews when dry-run order APIs are disabled', async () => {
+    const transaction = vi.fn();
+    const service = createService(
+      {
+        $transaction: transaction,
+      },
+      {
+        status: 'unavailable',
+        reason: 'fixture unavailable',
+      },
+      {},
+      { dryRun: false },
+    );
+
+    await expect(
+      service.preview(currentUser(), {
+        scriptId: 'script_1',
+        executionMode: 'dry_run',
+        selections: [
+          {
+            selectionId: 'selection_1',
+            orderMode: 'limit',
+            limitPrice: 0.5,
+            amountUsd: 10,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'DRY_RUN_ORDERS_DISABLED',
+      },
+    });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
   it('rejects previewing a selection that is not marked for buy', async () => {
     const transaction = vi.fn();
     const service = createService({
@@ -1157,6 +1192,7 @@ function createService(
     reason: 'fixture unavailable',
   },
   clobOverrides: Partial<ClobClient> = {},
+  options: { dryRun?: boolean } = {},
 ) {
   const defaultFunding = capability.status === 'available' ? 1_000 : null;
   const clobClient = {
@@ -1190,7 +1226,10 @@ function createService(
     }),
     getUserClobCredentials: vi.fn().mockResolvedValue(testClobCredentials()),
   };
-  return new OrdersService(clobClient, prisma as PrismaService, tradingService as unknown as TradingService);
+  const config = {
+    get: vi.fn((key: string, fallback?: unknown) => (key === 'orders.dryRun' ? options.dryRun ?? true : fallback)),
+  };
+  return new OrdersService(clobClient, prisma as PrismaService, tradingService as unknown as TradingService, config as never);
 }
 
 type TestCapability = {

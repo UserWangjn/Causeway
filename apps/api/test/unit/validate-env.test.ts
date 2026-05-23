@@ -37,7 +37,36 @@ describe('validateEnv', () => {
     expect(env.AUTH_SIWE_STATEMENT).toBe('Sign in to Causeway.');
     expect(env.AUTH_POLYGON_RPC_URL).toBeUndefined();
     expect(env.AI_HTTP_TIMEOUT_MS).toBe(30_000);
-    expect(env.AI_MAX_OUTPUT_TOKENS).toBe(4_000);
+    expect(env.AI_MAX_OUTPUT_TOKENS).toBe(8_000);
+    expect(env.DRY_RUN).toBe('false');
+    expect(env.ARC_USDC_PAYMENTS_ENABLED).toBe('false');
+    expect(env.ARC_RPC_URL).toBe('https://rpc.testnet.arc.network');
+    expect(env.ARC_CHAIN_ID).toBe(5_042_002);
+    expect(env.ARC_USDC_ADDRESS).toBe('0x3600000000000000000000000000000000000000');
+    expect(env.ARC_PAYMENT_INTENT_TTL_MS).toBe(900_000);
+    expect(env.ARC_PAYMENT_MIN_CONFIRMATIONS).toBe(1);
+    expect(env.ARC_PREMIUM_MONTHLY_MICRO_USDC).toBe(1_000_000);
+    expect(env.ARC_PREMIUM_YEARLY_MICRO_USDC).toBe(10_000_000);
+  });
+
+  it('requires an Arc payment receiver when Arc USDC payments are enabled', () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+        JWT_SECRET: 'dev-secret',
+        ARC_USDC_PAYMENTS_ENABLED: 'true',
+      }),
+    ).toThrow(/ARC_PAYMENT_RECEIVER_ADDRESS/);
+
+    const env = validateEnv({
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/causeway',
+      JWT_SECRET: 'dev-secret',
+      ARC_USDC_PAYMENTS_ENABLED: 'true',
+      ARC_PAYMENT_RECEIVER_ADDRESS: '0x2222222222222222222222222222222222222222',
+    });
+
+    expect(env.ARC_USDC_PAYMENTS_ENABLED).toBe('true');
+    expect(env.ARC_PAYMENT_RECEIVER_ADDRESS).toBe('0x2222222222222222222222222222222222222222');
   });
 
   it('validates SIWE frontend and Polygon RPC URLs', () => {
