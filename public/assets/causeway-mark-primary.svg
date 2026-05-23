@@ -1,0 +1,8 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Causeway Scenario Bridge Fan mark</title>
+  <desc id="desc">A single event thesis expanding into multiple prediction-market pathways.</desc>
+  <path d="M154 256H392" stroke="#1677FF" stroke-width="58" stroke-linecap="round"/>
+  <path d="M154 256L356 154" stroke="#081B33" stroke-width="58" stroke-linecap="round"/>
+  <path d="M154 256L356 358" stroke="#081B33" stroke-width="58" stroke-linecap="round"/>
+  <circle cx="130" cy="256" r="42" fill="#081B33"/>
+</svg>

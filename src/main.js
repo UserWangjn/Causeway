@@ -1,1127 +1,476 @@
-import * as THREE from "three";
 import "./styles.css";
 
-const brand = {
-  ink: "#081B33",
-  blue: "#1677FF",
-  cyan: "#22C7E8",
-  green: "#14B87A",
-  surface: "#FBFDFF",
-  border: "#D8E6F5",
-  muted: "#6B7C93",
-  paleBlue: "#EAF3FF",
-  paleCyan: "#E9FAFE",
-  darkPanel: "#0A203B",
-};
+document.body.classList.add("intro-playing");
 
-const markets = [
-  { icon: "btc", title: "BTC above $150k by Jun 2026", tag: "Macro / Crypto", prob: "1%", liq: "$2.4M", state: "Review" },
-  { icon: "fed", title: "Fed cuts rates by 25 bps", tag: "Macro Policy", prob: "31%", liq: "$860K", state: "Monitor" },
-  { icon: "cup", title: "Croatia wins the 2026 World Cup", tag: "Sports", prob: "1%", liq: "$410K", state: "Monitor" },
-  { icon: "vote", title: "Republican nominee market", tag: "Election", prob: "18%", liq: "$5.8M", state: "Review" },
-  { icon: "chip", title: "AI regulation bill passes", tag: "Policy / AI", prob: "24%", liq: "$690K", state: "Review" },
-  { icon: "chain", title: "Major chain upgrade ships", tag: "On-chain", prob: "64%", liq: "$1.1M", state: "Monitor" },
-  { icon: "chart", title: "Oil closes above $95", tag: "Commodities", prob: "9%", liq: "$530K", state: "Watch" },
-  { icon: "court", title: "Supreme Court ruling before Q4", tag: "Legal", prob: "42%", liq: "$720K", state: "Review" },
-  { icon: "game", title: "Esports final winner market", tag: "Sports / Esports", prob: "52%", liq: "$278K", state: "Watch" },
-  { icon: "signal", title: "CPI print above consensus", tag: "Macro Data", prob: "37%", liq: "$1.6M", state: "Review" },
-  { icon: "vault", title: "Election policy basket exposure", tag: "Open Vault", prob: "NAV", liq: "$3.2M", state: "Vault" },
-  { icon: "globe", title: "G7 policy statement released", tag: "Geopolitics", prob: "73%", liq: "$950K", state: "Monitor" },
-  { icon: "source", title: "Official source impact detected", tag: "Source Object", prob: "High", liq: "Fresh", state: "Matched" },
-  { icon: "token", title: "Outcome token resolves to candidate", tag: "Token Graph", prob: "OK", liq: "Live", state: "Ready" },
-  { icon: "match", title: "Related market cluster found", tag: "Matching Engine", prob: "0.82", liq: "Depth OK", state: "Matched" },
-  { icon: "preview", title: "Order preview requires confirmation", tag: "Execution", prob: "TTL", liq: "Live", state: "Preview" },
+const recipes = [
+  {
+    icon: "01",
+    title: "Election Market Chain",
+    body: "Start from one election outcome and review the second-order markets it may affect before building any order.",
+    tags: ["Politics", "Outcome Token"],
+  },
+  {
+    icon: "02",
+    title: "Macro Shock Script",
+    body: "Trace how rates, CPI, commodities, crypto, and policy markets connect through a single market thesis.",
+    tags: ["Macro", "Causal Graph"],
+  },
+  {
+    icon: "03",
+    title: "Sports Event Basket",
+    body: "Choose a team or match outcome, then keep every related market and outcome visible for manual review.",
+    tags: ["Sports", "Market Network"],
+  },
+  {
+    icon: "04",
+    title: "Open Vault Preview",
+    body: "Package rule-based probability exposure with eligibility, risk budgets, and NAV-style reporting logic.",
+    tags: ["Vaults", "Risk Budget"],
+  },
 ];
 
-const i18n = {
-  en: {
-    nav: ["System", "Workflow", "Vaults", "Roadmap"],
-    whitepaper: "Whitepaper",
-    waitlist: "Join early access",
-    eyebrow: "Prediction market intelligence layer",
-    title: "Markets are not pages. They are probability networks.",
-    lead:
-      "Prediction markets need an intelligence layer: source-aware, outcome-token native, previewable, and built for transparent exposure.",
-    ctaPrimary: "Read whitepaper",
-    ctaSecondary: "View architecture",
-    proofA: "No autonomous trading",
-    proofB: "Outcome-token native",
-    proofC: "Vault-ready reporting",
-    sphereLabel: "Live market graph",
-    panelTitle: "Selected market",
-    panelMeta: "Matched from source objects and token graph",
-    problemTitle: "Events move faster than market interfaces.",
-    problemLead:
-      "Information arrives as news, releases, feeds, and on-chain signals. Prediction markets expose prices, but they rarely show how one event propagates across related markets and outcome tokens.",
-    fractures: [
-      ["Information fracture", "News, official releases, social posts, sports feeds, and on-chain events need provenance before they can affect reasoning."],
-      ["Market fracture", "Users see titles, but real execution happens through marketId, outcomeId, and CLOB tokenId."],
-      ["Execution fracture", "AI output must become previewed, signed, confirmed, and audited user action."],
+const quickStart = [
+  ["01", "SELECT ROOT OUTCOME", "Pick a real Polymarket outcome token.", "market -> outcome -> tokenId"],
+  ["02", "RUN CAUSAL INFERENCE", "Causeway expands the thesis into a 1-3 layer graph.", "depth: 3 / threshold: 0.55"],
+  ["03", "REVIEW EVERY TOKEN", "All outcomes stay visible. No hard-coded Yes/No shortcuts.", "outcomeAction: buy | avoid"],
+  ["04", "PREVIEW ORDERS", "Refresh order books, capability status, and risk checks.", "execution: dry_run | real"],
+];
+
+const controls = [
+  {
+    step: "01 / ROOT",
+    label: "SET",
+    title: "You choose the starting token.",
+    body: "Every inference begins from a specific market, selected outcome, and CLOB token ID.",
+    fields: [
+      ["marketId", "pm_8472"],
+      ["outcome", "Yes"],
+      ["tokenId", "0x71a...9c02"],
+      ["depth", "3"],
     ],
-    systemTitle: "Causeway turns sources into tradable market context.",
-    systemLead:
-      "Causeway is organized as five explicit layers so real-time sources, self-hosted AI, execution controls, and vault logic can evolve without turning the product into a black-box trading system.",
-    layers: [
-      ["Source Object Layer", "Normalize real-world evidence with origin, timestamp, entities, confidence, freshness, and raw payload."],
-      ["Market Matching Engine", "Map evidence to real, tradable, liquid markets and explain why each outcome token is relevant."],
-      ["Causal Intelligence Loop", "Maintain source updates, market graph changes, dislocation scores, reviews, previews, and feedback."],
-      ["Human-Governed Execution", "Require fresh previews, capability checks, wallet signatures, idempotency, and explicit confirmation."],
-      ["Open Vault Layer", "Package rule-based prediction-market exposure with mandates, eligibility, risk budgets, and NAV-style reporting."],
-    ],
-    workflowTitle: "From signal to preview, every step stays auditable.",
-    workflowLead:
-      "The product experience should feel like an operating console for market reasoning: every signal is matched, scored, previewed, and recorded before execution.",
-    steps: ["Source", "Match", "Reason", "Score", "Preview", "Confirm"],
-    vaultTitle: "Open Vaults package probability exposure into transparent baskets.",
-    vaultLead:
-      "ETF-like means basket exposure and reporting experience. It does not mean legal ETF classification, investment advice, autonomous trading, or guaranteed return.",
-    vaultStats: [
-      ["Mandate", "What the basket is allowed to express"],
-      ["Eligibility", "Which markets and outcome tokens can enter"],
-      ["Risk Budget", "Position caps, liquidity limits, drawdown controls"],
-      ["NAV Logic", "Open orders, stale prices, settlement state, fees"],
-    ],
-    roadmapTitle: "Roadmap built by infrastructure dependency.",
-    roadmapLead:
-      "Each phase creates a verifiable primitive before the next layer is introduced.",
-    phases: [
-      ["I", "Workflow Layer", "Market sync, outcome-token model, causal scripts, order preview"],
-      ["II", "Real-time Source Layer", "Source objects, provenance, freshness, replayability"],
-      ["III", "Matching & Dislocation", "Explainable matching, review queues, score decomposition"],
-      ["IV", "Self-hosted AI", "Model registry, prompt registry, validators, evaluations"],
-      ["V", "Open Vaults", "Mandates, risk budgets, NAV-style reports, ecosystem APIs"],
-    ],
-    trustTitle: "Built for review, not blind automation.",
-    trustLead:
-      "Causeway's credibility comes from explicit boundaries: no custody, no guaranteed return, no autonomous submission, and no recommendation that cannot resolve to a real market and outcome token.",
-    finalTitle: "Read the Causeway Whitepaper v1.0",
-    finalLead: "The first release defines the product thesis, system architecture, roadmap, governance boundary, and open vault direction.",
-    downloadEn: "Download English",
-    downloadZh: "下载中文版",
   },
-  zh: {
-    nav: ["系统", "工作流", "金库", "路线图"],
-    whitepaper: "白皮书",
-    waitlist: "申请早期访问",
-    eyebrow: "预测市场智能层",
-    title: "市场不是页面，而是概率网络。",
-    lead:
-      "预测市场需要一层真正的智能基础设施：理解信息源，原生连接 Outcome Token，并将推理转化为可预览、可审计的市场语境。",
-    ctaPrimary: "阅读白皮书",
-    ctaSecondary: "查看架构",
-    proofA: "非自主交易",
-    proofB: "Outcome Token 原生",
-    proofC: "金库报告就绪",
-    sphereLabel: "实时市场图谱",
-    panelTitle: "选中市场",
-    panelMeta: "由 Source Object 与 Token Graph 匹配",
-    problemTitle: "现实事件移动得比市场界面更快。",
-    problemLead:
-      "信息以新闻、公告、数据源和链上信号的形式涌入。预测市场展示价格，却很少解释一个事件如何传导到相关市场与 outcome token。",
-    fractures: [
-      ["信息断裂", "新闻、官方公告、社媒、体育数据和链上事件需要来源与可信度，才能进入市场推理。"],
-      ["市场断裂", "用户看到的是标题，但真实执行发生在 marketId、outcomeId 和 CLOB tokenId。"],
-      ["执行断裂", "AI 输出必须转化为可预览、可签名、可确认、可审计的用户动作。"],
-    ],
-    systemTitle: "Causeway 将信息源转化为可交易市场语境。",
-    systemLead:
-      "Causeway 被组织为五个明确层级，让实时信息、自托管 AI、执行控制和金库逻辑可以演进，同时避免形成黑箱交易系统。",
-    layers: [
-      ["Source Object 层", "用来源、时间、实体、置信度、新鲜度和 raw payload 标准化现实证据。"],
-      ["市场匹配引擎", "把证据映射到真实、可交易、具备流动性的市场，并解释相关 outcome token。"],
-      ["因果智能循环", "维护信息更新、市场图谱变化、错配评分、审查、预览和反馈。"],
-      ["人工治理执行", "要求最新预览、能力检查、钱包签名、幂等提交和明确确认。"],
-      ["自由金库层", "用授权范围、准入规则、风险预算和净值式报告封装规则化市场敞口。"],
-    ],
-    workflowTitle: "从信号到预览，每一步都保持可审计。",
-    workflowLead:
-      "产品体验应像市场推理操作台：每个信号在执行前都被匹配、评分、预览和记录。",
-    steps: ["信息", "匹配", "推理", "评分", "预览", "确认"],
-    vaultTitle: "自由金库把概率敞口封装为透明篮子。",
-    vaultLead:
-      "ETF-like 指篮子敞口和报告体验，不代表法律 ETF 分类、投资建议、自主交易或保证收益。",
-    vaultStats: [
-      ["授权范围", "篮子允许表达什么主题"],
-      ["准入规则", "哪些市场与 outcome token 可以进入"],
-      ["风险预算", "仓位上限、流动性限制、回撤控制"],
-      ["净值逻辑", "未成交订单、过期价格、结算状态、费用"],
-    ],
-    roadmapTitle: "按基础设施依赖推进的路线图。",
-    roadmapLead:
-      "每个阶段先形成可验证原语，再进入下一层能力。",
-    phases: [
-      ["I", "工作流层", "市场同步、outcome token 模型、因果脚本、订单预览"],
-      ["II", "实时信息层", "Source Object、来源、新鲜度、可回放"],
-      ["III", "匹配与错配", "可解释匹配、审查队列、评分拆解"],
-      ["IV", "AI 自托管", "模型注册表、prompt 注册表、校验器、评估体系"],
-      ["V", "自由金库", "授权范围、风险预算、净值式报告、生态 API"],
-    ],
-    trustTitle: "为审查而建，不为盲目自动化而建。",
-    trustLead:
-      "Causeway 的可信度来自明确边界：不托管私钥、不保证收益、不自主提交订单，也不输出无法解析到真实市场和 outcome token 的推荐。",
-    finalTitle: "阅读 Causeway 白皮书 v1.0",
-    finalLead: "第一版定义产品论点、系统架构、路线图、治理边界与自由金库方向。",
-    downloadEn: "Download English",
-    downloadZh: "下载中文版",
+  {
+    step: "02 / REASON",
+    label: "MAP",
+    title: "AI builds the causal path.",
+    body: "Candidate markets are recalled from local Polymarket data, then ranked by relevance, direction, confidence, and tradability.",
+    flow: ["root", "market graph", "outcome actions"],
   },
-};
+  {
+    step: "03 / CONFIRM",
+    label: "ACT",
+    title: "Execution stays human-confirmed.",
+    body: "Causeway can preview orders and dry-run the workflow, but real trading waits for explicit user approval.",
+    alert: "Order preview ready. Real submit requires wallet confirmation.",
+  },
+];
 
-let currentLang = "en";
-let hasPlayedIntro = false;
+const featureCards = [
+  {
+    icon: "token",
+    title: "Outcome-token native",
+    body: "Causeway models market -> outcomes[] -> tokenId, so execution logic matches how Polymarket actually trades.",
+    visual: "YES / NO / OVER / UNDER / TEAM A",
+  },
+  {
+    icon: "graph",
+    title: "Causal graph, not chat advice",
+    body: "The AI returns structured nodes, edges, confidence, direction, and reasons that can be audited later.",
+    visual: "root -> layer 1 -> layer 2 -> layer 3",
+  },
+  {
+    icon: "book",
+    title: "Polymarket data first",
+    body: "Phase one reasons from synced market structure, outcomes, prices, order books, and liquidity.",
+    visual: "Gamma + CLOB + Data API",
+  },
+  {
+    icon: "human",
+    title: "No autonomous trading",
+    body: "AI defaults can be useful, but the product boundary is clear: every real order is previewed and confirmed by the user.",
+    visual: "preview -> approve -> submit",
+    highlight: true,
+  },
+  {
+    icon: "preview",
+    title: "Dry-run and real modes",
+    body: "When real CLOB capability is unavailable, the same UX still completes the local preview and audit loop.",
+    visual: "dry_run available / real gated",
+  },
+  {
+    icon: "vault",
+    title: "Vault-ready reporting",
+    body: "Scripts can evolve into transparent baskets with mandates, eligibility, risk budgets, and NAV-style reports.",
+    visual: "mandate + caps + NAV",
+  },
+];
 
-function formatHeroTitle(title) {
-  if (currentLang === "zh") {
-    return `<span>${title}</span>`;
-  }
-  const pivot = " for ";
-  if (!title.includes(pivot)) {
-    return `<span>${title}</span>`;
-  }
-  const [lead, rest] = title.split(pivot);
-  return `<span>${lead}</span> <span>${pivot.trim()} ${rest}</span>`;
-}
+const compareRows = [
+  ["Market structure", "Event, market, outcome, tokenId", "Titles and tabs", "Loose text prompt", "Bot-specific schema"],
+  ["Outcome mapping", "All outcomes stay visible", "Manual checking", "Often assumes Yes/No", "Depends on implementation"],
+  ["Causal graph", "Layered, auditable paths", "Research notes", "Natural language only", "Usually hidden"],
+  ["Order preview", "Prices, book, risk, capability", "Manual order ticket", "No native execution", "Often direct execution"],
+  ["Human confirmation", "Required for real submit", "Required", "Not applicable", "May be optional"],
+  ["Auditability", "Saved script and order trail", "Screenshots or notes", "Conversation history", "Varies"],
+];
 
-function sectionTemplate(content) {
+const faqs = [
+  [
+    "Does Causeway trade automatically?",
+    "No. Causeway can generate a script and default actions, but real orders require explicit user confirmation.",
+  ],
+  [
+    "Why does outcome-token mapping matter?",
+    "Polymarket orders execute against token IDs. A market title alone is not enough, and outcomes are not always just Yes and No.",
+  ],
+  [
+    "Does phase one use news or social data?",
+    "No. Phase one focuses on Polymarket market data first. External sources are a later source-object layer.",
+  ],
+  [
+    "Can I use Causeway before real trading is connected?",
+    "Yes. Dry-run mode keeps inference, preview, risk checks, and audit records available while real execution is gated.",
+  ],
+  [
+    "Is this investment advice?",
+    "No. Causeway is workflow software for market reasoning, previews, and user-governed execution.",
+  ],
+];
+
+function recipeCard(recipe) {
   return `
-    <div class="intro-loader" aria-hidden="true">
-      <div class="intro-stage">
-        <div class="intro-mark">
-          <span class="intro-dot"></span>
-          <span class="intro-line intro-line-mid"></span>
-          <span class="intro-line intro-line-top"></span>
-          <span class="intro-line intro-line-bottom"></span>
-        </div>
-        <img class="intro-logo" src="/assets/logo-white-transparent.png" alt="" />
+    <article class="recipe-card">
+      <div class="recipe-top">
+        <span class="recipe-icon">${recipe.icon}</span>
+        <span class="ready">READY</span>
       </div>
-      <p>origin → path → market graph</p>
-      <span class="intro-reveal-line"></span>
-    </div>
-
-    <header class="site-header">
-      <a class="brand-lockup" href="#top" aria-label="Causeway home">
-        <img class="brand-logo-img" src="/assets/logo-white-transparent.png" alt="Causeway" />
-      </a>
-      <nav aria-label="Primary navigation">
-        ${content.nav.map((item, index) => `<a href="#${["system", "workflow", "vaults", "roadmap"][index]}">${item}</a>`).join("")}
-      </nav>
-      <div class="header-actions">
-        <button class="language-toggle" type="button" data-lang-toggle>${currentLang === "en" ? "中文" : "EN"}</button>
-        <a class="header-link" href="/Causeway_Whitepaper_v1.0_EN.pdf">${content.whitepaper}</a>
+      <h3>${recipe.title}</h3>
+      <p>${recipe.body}</p>
+      <div class="card-bottom">
+        <div>${recipe.tags.map((tag) => `<span class="tag">${tag}</span>`).join("")}</div>
+        <a href="#quickstart">Run -></a>
       </div>
-    </header>
-
-    <div class="global-visual" aria-label="${content.sphereLabel}">
-      <div class="sphere-fallback" aria-hidden="true">
-        ${markets
-          .slice(0, 9)
-          .map(
-            (market, index) => `
-              <span style="--fallback-index:${index}">
-                <strong>${market.prob}</strong>
-              </span>
-            `,
-          )
-          .join("")}
-      </div>
-      <canvas id="market-spheres"></canvas>
-      <div class="visual-caption">${content.sphereLabel}</div>
-    </div>
-
-    <main id="top">
-      <section class="cinematic-section hero-section" data-scene="hero">
-        <div class="background-word" aria-hidden="true">PROBABILITY NETWORKS</div>
-        <div class="hero-copy cinematic-copy">
-          <p class="scene-pill" data-reveal>${content.eyebrow}</p>
-          <h1 class="hero-title" data-reveal>${content.title}</h1>
-          <p class="hero-lead" data-reveal>${content.lead}</p>
-          <div class="hero-actions" data-reveal>
-            <a class="button primary" href="/Causeway_Whitepaper_v1.0_EN.pdf">${content.ctaPrimary}</a>
-            <a class="button secondary" href="#system">${content.ctaSecondary}</a>
-          </div>
-          <div class="proof-strip" aria-label="Product boundaries" data-reveal>
-            <span>${content.proofA}</span>
-            <span>${content.proofB}</span>
-            <span>${content.proofC}</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="cinematic-section problem-section" data-scene="problem">
-        <div class="background-word" aria-hidden="true">FRAGMENTED MARKETS</div>
-        <div class="section-intro cinematic-copy center-copy">
-          <p class="scene-pill" data-reveal>01 / Problem</p>
-          <h2 data-reveal>${content.problemTitle}</h2>
-          <p data-reveal>${content.problemLead}</p>
-        </div>
-        <div class="cinema-chip-row fracture-grid">
-          ${content.fractures
-            .map(
-              ([title, body]) => `
-                <article class="fracture-item glass-chip" data-reveal>
-                  <h3>${title}</h3>
-                  <p>${body}</p>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-      </section>
-
-      <section class="cinematic-section system-section" id="system" data-scene="system">
-        <div class="background-word" aria-hidden="true">SOURCE TO TOKEN</div>
-        <div class="section-intro cinematic-copy">
-          <p class="scene-pill" data-reveal>02 / Architecture</p>
-          <h2 data-reveal>${content.systemTitle}</h2>
-          <p data-reveal>${content.systemLead}</p>
-        </div>
-        <div class="layer-stack cinematic-stack">
-          ${content.layers
-            .map(
-              ([title, body], index) => `
-                <article class="layer-row glass-chip" style="--row:${index}" data-reveal>
-                  <span class="layer-index">0${index + 1}</span>
-                  <h3>${title}</h3>
-                  <p>${body}</p>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-      </section>
-
-      <section class="cinematic-section workflow-section" id="workflow" data-scene="workflow">
-        <div class="background-word" aria-hidden="true">AUDITABLE FLOW</div>
-        <div class="section-intro cinematic-copy center-copy">
-          <p class="scene-pill" data-reveal>03 / Workflow</p>
-          <h2 data-reveal>${content.workflowTitle}</h2>
-          <p data-reveal>${content.workflowLead}</p>
-        </div>
-        <div class="workflow-demo" data-reveal>
-          <div class="signal-panel">
-            <span>Source Object</span>
-            <strong>Official macro release detected</strong>
-            <p>Entities: rate policy, CPI, central bank · Freshness: 00:42</p>
-          </div>
-          <div class="workflow-rail">
-            ${content.steps
-              .map(
-                (step, index) => `
-                  <div class="workflow-node" style="--node:${index}">
-                    <span>${String(index + 1).padStart(2, "0")}</span>
-                    <strong>${step}</strong>
-                  </div>
-                `,
-              )
-              .join("")}
-          </div>
-          <div class="review-panel">
-            <span>Review Queue</span>
-            <strong>3 markets require confirmation</strong>
-            <p>Dislocation score separates evidence strength, market relevance, liquidity, execution risk, and confidence decay.</p>
-          </div>
-        </div>
-      </section>
-
-      <section class="cinematic-section vault-section" id="vaults" data-scene="vaults">
-        <div class="background-word" aria-hidden="true">OPEN VAULTS</div>
-        <div class="section-intro cinematic-copy">
-          <p class="scene-pill" data-reveal>04 / Open Vaults</p>
-          <h2 data-reveal>${content.vaultTitle}</h2>
-          <p data-reveal>${content.vaultLead}</p>
-        </div>
-        <div class="vault-grid cinema-chip-row">
-          ${content.vaultStats
-            .map(
-              ([title, body]) => `
-                <article class="glass-chip" data-reveal>
-                  <h3>${title}</h3>
-                  <p>${body}</p>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-      </section>
-
-      <section class="cinematic-section roadmap-section" id="roadmap" data-scene="roadmap">
-        <div class="background-word" aria-hidden="true">ROADMAP</div>
-        <div class="section-intro cinematic-copy center-copy">
-          <p class="scene-pill" data-reveal>05 / Roadmap</p>
-          <h2 data-reveal>${content.roadmapTitle}</h2>
-          <p data-reveal>${content.roadmapLead}</p>
-        </div>
-        <div class="roadmap-lanes cinematic-stack">
-          ${content.phases
-            .map(
-              ([phase, title, body]) => `
-                <article class="phase-row glass-chip" data-reveal>
-                  <span>${phase}</span>
-                  <h3>${title}</h3>
-                  <p>${body}</p>
-                </article>
-              `,
-            )
-            .join("")}
-        </div>
-      </section>
-
-      <section class="cinematic-section trust-section" data-scene="trust">
-        <div class="background-word" aria-hidden="true">USER CONFIRMED</div>
-        <div class="cinematic-copy center-copy">
-          <p class="scene-pill" data-reveal>Governance</p>
-          <h2 data-reveal>${content.trustTitle}</h2>
-          <p data-reveal>${content.trustLead}</p>
-        </div>
-        <div class="trust-matrix cinema-chip-row" aria-label="Governance boundaries" data-reveal>
-          <span>No custody</span>
-          <span>No guaranteed return</span>
-          <span>No autonomous submission</span>
-          <span>Preview required</span>
-          <span>Audit first</span>
-          <span>Token resolved</span>
-        </div>
-      </section>
-
-      <section class="cinematic-section final-cta" data-scene="final">
-        <div class="background-word" aria-hidden="true">CAUSEWAY</div>
-        <div class="cinematic-copy center-copy">
-          <p class="scene-pill" data-reveal>Whitepaper v1.0</p>
-          <h2 data-reveal>${content.finalTitle}</h2>
-          <p data-reveal>${content.finalLead}</p>
-          <div class="hero-actions" data-reveal>
-            <a class="button primary" href="/Causeway_Whitepaper_v1.0_EN.pdf">${content.downloadEn}</a>
-            <a class="button secondary" href="/Causeway_Whitepaper_v1.0_ZH.pdf">${content.downloadZh}</a>
-          </div>
-        </div>
-      </section>
-    </main>
+    </article>
   `;
 }
 
-function renderPage() {
-  document.querySelector("#app").innerHTML = sectionTemplate(i18n[currentLang]);
-  document.querySelector("[data-lang-toggle]").addEventListener("click", () => {
-    currentLang = currentLang === "en" ? "zh" : "en";
-    renderPage();
-    requestAnimationFrame(initSpheres);
-  });
-  initIntro();
-  initReveals();
-  initSpheres();
-  syncInitialHash();
+function quickStartRow([num, title, body, code]) {
+  return `
+    <div class="terminal-row">
+      <span class="terminal-num">${num}</span>
+      <div>
+        <h3>${title}</h3>
+        <div class="code-line"><span>$</span> ${code}<button type="button" aria-label="Copy command">Copy</button></div>
+        <p>${body}</p>
+      </div>
+    </div>
+  `;
 }
 
-function syncInitialHash() {
-  const id = window.location.hash?.replace("#", "");
-  if (!id || id === "top") return;
-  const delay = hasPlayedIntro ? 80 : 2720;
-  window.setTimeout(() => {
-    const target = document.getElementById(id);
-    if (target) target.scrollIntoView({ block: "start" });
-  }, delay);
-}
-
-function initIntro() {
-  document.body.classList.remove("intro-playing", "intro-revealing");
-  if (hasPlayedIntro) {
-    document.body.classList.add("intro-complete");
-    return;
-  }
-  document.body.classList.remove("intro-complete");
-  document.body.classList.add("intro-playing");
-  window.setTimeout(() => {
-    document.body.classList.add("intro-revealing");
-  }, 1780);
-  window.setTimeout(() => {
-    document.body.classList.remove("intro-playing");
-    document.body.classList.remove("intro-revealing");
-    document.body.classList.add("intro-complete");
-    hasPlayedIntro = true;
-  }, 2620);
-}
-
-function initReveals() {
-  const items = document.querySelectorAll("[data-reveal]");
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add("is-visible");
-          observer.unobserve(entry.target);
-        }
-      });
-    },
-    { threshold: 0.18, rootMargin: "0px 0px -8% 0px" },
-  );
-  items.forEach((item, index) => {
-    item.style.setProperty("--reveal-delay", `${Math.min(index % 6, 5) * 70}ms`);
-    observer.observe(item);
-  });
-}
-
-function roundedRect(ctx, x, y, width, height, radius) {
-  const r = Math.min(radius, width / 2, height / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + width, y, x + width, y + height, r);
-  ctx.arcTo(x + width, y + height, x, y + height, r);
-  ctx.arcTo(x, y + height, x, y, r);
-  ctx.arcTo(x, y, x + width, y, r);
-  ctx.closePath();
-}
-
-function drawIcon(ctx, type, cx, cy, color) {
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = 8;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-
-  if (type === "btc") {
-    ctx.font = "900 76px Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("₿", cx, cy + 4);
-  } else if (type === "fed") {
-    for (let i = -1; i <= 1; i++) {
-      ctx.fillRect(cx + i * 34 - 9, cy - 22, 18, 54);
-    }
-    ctx.beginPath();
-    ctx.moveTo(cx - 62, cy - 30);
-    ctx.lineTo(cx, cy - 58);
-    ctx.lineTo(cx + 62, cy - 30);
-    ctx.stroke();
-    ctx.fillRect(cx - 64, cy + 38, 128, 10);
-  } else if (type === "cup") {
-    ctx.beginPath();
-    ctx.ellipse(cx, cy - 6, 34, 44, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx - 44, cy - 16, 22, -0.9, 1.1);
-    ctx.arc(cx + 44, cy - 16, 22, 2.0, 4.1);
-    ctx.stroke();
-    ctx.fillRect(cx - 8, cy + 36, 16, 28);
-    ctx.fillRect(cx - 36, cy + 64, 72, 10);
-  } else if (type === "vote") {
-    ctx.strokeRect(cx - 48, cy - 18, 96, 64);
-    ctx.beginPath();
-    ctx.moveTo(cx - 28, cy - 18);
-    ctx.lineTo(cx, cy - 46);
-    ctx.lineTo(cx + 28, cy - 18);
-    ctx.stroke();
-    ctx.fillRect(cx - 24, cy + 4, 48, 8);
-  } else if (type === "chip") {
-    ctx.strokeRect(cx - 36, cy - 36, 72, 72);
-    for (let i = -2; i <= 2; i++) {
-      ctx.beginPath();
-      ctx.moveTo(cx + i * 18, cy - 54);
-      ctx.lineTo(cx + i * 18, cy - 38);
-      ctx.moveTo(cx + i * 18, cy + 38);
-      ctx.lineTo(cx + i * 18, cy + 54);
-      ctx.moveTo(cx - 54, cy + i * 18);
-      ctx.lineTo(cx - 38, cy + i * 18);
-      ctx.moveTo(cx + 38, cy + i * 18);
-      ctx.lineTo(cx + 54, cy + i * 18);
-      ctx.stroke();
-    }
-    ctx.beginPath();
-    ctx.arc(cx, cy, 18, 0, Math.PI * 2);
-    ctx.stroke();
-  } else if (type === "chain") {
-    ctx.strokeRect(cx - 68, cy - 18, 56, 36);
-    ctx.strokeRect(cx + 12, cy - 18, 56, 36);
-    ctx.beginPath();
-    ctx.moveTo(cx - 12, cy);
-    ctx.lineTo(cx + 12, cy);
-    ctx.stroke();
-  } else if (type === "chart") {
-    ctx.beginPath();
-    ctx.moveTo(cx - 58, cy + 42);
-    ctx.lineTo(cx - 22, cy + 2);
-    ctx.lineTo(cx + 8, cy + 18);
-    ctx.lineTo(cx + 56, cy - 38);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(cx + 56, cy - 38);
-    ctx.lineTo(cx + 54, cy - 12);
-    ctx.moveTo(cx + 56, cy - 38);
-    ctx.lineTo(cx + 28, cy - 34);
-    ctx.stroke();
-  } else if (type === "court") {
-    ctx.fillRect(cx - 54, cy + 30, 108, 10);
-    ctx.fillRect(cx - 44, cy - 14, 88, 8);
-    ctx.beginPath();
-    ctx.moveTo(cx - 54, cy - 20);
-    ctx.lineTo(cx, cy - 54);
-    ctx.lineTo(cx + 54, cy - 20);
-    ctx.stroke();
-    for (let i = -1; i <= 1; i++) ctx.fillRect(cx + i * 34 - 7, cy - 8, 14, 38);
-  } else if (type === "game") {
-    roundedRect(ctx, cx - 58, cy - 30, 116, 60, 20);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(cx - 32, cy);
-    ctx.lineTo(cx - 10, cy);
-    ctx.moveTo(cx - 21, cy - 11);
-    ctx.lineTo(cx - 21, cy + 11);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx + 26, cy - 6, 5, 0, Math.PI * 2);
-    ctx.arc(cx + 44, cy + 10, 5, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (type === "signal") {
-    for (let i = 0; i < 4; i++) {
-      ctx.beginPath();
-      ctx.arc(cx, cy + 52, 22 + i * 18, -Math.PI * 0.72, -Math.PI * 0.28);
-      ctx.stroke();
-    }
-    ctx.beginPath();
-    ctx.arc(cx, cy + 52, 6, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (type === "vault") {
-    roundedRect(ctx, cx - 48, cy - 36, 96, 74, 12);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(cx, cy, 22, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillRect(cx - 5, cy + 19, 10, 21);
-  } else if (type === "globe") {
-    ctx.beginPath();
-    ctx.arc(cx, cy, 54, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, 18, 54, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(cx - 52, cy);
-    ctx.lineTo(cx + 52, cy);
-    ctx.moveTo(cx - 42, cy - 28);
-    ctx.lineTo(cx + 42, cy - 28);
-    ctx.moveTo(cx - 42, cy + 28);
-    ctx.lineTo(cx + 42, cy + 28);
-    ctx.stroke();
-  } else if (type === "source") {
-    ctx.beginPath();
-    ctx.arc(cx - 34, cy - 22, 15, 0, Math.PI * 2);
-    ctx.arc(cx + 34, cy - 22, 15, 0, Math.PI * 2);
-    ctx.arc(cx, cy + 34, 15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(cx - 22, cy - 12);
-    ctx.lineTo(cx - 8, cy + 22);
-    ctx.moveTo(cx + 22, cy - 12);
-    ctx.lineTo(cx + 8, cy + 22);
-    ctx.moveTo(cx - 18, cy - 22);
-    ctx.lineTo(cx + 18, cy - 22);
-    ctx.stroke();
-  } else if (type === "token") {
-    ctx.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const angle = Math.PI / 6 + i * Math.PI / 3;
-      const x = cx + Math.cos(angle) * 56;
-      const y = cy + Math.sin(angle) * 56;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.font = "900 50px Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("T", cx, cy + 3);
-  } else if (type === "match") {
-    ctx.beginPath();
-    ctx.arc(cx - 34, cy, 24, 0, Math.PI * 2);
-    ctx.arc(cx + 34, cy, 24, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(cx - 10, cy);
-    ctx.lineTo(cx + 10, cy);
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(cx - 48, cy - 28);
-    ctx.lineTo(cx, cy - 52);
-    ctx.lineTo(cx + 48, cy - 28);
-    ctx.lineTo(cx + 48, cy + 42);
-    ctx.lineTo(cx - 48, cy + 42);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fillRect(cx - 26, cy + 6, 52, 8);
-  }
-  ctx.restore();
-}
-
-function createMarketTexture(market, index) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext("2d");
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const color = [brand.blue, brand.cyan, brand.green][index % 3];
-  const accent = [brand.cyan, brand.green, brand.blue][index % 3];
-  const bg = ctx.createRadialGradient(164, 120, 20, 256, 256, 420);
-  bg.addColorStop(0, "#FFFFFF");
-  bg.addColorStop(0.18, index % 2 ? "#DDF8FF" : "#EAF3FF");
-  bg.addColorStop(0.48, color);
-  bg.addColorStop(1, brand.ink);
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, 512, 512);
-
-  ctx.globalAlpha = 0.18;
-  ctx.strokeStyle = "#FFFFFF";
-  ctx.lineWidth = 1;
-  for (let y = 42; y < 512; y += 42) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(512, y + Math.sin(y + index) * 18);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-
-  ctx.save();
-  ctx.translate(44 + (index % 3) * 10, 86 + (index % 4) * 6);
-  ctx.rotate((-8 + (index % 5) * 4) * Math.PI / 180);
-  roundedRect(ctx, 0, 0, 390, 260, 24);
-  ctx.fillStyle = "rgba(251,253,255,0.86)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.68)";
-  ctx.lineWidth = 3;
-  ctx.stroke();
-
-  ctx.fillStyle = brand.ink;
-  ctx.font = "900 32px Arial";
-  ctx.textAlign = "left";
-  ctx.fillText(market.tag.split(" / ")[0], 28, 54);
-  ctx.font = "800 22px Arial";
-  ctx.globalAlpha = 0.72;
-  wrapCanvasText(ctx, market.title, 28, 94, 290, 28, 2);
-  ctx.globalAlpha = 1;
-
-  ctx.fillStyle = color;
-  roundedRect(ctx, 28, 176, 116, 52, 26);
-  ctx.fill();
-  ctx.fillStyle = "#FFFFFF";
-  ctx.font = "900 28px Arial";
-  ctx.textAlign = "center";
-  ctx.fillText(market.prob, 86, 211);
-
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 8;
-  ctx.beginPath();
-  ctx.moveTo(176, 220);
-  for (let i = 0; i < 6; i++) {
-    ctx.lineTo(176 + i * 34, 214 - Math.sin(i * 1.2 + index) * 42);
-  }
-  ctx.stroke();
-  ctx.restore();
-
-  ctx.save();
-  ctx.globalAlpha = 0.74;
-  ctx.translate(300, 292);
-  ctx.rotate((18 - index * 3) * Math.PI / 180);
-  roundedRect(ctx, -120, -42, 244, 84, 18);
-  ctx.fillStyle = "rgba(8,27,51,0.66)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.28)";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  drawIcon(ctx, market.icon, -72, 0, "#FFFFFF");
-  ctx.fillStyle = "#FFFFFF";
-  ctx.font = "900 26px Arial";
-  ctx.textAlign = "left";
-  ctx.fillText(market.state, -18, -6);
-  ctx.fillStyle = accent;
-  ctx.font = "800 18px Arial";
-  ctx.fillText(market.liq, -18, 22);
-  ctx.restore();
-
-  for (let i = 0; i < 7; i++) {
-    const x = 72 + ((index * 47 + i * 61) % 360);
-    const y = 358 + Math.sin(index + i) * 58;
-    ctx.beginPath();
-    ctx.arc(x, y, 7 + (i % 3) * 3, 0, Math.PI * 2);
-    ctx.fillStyle = i % 2 ? accent : color;
-    ctx.fill();
-    if (i > 0) {
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(72 + ((index * 47 + (i - 1) * 61) % 360), 358 + Math.sin(index + i - 1) * 58);
-      ctx.strokeStyle = "rgba(255,255,255,0.48)";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-  }
-
-  const shine = ctx.createLinearGradient(0, 0, 512, 512);
-  shine.addColorStop(0, "rgba(255,255,255,0.88)");
-  shine.addColorStop(0.28, "rgba(255,255,255,0.12)");
-  shine.addColorStop(0.55, "rgba(255,255,255,0)");
-  ctx.fillStyle = shine;
-  ctx.fillRect(0, 0, 512, 512);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 8;
-  return texture;
-}
-
-function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
-  const words = text.split(" ");
-  const lines = [];
-  let line = "";
-  for (const word of words) {
-    const test = `${line}${line ? " " : ""}${word}`;
-    if (ctx.measureText(test).width > maxWidth && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = test;
-    }
-  }
-  if (line) lines.push(line);
-  lines.slice(0, maxLines).forEach((ln, i) => {
-    const suffix = i === maxLines - 1 && lines.length > maxLines ? " ..." : "";
-    ctx.fillText(ln + suffix, x, y + i * lineHeight);
-  });
-}
-
-let renderer;
-let frameId;
-let cleanupSpheres = () => {};
-
-function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
-
-function makeScenePositions(kind, count) {
-  const positions = [];
-  for (let i = 0; i < count; i++) {
-    const a = i * 2.399963;
-    const ring = Math.sqrt(i + 1);
-    if (kind === "hero") {
-      positions.push([
-        Math.cos(a) * ring * 0.34,
-        Math.sin(a) * ring * 0.32,
-        1.1 - i * 0.055,
-        i === 0 ? 0.86 : 0.34 + (i % 5) * 0.055,
-      ]);
-    } else if (kind === "problem") {
-      positions.push([
-        Math.cos(a) * ring * 0.58,
-        Math.sin(a) * ring * 0.34,
-        0.68 - i * 0.045,
-        i % 4 === 0 ? 0.68 : 0.28 + (i % 5) * 0.042,
-      ]);
-    } else if (kind === "system") {
-      const lane = i % 5;
-      const offset = Math.floor(i / 5) - 1;
-      positions.push([
-        -1.06 + offset * 0.74,
-        1.18 - lane * 0.56,
-        0.64 - lane * 0.02,
-        0.28 + lane * 0.028,
-      ]);
-    } else if (kind === "workflow") {
-      const step = i % 6;
-      const wave = Math.sin(step / 5 * Math.PI);
-      positions.push([
-        -2.48 + step * 0.98,
-        -0.72 + wave * 1.34 + (Math.floor(i / 6) - 1) * 0.3,
-        0.86 - step * 0.035,
-        step === 3 ? 0.72 : 0.24 + (i % 3) * 0.04,
-      ]);
-    } else if (kind === "vaults") {
-      const theta = (i / count) * Math.PI * 2;
-      const r = i < 10 ? 1.06 : 1.68;
-      positions.push([
-        Math.cos(theta) * r,
-        Math.sin(theta) * r * 0.66,
-        0.68 + (i % 4) * 0.06,
-        i < 4 ? 0.62 : 0.26 + (i % 3) * 0.04,
-      ]);
-    } else if (kind === "roadmap") {
-      const lane = i % 5;
-      positions.push([
-        -2.2 + lane * 1.1,
-        0.98 - Math.floor(i / 5) * 0.48,
-        0.55 - lane * 0.04,
-        lane === 0 ? 0.58 : 0.24 + (i % 5) * 0.025,
-      ]);
-    } else {
-      const theta = (i / count) * Math.PI * 2;
-      const r = 0.82 + (i % 4) * 0.14;
-      positions.push([
-        Math.cos(theta) * r,
-        Math.sin(theta) * r,
-        0.35,
-        i === 0 ? 0.72 : 0.2 + (i % 3) * 0.04,
-      ]);
-    }
-  }
-  return positions;
-}
-
-function currentVisualScene() {
-  const sections = [...document.querySelectorAll("[data-scene]")];
-  let current = "hero";
-  let best = 0;
-  for (const section of sections) {
-    const rect = section.getBoundingClientRect();
-    const visible = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
-    const score = visible / Math.max(1, Math.min(rect.height, window.innerHeight));
-    if (score > best) {
-      best = score;
-      current = section.dataset.scene;
-    }
-  }
-  return current;
-}
-
-function getSceneWeights() {
-  const sections = [...document.querySelectorAll("[data-scene]")];
-  const weights = {};
-  let total = 0;
-  let strongestScene = "hero";
-  let strongestWeight = 0;
-  const focus = window.innerHeight * 0.52;
-  for (const section of sections) {
-    const rect = section.getBoundingClientRect();
-    const center = rect.top + rect.height / 2;
-    const distance = Math.abs(center - focus);
-    const reach = Math.max(window.innerHeight * 0.9, rect.height * 0.42);
-    const raw = Math.max(0, 1 - distance / reach);
-    const visible = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
-    const weight = raw * raw + (visible > 0 ? 0.025 : 0);
-    if (weight > 0) {
-      weights[section.dataset.scene] = weight;
-      total += weight;
-      if (weight > strongestWeight) {
-        strongestWeight = weight;
-        strongestScene = section.dataset.scene;
+function controlCard(control) {
+  return `
+    <article class="control-card">
+      <div class="card-kicker"><span>${control.step}</span></div>
+      <strong class="blue-label">${control.label}</strong>
+      <h3>${control.title}</h3>
+      <p>${control.body}</p>
+      ${
+        control.fields
+          ? `<div class="field-stack">${control.fields
+              .map(([key, value]) => `<div><span>${key}</span><b>${value}</b></div>`)
+              .join("")}</div>`
+          : ""
       }
+      ${
+        control.flow
+          ? `<div class="flow-line">${control.flow.map((item) => `<span>${item}</span>`).join("<i>-></i>")}</div>
+             <small class="metric">p50 - 37 ms - 1.24M decisions today</small>`
+          : ""
+      }
+      ${control.alert ? `<div class="notice-box"><b>Preview gated.</b><span>${control.alert}</span></div>` : ""}
+    </article>
+  `;
+}
+
+function featureCard(card) {
+  return `
+    <article class="feature-card ${card.highlight ? "feature-highlight" : ""}">
+      <span class="feature-icon">${card.icon}</span>
+      <h3>${card.title}</h3>
+      <p>${card.body}</p>
+      <div class="feature-visual">${card.visual}</div>
+    </article>
+  `;
+}
+
+function compareTable() {
+  return `
+    <div class="compare-table">
+      <div class="compare-head empty"></div>
+      <div class="compare-head us"><img src="/assets/causeway-mark-reversed.svg" alt="" />Causeway <span>US</span></div>
+      <div class="compare-head">Manual Research</div>
+      <div class="compare-head">Generic AI Chat</div>
+      <div class="compare-head">Trading Bot</div>
+      ${compareRows
+        .map(
+          (row) => `
+            <div class="row-label">${row[0]}</div>
+            <div class="us">${row[1]}</div>
+            <div>${row[2]}</div>
+            <div>${row[3]}</div>
+            <div>${row[4]}</div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function faqItem([question, answer], index) {
+  return `
+    <details ${index === 0 ? "open" : ""}>
+      <summary>${question}<span>+</span></summary>
+      <p>${answer}</p>
+    </details>
+  `;
+}
+
+function heroGraphic() {
+  return `
+    <div class="hero-graphic" aria-label="Causeway product preview">
+      <div class="floating-status status-one"><i></i><b>PASS</b><span>macro.v4</span><em>+0.96</em></div>
+      <div class="floating-status status-two"><i></i><b>BLOCK</b><span>cap exceeded</span><em>>$100</em></div>
+      <div class="privilege-panel">
+        <span class="panel-label">ROOT OUTCOME</span>
+        <div class="agent-line"><span>PM</span><div><b>Fed cuts rates by 25 bps</b><small>outcome_id: fed-jun-yes</small></div></div>
+        <div class="panel-grid">
+          <div><span>DEPTH</span><b>3</b></div>
+          <div><span>POLICY</span><b>preview.v1</b></div>
+          <div><span>MARKETS</span><b>24</b></div>
+        </div>
+        <div class="cap-row"><span>ORDER PREVIEW</span><b>$94.0 / $100</b></div>
+        <div class="progress"><i></i></div>
+        <div class="allowlist">
+          <span>PROTOCOL ALLOWLIST - 4</span>
+          <div><b>Gamma</b><b>CLOB</b><b>Data API</b><b>Audit</b></div>
+        </div>
+        <div class="panel-footer"><span>sig: 0x71a...9c02</span><b>READY</b></div>
+      </div>
+    </div>
+  `;
+}
+
+document.querySelector("#app").innerHTML = `
+  <div class="intro-loader" aria-hidden="true">
+    <div class="intro-grid"></div>
+    <div class="intro-core">
+      <div class="intro-mark">
+        <span class="intro-origin"></span>
+        <span class="intro-branch intro-branch-top"></span>
+        <span class="intro-branch intro-branch-main"></span>
+        <span class="intro-branch intro-branch-bottom"></span>
+      </div>
+      <img src="/assets/causeway-lockup-reversed.svg" alt="" />
+      <p>origin -> path -> market graph</p>
+    </div>
+    <span class="intro-scan"></span>
+  </div>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Causeway home">
+      <img src="/assets/causeway-lockup-primary.svg" alt="Causeway" />
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="#recipes">Recipes</a>
+      <a href="#quickstart">How it works</a>
+      <a href="#compare">Compare</a>
+      <a href="#faq">FAQ</a>
+      <a href="/Causeway_Whitepaper_v1.0_EN.pdf">Docs -></a>
+    </nav>
+    <a class="nav-cta" href="/Causeway_Whitepaper_v1.0_EN.pdf">Get started -></a>
+  </header>
+
+  <main id="top">
+    <section class="hero section-band">
+      <div class="hero-copy">
+        <p class="badge"><img src="/assets/causeway-mark-primary.svg" alt="" /> Part of the Causeway system</p>
+        <h1><span class="title-ink">Prediction markets </span><span class="title-ink">are networks. </span><span class="title-blue">Causeway makes </span><span class="title-blue">them tradable.</span></h1>
+        <p class="lead">Causeway turns a selected Polymarket outcome into an auditable causal script: related markets, outcome tokens, order previews, and human-confirmed execution.</p>
+        <div class="actions">
+          <a class="button primary" href="#quickstart">Get started -></a>
+          <a class="button secondary" href="/Causeway_Whitepaper_v1.0_EN.pdf">Read the docs</a>
+        </div>
+        <div class="proof-row">
+          <div><b>&lt;40ms</b><span>POLICY DECISION</span></div>
+          <div><b>Outcome-native</b><span>MARKET -> TOKEN</span></div>
+          <div><b>Human-confirmed</b><span>NO AUTONOMOUS TRADING</span></div>
+        </div>
+      </div>
+      ${heroGraphic()}
+    </section>
+
+    <section class="recipes section-band" id="recipes">
+      <div class="section-copy">
+        <p class="eyebrow">- CAUSEWAY RECIPES</p>
+        <h2>Pick your first market thesis.</h2>
+        <p>Pre-configured workflows for turning one Polymarket outcome into a reviewable script. Clone the pattern, then adapt the risk and execution settings.</p>
+      </div>
+      <div class="recipe-grid">${recipes.map(recipeCard).join("")}</div>
+      <a class="outline-link" href="#features">Browse all recipes -></a>
+    </section>
+
+    <section class="quickstart section-band split" id="quickstart">
+      <div class="split-copy">
+        <p class="eyebrow">- QUICK START</p>
+        <h2>From one outcome to an executable script.</h2>
+        <p>Install the workflow, choose a root market, run causal inference, review every outcome, and preview orders before any real submission.</p>
+        <a class="button primary" href="/Causeway_Whitepaper_v1.0_EN.pdf">Read the full docs -></a>
+      </div>
+      <div class="terminal-window">
+        <div class="window-bar"><i></i><i></i><i></i><span>causeway-cli</span></div>
+        ${quickStart.map(quickStartRow).join("")}
+        <footer>Dry-run stays available when real CLOB capability is gated.</footer>
+      </div>
+    </section>
+
+    <section class="control section-band">
+      <div class="section-copy wide">
+        <p class="eyebrow">- THREE STEPS TO CONTROLLED EXECUTION</p>
+        <h2>Let AI reason. <span>Keep execution human.</span></h2>
+      </div>
+      <div class="control-grid">${controls.map(controlCard).join("")}</div>
+    </section>
+
+    <section class="image-point">
+      <div class="image-point-copy">
+        <p class="eyebrow light">- THE POINT</p>
+        <h2>AI expands the thesis. You approve the path.</h2>
+        <p>Causeway keeps the boundary clear: market reasoning can be assisted, but custody, confirmation, and final action stay with the user.</p>
+      </div>
+      <div class="logo-constellation" aria-hidden="true">
+        <span class="logo-orbit logo-orbit-one"></span>
+        <span class="logo-orbit logo-orbit-two"></span>
+        <span class="logo-scan"></span>
+        <span class="logo-path logo-path-top"></span>
+        <span class="logo-path logo-path-mid"></span>
+        <span class="logo-path logo-path-bottom"></span>
+        <span class="logo-node logo-node-origin"></span>
+        <span class="logo-node logo-node-top"></span>
+        <span class="logo-node logo-node-mid"></span>
+        <span class="logo-node logo-node-bottom"></span>
+        <img class="logo-ghost logo-ghost-one" src="/assets/causeway-mark-reversed.svg" alt="" />
+        <img class="logo-ghost logo-ghost-two" src="/assets/causeway-mark-reversed.svg" alt="" />
+        <img class="point-logo-mark" src="/assets/causeway-mark-reversed.svg" alt="" />
+        <img class="point-logo-lockup" src="/assets/causeway-lockup-reversed.svg" alt="" />
+      </div>
+    </section>
+
+    <section class="features section-band" id="features">
+      <div class="section-copy">
+        <p class="eyebrow">- WHY IT MATTERS</p>
+        <h2>Built for markets that actually move.</h2>
+      </div>
+      <div class="feature-grid">${featureCards.map(featureCard).join("")}</div>
+    </section>
+
+    <section class="compare section-band" id="compare">
+      <div class="compare-top">
+        <div class="section-copy">
+          <p class="eyebrow">- COMPETITIVE LANDSCAPE</p>
+          <h2>How Causeway compares.</h2>
+          <p>Direct workflow comparison with the three approaches prediction-market builders and traders usually evaluate alongside Causeway.</p>
+        </div>
+        <div class="floating-mark"><img src="/assets/causeway-app-icon.png" alt="" /></div>
+      </div>
+      ${compareTable()}
+    </section>
+
+    <section class="faq-wrap section-band" id="faq">
+      <div class="faq-intro">
+        <p class="eyebrow">- FAQ</p>
+        <h2>Questions, answered.</h2>
+        <p>Everything builders ask before they trust AI-assisted market workflows.</p>
+      </div>
+      <div class="faq-list">${faqs.map(faqItem).join("")}</div>
+    </section>
+
+    <section class="final-cta">
+      <img src="/assets/causeway-app-icon.png" alt="" />
+      <h2>Ready when your thesis is.</h2>
+      <p>Start with one outcome. Build the market graph. Preview before you act.</p>
+      <div class="install-line"><span>$</span> causeway infer --root-outcome &lt;tokenId&gt;<button type="button">Copy</button></div>
+      <div class="actions center">
+        <a class="button inverted" href="/Causeway_Whitepaper_v1.0_EN.pdf">Read the docs -></a>
+        <a class="button dark-outline" href="#quickstart">See all steps</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>(c) 2026 Causeway</span>
+    <nav><a href="/Causeway_Whitepaper_v1.0_EN.pdf">Docs</a><a href="#compare">Compare</a><a href="#faq">FAQ</a></nav>
+  </footer>
+`;
+
+document.querySelectorAll(".code-line button, .install-line button").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const text = button.parentElement.textContent.replace("Copy", "").trim();
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = "Copied";
+      setTimeout(() => {
+        button.textContent = "Copy";
+      }, 1200);
+    } catch {
+      button.textContent = "Copy";
     }
-  }
-  if (!total) {
-    weights.hero = 1;
-    total = 1;
-    strongestScene = "hero";
-  }
-  Object.keys(weights).forEach((name) => {
-    weights[name] /= total;
   });
-  return { weights, strongestScene };
+});
+
+const revealTargets = [
+  ".hero-copy > *",
+  ".hero-graphic",
+  ".section-copy > *",
+  ".split-copy > *",
+  ".terminal-window",
+  ".recipe-card",
+  ".control-card",
+  ".image-point-copy > *",
+  ".logo-constellation",
+  ".feature-card",
+  ".compare-top > *",
+  ".compare-table",
+  ".faq-intro > *",
+  ".faq-list",
+  ".final-cta > *",
+].join(",");
+
+document.querySelectorAll(revealTargets).forEach((element, index) => {
+  element.classList.add("reveal-item");
+  element.style.setProperty("--reveal-delay", `${Math.min(index % 6, 5) * 70}ms`);
+});
+
+const finishIntro = () => {
+  document.body.classList.remove("intro-playing");
+  document.body.classList.add("intro-complete");
+};
+
+if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  finishIntro();
+} else {
+  window.setTimeout(finishIntro, 2250);
 }
 
-function weightedGroupState(sceneGroup, weights) {
-  const state = { x: 0, y: 0, z: 0, scale: 0, opacity: 0 };
-  Object.entries(weights).forEach(([name, weight]) => {
-    const source = sceneGroup[name] || sceneGroup.hero;
-    state.x += source.x * weight;
-    state.y += source.y * weight;
-    state.z += source.z * weight;
-    state.scale += source.scale * weight;
-    state.opacity += source.opacity * weight;
-  });
-  return state;
-}
-
-function weightedSphereTarget(scenePositions, weights, index) {
-  const target = [0, 0, 0, 0];
-  Object.entries(weights).forEach(([name, weight]) => {
-    const source = scenePositions[name]?.[index] || scenePositions.hero[index];
-    target[0] += source[0] * weight;
-    target[1] += source[1] * weight;
-    target[2] += source[2] * weight;
-    target[3] += source[3] * weight;
-  });
-  return target;
-}
-
-function initSpheres() {
-  const canvas = document.querySelector("#market-spheres");
-  if (!canvas) return;
-  if (frameId) cancelAnimationFrame(frameId);
-  if (renderer) renderer.dispose();
-  cleanupSpheres();
-
-  const host = document.querySelector(".global-visual");
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(38, host.clientWidth / host.clientHeight, 0.1, 100);
-  camera.position.set(0, 0, 8.6);
-
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
-  renderer.setSize(host.clientWidth, host.clientHeight);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
-  host.classList.add("webgl-ready");
-
-  scene.add(new THREE.AmbientLight(0xffffff, 1.8));
-  const key = new THREE.DirectionalLight(0xffffff, 2.4);
-  key.position.set(-3, 4, 6);
-  scene.add(key);
-  const rim = new THREE.PointLight(0x22c7e8, 3.8, 12);
-  rim.position.set(3, -2, 4);
-  scene.add(rim);
-
-  const group = new THREE.Group();
-  scene.add(group);
-
-  const geometry = new THREE.SphereGeometry(1, 64, 64);
-  const shellGeometry = new THREE.SphereGeometry(1.018, 64, 64);
-  const sceneNames = ["hero", "problem", "system", "workflow", "vaults", "roadmap", "trust", "final"];
-  const scenePositions = Object.fromEntries(sceneNames.map((name) => [name, makeScenePositions(name, markets.length)]));
-  const sceneGroup = {
-    hero: { x: 1.15, y: -0.02, z: 0, scale: 0.98, opacity: 0.92 },
-    problem: { x: 0.0, y: -0.04, z: 0, scale: 0.95, opacity: 0.54 },
-    system: { x: 1.45, y: -0.02, z: 0, scale: 0.78, opacity: 0.58 },
-    workflow: { x: 0.25, y: -0.04, z: 0, scale: 0.82, opacity: 0.62 },
-    vaults: { x: 1.2, y: -0.02, z: 0, scale: 0.88, opacity: 0.62 },
-    roadmap: { x: 0.1, y: 0, z: 0, scale: 0.68, opacity: 0.5 },
-    trust: { x: -0.1, y: 0, z: 0, scale: 0.58, opacity: 0.46 },
-    final: { x: -0.1, y: 0, z: 0, scale: 0.58, opacity: 0.44 },
-  };
-
-  const meshes = scenePositions.hero.map(([x, y, z, scale], index) => {
-    const market = markets[index % markets.length];
-    const material = new THREE.MeshPhysicalMaterial({
-      map: createMarketTexture(market, index),
-      color: 0xffffff,
-      roughness: 0.08,
-      metalness: 0.02,
-      clearcoat: 1,
-      clearcoatRoughness: 0.04,
-      transparent: true,
-      opacity: 0.96,
-      transmission: 0.28,
-      thickness: 0.48,
-      envMapIntensity: 1.55,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(x, y, z);
-    mesh.scale.setScalar(scale);
-    mesh.userData.market = market;
-    mesh.userData.home = new THREE.Vector3(x, y, z);
-    mesh.userData.scale = scale;
-    mesh.userData.speed = 0.45 + index * 0.017;
-
-    const shell = new THREE.Mesh(
-      shellGeometry,
-      new THREE.MeshPhysicalMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: 0.18,
-        roughness: 0.02,
-        metalness: 0,
-        clearcoat: 1,
-        clearcoatRoughness: 0.03,
-        transmission: 0.56,
-        side: THREE.FrontSide,
-      }),
-    );
-    shell.scale.copy(mesh.scale);
-    shell.position.copy(mesh.position);
-    shell.userData.follow = mesh;
-
-    group.add(mesh);
-    group.add(shell);
-    return mesh;
-  });
-
-  const raycaster = new THREE.Raycaster();
-  const pointer = new THREE.Vector2(10, 10);
-  const trackPointer = (event) => {
-    const rect = canvas.getBoundingClientRect();
-    pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-  };
-
-  const clearPointer = () => {
-    pointer.set(10, 10);
-  };
-
-  window.addEventListener("pointermove", trackPointer);
-  window.addEventListener("pointerleave", clearPointer);
-
-  let activeMesh = null;
-  let activeScene = "hero";
-  let displayedScene = "";
-  const clock = new THREE.Clock();
-  const syncSceneLabel = (sceneName) => {
-    activeScene = sceneName;
-    document.body.dataset.currentScene = activeScene;
-    if (activeScene !== displayedScene) {
-      displayedScene = activeScene;
-    }
-  };
-  syncSceneLabel(currentVisualScene());
-
-  function animate() {
-    const t = clock.getElapsedTime();
-    const { weights, strongestScene } = getSceneWeights();
-    syncSceneLabel(strongestScene);
-    const mobile = host.clientWidth <= 760;
-    const state = weightedGroupState(sceneGroup, weights);
-    const mobileOffset = mobile ? 0.55 : state.x;
-    group.position.x = lerp(group.position.x, mobileOffset, 0.045);
-    group.position.y = lerp(group.position.y, state.y + Math.sin(t * 0.32) * 0.07, 0.055);
-    group.scale.setScalar(lerp(group.scale.x, mobile ? state.scale * 0.66 : state.scale, 0.045));
-    group.rotation.y = lerp(group.rotation.y, Math.sin(t * 0.16) * 0.2 + (activeScene === "workflow" ? -0.24 : 0), 0.045);
-    group.rotation.x = lerp(group.rotation.x, Math.sin(t * 0.12) * 0.08 + (activeScene === "system" ? 0.1 : 0), 0.04);
-
-    meshes.forEach((mesh, index) => {
-      const target = weightedSphereTarget(scenePositions, weights, index);
-      const floatX = Math.sin(t * mesh.userData.speed + index) * 0.035;
-      const floatY = Math.cos(t * (mesh.userData.speed + 0.08) + index * 0.8) * 0.035;
-      mesh.position.x = lerp(mesh.position.x, target[0] + floatX, 0.055);
-      mesh.position.y = lerp(mesh.position.y, target[1] + floatY, 0.055);
-      mesh.position.z = lerp(mesh.position.z, target[2], 0.05);
-      mesh.rotation.y += 0.0024 + index * 0.00004;
-      mesh.rotation.x = Math.sin(t * 0.22 + index) * 0.05;
-      const targetScale = activeMesh === mesh ? target[3] * 1.1 : target[3];
-      mesh.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.08);
-      mesh.material.opacity = lerp(mesh.material.opacity, activeScene === "final" ? 0.56 : state.opacity, 0.035);
-    });
-
-    group.children.forEach((child) => {
-      if (child.userData.follow) {
-        child.position.copy(child.userData.follow.position);
-        child.rotation.copy(child.userData.follow.rotation);
-        child.scale.copy(child.userData.follow.scale).multiplyScalar(1.018);
+const observer = new IntersectionObserver(
+  (entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("is-visible");
+        observer.unobserve(entry.target);
       }
     });
+  },
+  { rootMargin: "0px 0px -12% 0px", threshold: 0.12 },
+);
 
-    raycaster.setFromCamera(pointer, camera);
-    const hit = raycaster.intersectObjects(meshes, false)[0]?.object || null;
-    if (hit !== activeMesh) {
-      activeMesh = hit;
-    }
-
-    renderer.render(scene, camera);
-    frameId = requestAnimationFrame(animate);
-  }
-
-  function resize() {
-    const width = host.clientWidth;
-    const height = host.clientHeight;
-    renderer.setSize(width, height);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-  }
-
-  const resizeObserver = new ResizeObserver(resize);
-  resizeObserver.observe(host);
-  cleanupSpheres = () => {
-    resizeObserver.disconnect();
-    window.removeEventListener("pointermove", trackPointer);
-    window.removeEventListener("pointerleave", clearPointer);
-    host.classList.remove("webgl-ready");
-  };
-  animate();
-}
-
-renderPage();
+document.querySelectorAll(".reveal-item").forEach((element) => observer.observe(element));
