@@ -32,6 +32,30 @@ export class CompleteDepositWalletFundingDto {
   signature!: string;
 }
 
+export class PreparePolymarketWalletTransferDto {
+  @IsInt()
+  @Min(1)
+  amountMicroUsd!: number;
+
+  @IsString()
+  @Matches(/^0x[0-9a-fA-F]{40}$/)
+  recipientAddress!: string;
+}
+
+export class CompletePolymarketWalletTransferDto extends PreparePolymarketWalletTransferDto {
+  @IsString()
+  @Matches(/^\d+$/)
+  nonce!: string;
+
+  @IsString()
+  @Matches(/^0x[0-9a-fA-F]{64}$/)
+  messageHash!: string;
+
+  @IsString()
+  @Matches(/^0x[0-9a-fA-F]{130}$/)
+  signature!: string;
+}
+
 export class PrepareDepositWalletTransferDto {
   @IsInt()
   @Min(1)

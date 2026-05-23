@@ -16,7 +16,9 @@ import {
   CompleteDepositWalletApprovalDto,
   CompleteDepositWalletFundingDto,
   CompleteDepositWalletTransferDto,
+  CompletePolymarketWalletTransferDto,
   PrepareDepositWalletTransferDto,
+  PreparePolymarketWalletTransferDto,
 } from './dto/deposit-wallet-approval.dto';
 import {
   type ConcreteTradingAccountType,
@@ -175,6 +177,17 @@ type SafeDepositWalletFundingPayload = {
   chainId: number;
   safeAddress: string;
   depositWalletAddress: string;
+  amountMicroUsd: number;
+  amountUsd: number;
+  nonce: string;
+  messageHash: string;
+};
+
+type PolymarketWalletTransferPayload = {
+  walletAddress: string;
+  chainId: number;
+  safeAddress: string;
+  recipientAddress: string;
   amountMicroUsd: number;
   amountUsd: number;
   nonce: string;
@@ -890,6 +903,88 @@ export class TradingService {
     await this.audit(user, 'trading.deposit_wallet_safe_funding_submitted', {
       safeAddress: prepared.safeAddress,
       depositWalletAddress: prepared.depositWalletAddress,
+      amountMicroUsd: prepared.amountMicroUsd,
+      transactionId: result.transactionId,
+      state: result.state,
+    });
+    return {
+      transaction: result,
+      readiness: await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' }),
+    };
+  }
+
+  async preparePolymarketWalletTransfer(user: CurrentUser, dto: PreparePolymarketWalletTransferDto): Promise<PolymarketWalletTransferPayload> {
+    const account = await this.requireDepositWalletAccount(user);
+    const walletAddress = getAddress(user.walletAddress);
+    const recipientAddress = getAddress(dto.recipientAddress);
+    const amount = normalizeMicroUsd(dto.amountMicroUsd);
+    const readiness = await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' });
+    const safeOption = readiness.accountOptions?.find((option) => option.type === 'gnosis_safe')
+      ?? readiness.accountOptions?.find((option) => option.type === 'proxy');
+    if (!safeOption?.funderAddress) {
+      throw new ApiException(HttpStatus.CONFLICT, 'CAPABILITY_UNAVAILABLE', 'Polymarket Safe wallet is not available for withdrawal');
+    }
+    const available = safeOption.cashAvailable;
+    if (available != null && amount / 1_000_000 > available + Number.EPSILON) {
+      throw new ApiException(HttpStatus.CONFLICT, 'INSUFFICIENT_FUNDS', 'Polymarket wallet balance is insufficient for this withdrawal', {
+        available,
+        requested: amount / 1_000_000,
+      });
+    }
+    if (safeOption.type !== 'gnosis_safe') {
+      throw new ApiException(HttpStatus.CONFLICT, 'CAPABILITY_UNAVAILABLE', 'Only Polymarket Safe withdrawals are currently supported');
+    }
+    const nonce = await this.fetchRelayerNonce(walletAddress, 'SAFE');
+    const transaction = buildPusdTransferTransaction(recipientAddress, amount);
+    const messageHash = buildSafeTransactionHash(user.chainId, safeOption.funderAddress, transaction, nonce);
+    return {
+      walletAddress,
+      chainId: user.chainId,
+      safeAddress: safeOption.funderAddress,
+      recipientAddress,
+      amountMicroUsd: amount,
+      amountUsd: amount / 1_000_000,
+      nonce,
+      messageHash,
+    };
+  }
+
+  async completePolymarketWalletTransfer(user: CurrentUser, dto: CompletePolymarketWalletTransferDto) {
+    const prepared = await this.preparePolymarketWalletTransfer(user, dto);
+    if (prepared.nonce !== dto.nonce || prepared.messageHash.toLowerCase() !== dto.messageHash.toLowerCase()) {
+      throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Polymarket wallet transfer payload is stale; prepare the transfer again.');
+    }
+    const valid = await verifyMessage({
+      address: prepared.walletAddress as `0x${string}`,
+      message: { raw: prepared.messageHash as `0x${string}` },
+      signature: dto.signature as `0x${string}`,
+    });
+    if (!valid) {
+      throw new ApiException(HttpStatus.UNAUTHORIZED, 'INVALID_SIGNATURE', 'Polymarket wallet transfer signature is invalid');
+    }
+    const transaction = buildPusdTransferTransaction(prepared.recipientAddress, prepared.amountMicroUsd);
+    const request = {
+      from: prepared.walletAddress,
+      to: transaction.to,
+      proxyWallet: prepared.safeAddress,
+      data: transaction.data,
+      nonce: prepared.nonce,
+      signature: packSafeSignature(dto.signature),
+      signatureParams: {
+        gasPrice: '0',
+        operation: '0',
+        safeTxnGas: '0',
+        baseGas: '0',
+        gasToken: zeroAddress,
+        refundReceiver: zeroAddress,
+      },
+      type: 'SAFE',
+      metadata: `withdraw ${prepared.amountUsd.toFixed(6)} pUSD to ${prepared.recipientAddress}`,
+    };
+    const result = await this.submitRelayerRequest(request, 'Polymarket relayer wallet transfer failed');
+    await this.audit(user, 'trading.polymarket_wallet_transfer_submitted', {
+      safeAddress: prepared.safeAddress,
+      recipientAddress: prepared.recipientAddress,
       amountMicroUsd: prepared.amountMicroUsd,
       transactionId: result.transactionId,
       state: result.state,
@@ -1676,6 +1771,10 @@ function buildDepositWalletApprovalCalls(chainId: number): DepositWalletCallPayl
 }
 
 function buildSafeTransferTransaction(depositWalletAddress: string, amountMicroUsd: number) {
+  return buildPusdTransferTransaction(depositWalletAddress, amountMicroUsd);
+}
+
+function buildPusdTransferTransaction(recipientAddress: string, amountMicroUsd: number) {
   return {
     to: COLLATERAL_TOKEN_ADDRESS,
     value: '0',
@@ -1683,7 +1782,7 @@ function buildSafeTransferTransaction(depositWalletAddress: string, amountMicroU
     data: encodeFunctionData({
       abi: ERC20_TRANSFER_ABI,
       functionName: 'transfer',
-      args: [getAddress(depositWalletAddress), BigInt(amountMicroUsd)],
+      args: [getAddress(recipientAddress), BigInt(amountMicroUsd)],
     }),
   };
 }

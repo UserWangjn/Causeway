@@ -598,6 +598,17 @@ type DepositWalletFundingPrepareResult = {
   messageHash: string
 }
 
+type PolymarketWalletTransferPrepareResult = {
+  walletAddress: string
+  chainId: number
+  safeAddress: string
+  recipientAddress: string
+  amountMicroUsd: number
+  amountUsd: number
+  nonce: string
+  messageHash: string
+}
+
 type DepositWalletTransferPrepareResult = DepositWalletApprovalPrepareResult & {
   recipientAddress: string
   amountMicroUsd: number
@@ -2084,6 +2095,28 @@ async function completeSafeDepositWalletFunding(token: string, payload: DepositW
     headers: authHeaders(token),
     body: JSON.stringify({
       amountMicroUsd: payload.amountMicroUsd,
+      nonce: payload.nonce,
+      messageHash: payload.messageHash,
+      signature,
+    }),
+  }).then((response) => readApiData<DepositWalletActionResult>(response))
+}
+
+async function preparePolymarketWalletTransfer(token: string, input: { amountMicroUsd: number; recipientAddress: string }) {
+  return fetch(`${API_PREFIX}/trading/polymarket-wallet/transfer/prepare`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(input),
+  }).then((response) => readApiData<PolymarketWalletTransferPrepareResult>(response))
+}
+
+async function completePolymarketWalletTransfer(token: string, payload: PolymarketWalletTransferPrepareResult, signature: string) {
+  return fetch(`${API_PREFIX}/trading/polymarket-wallet/transfer/complete`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      amountMicroUsd: payload.amountMicroUsd,
+      recipientAddress: payload.recipientAddress,
       nonce: payload.nonce,
       messageHash: payload.messageHash,
       signature,
@@ -3985,15 +4018,19 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   }, [ensureTradingToken, supportedAssets, withdrawAssetKey, withdrawRecipient])
 
   const handleSubmitWithdrawTransfer = useCallback(async () => {
-    const recipientAddress = withdrawRecipient.trim()
     const amountUsd = parseDraftNumber(withdrawAmount)
     const walletAddress = readStoredAuthSession()?.walletAddress ?? auth.walletAddress
+    const asset = supportedAssets.find((item) => assetOptionKey(item) === withdrawAssetKey)
     if (!amountUsd) {
       setBridgeError('请输入有效的提现金额。')
       return
     }
-    if (!/^0x[0-9a-fA-F]{40}$/.test(recipientAddress)) {
-      setBridgeError('请输入有效的 EVM 收款地址。')
+    if (!asset) {
+      setBridgeError('请选择接收链和接收代币。')
+      return
+    }
+    if (!withdrawRecipient.trim()) {
+      setBridgeError('请输入收款地址。')
       return
     }
     if (!walletAddress) {
@@ -4004,17 +4041,29 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     setBridgeError(null)
     try {
       const token = await ensureTradingToken()
-      const payload = await prepareDepositWalletTransfer(token, {
-        amountMicroUsd: orderFundingAmountMicroUsd(amountUsd),
-        recipientAddress,
+      const withdrawal = await createBridgeWithdrawal(token, {
+        toChainId: asset.chainId,
+        toTokenAddress: asset.token.address,
+        recipientAddr: withdrawRecipient.trim(),
       })
-      const signature = await signTypedDataWithFallback({
-        variables: typedDataToSignVariables(payload.eip712),
+      setBridgeWithdrawal(withdrawal)
+      setBridgeWallet(withdrawal.wallet)
+      const bridgeAddress = firstBridgeAddress(withdrawal.withdrawal.address)
+      if (!bridgeAddress) {
+        throw new Error('Polymarket Bridge 没有返回可用的 pUSD 转账地址。')
+      }
+      setStatusAddress(bridgeAddress)
+      const payload = await preparePolymarketWalletTransfer(token, {
+        amountMicroUsd: orderFundingAmountMicroUsd(amountUsd),
+        recipientAddress: bridgeAddress,
+      })
+      const signature = await signRawHashWithFallback({
+        messageHash: payload.messageHash,
         walletAddress,
-        signTypedDataAsync,
+        signMessageAsync,
         walletClient: walletClient as TypedDataWalletClient | null | undefined,
       })
-      const result = await completeDepositWalletTransfer(token, payload, signature)
+      const result = await completePolymarketWalletTransfer(token, payload, signature)
       await waitForRelayerTransaction(token, result.transaction.transactionId)
       setReadiness(result.readiness)
       setWithdrawAmount('')
@@ -4024,7 +4073,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     } finally {
       setIsLoadingBridge(false)
     }
-  }, [auth.walletAddress, ensureTradingToken, refreshWallet, signTypedDataAsync, walletClient, withdrawAmount, withdrawRecipient])
+  }, [auth.walletAddress, ensureTradingToken, refreshWallet, signMessageAsync, supportedAssets, walletClient, withdrawAmount, withdrawAssetKey, withdrawRecipient])
 
   const handleCheckStatus = useCallback(async (address?: string | null) => {
     const target = address ?? statusAddress
@@ -4271,6 +4320,28 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                   <div className="withdraw-available-panel">
                     <span>可用余额</span>
                     <b>{formatUsd(withdrawAvailable)} <small>pUSD</small></b>
+                  </div>
+                  <div className="bridge-select-grid">
+                    <label>
+                      <span>Receive token</span>
+                      <select className="bridge-input" value={withdrawAssetKey} onChange={(event) => setWithdrawAssetKey(event.target.value)}>
+                        {supportedAssets.map((asset) => (
+                          <option key={assetOptionKey(asset)} value={assetOptionKey(asset)}>
+                            {asset.token.symbol}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Receive chain</span>
+                      <select className="bridge-input" value={withdrawAssetKey} onChange={(event) => setWithdrawAssetKey(event.target.value)}>
+                        {supportedAssets.map((asset) => (
+                          <option key={assetOptionKey(asset)} value={assetOptionKey(asset)}>
+                            {asset.chainName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                   <label className="bridge-field">
                     <span>转账金额（美元）</span>

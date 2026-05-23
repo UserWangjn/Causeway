@@ -6,7 +6,9 @@ import {
   CompleteDepositWalletApprovalDto,
   CompleteDepositWalletFundingDto,
   CompleteDepositWalletTransferDto,
+  CompletePolymarketWalletTransferDto,
   PrepareDepositWalletTransferDto,
+  PreparePolymarketWalletTransferDto,
 } from './dto/deposit-wallet-approval.dto';
 import { TradingService } from './trading.service';
 import { normalizeTradingAccountType } from './trading-account-type';
@@ -65,6 +67,22 @@ export class TradingController {
     @Body(createDtoValidationPipe(CompleteDepositWalletFundingDto)) dto: CompleteDepositWalletFundingDto,
   ) {
     return this.tradingService.completeSafeDepositWalletFunding(user, dto);
+  }
+
+  @Post('polymarket-wallet/transfer/prepare')
+  preparePolymarketWalletTransfer(
+    @CurrentUser() user: CurrentUserType,
+    @Body(createDtoValidationPipe(PreparePolymarketWalletTransferDto)) dto: PreparePolymarketWalletTransferDto,
+  ) {
+    return this.tradingService.preparePolymarketWalletTransfer(user, dto);
+  }
+
+  @Post('polymarket-wallet/transfer/complete')
+  completePolymarketWalletTransfer(
+    @CurrentUser() user: CurrentUserType,
+    @Body(createDtoValidationPipe(CompletePolymarketWalletTransferDto)) dto: CompletePolymarketWalletTransferDto,
+  ) {
+    return this.tradingService.completePolymarketWalletTransfer(user, dto);
   }
 
   @Post('deposit-wallet/transfer/prepare')
