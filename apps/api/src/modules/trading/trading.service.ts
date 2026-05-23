@@ -12,7 +12,12 @@ import { CredentialCryptoService } from '../../common/security/credential-crypto
 import { PrismaService } from '../../database/prisma.service';
 import { ClobClient, type ClobApiCredentials, SignatureTypeV2 } from '../../integrations/polymarket/services/clob.client';
 import { CompleteClobAuthDto } from './dto/complete-clob-auth.dto';
-import { CompleteDepositWalletApprovalDto, CompleteDepositWalletFundingDto } from './dto/deposit-wallet-approval.dto';
+import {
+  CompleteDepositWalletApprovalDto,
+  CompleteDepositWalletFundingDto,
+  CompleteDepositWalletTransferDto,
+  PrepareDepositWalletTransferDto,
+} from './dto/deposit-wallet-approval.dto';
 import {
   type ConcreteTradingAccountType,
   type TradingAccountType,
@@ -174,6 +179,12 @@ type SafeDepositWalletFundingPayload = {
   amountUsd: number;
   nonce: string;
   messageHash: string;
+};
+
+type DepositWalletTransferPayload = DepositWalletApprovalPayload & {
+  recipientAddress: string;
+  amountMicroUsd: number;
+  amountUsd: number;
 };
 
 type RelayerSubmissionResult = {
@@ -769,7 +780,7 @@ export class TradingService {
     const walletAddress = getAddress(user.walletAddress);
     const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
     const nonce = await this.fetchRelayerNonce(walletAddress, 'WALLET');
-    const deadline = Math.floor(Date.now() / 1000 + 240).toString();
+    const deadline = Math.floor(Date.now() / 1000 + 3600).toString();
     const calls = buildDepositWalletApprovalCalls(user.chainId);
     return this.buildDepositWalletApprovalPayload(user.chainId, depositWalletAddress, nonce, deadline, calls);
   }
@@ -889,6 +900,83 @@ export class TradingService {
     };
   }
 
+  async prepareDepositWalletTransfer(user: CurrentUser, dto: PrepareDepositWalletTransferDto): Promise<DepositWalletTransferPayload> {
+    const account = await this.requireDepositWalletAccount(user);
+    const walletAddress = getAddress(user.walletAddress);
+    const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
+    const recipientAddress = getAddress(dto.recipientAddress);
+    const amount = normalizeMicroUsd(dto.amountMicroUsd);
+    const readiness = await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' });
+    const available = parseBalance(readiness.balance.raw);
+    if (available != null && amount / 1_000_000 > available + Number.EPSILON) {
+      throw new ApiException(HttpStatus.CONFLICT, 'INSUFFICIENT_FUNDS', 'Deposit Wallet balance is insufficient for this transfer', {
+        available,
+        requested: amount / 1_000_000,
+      });
+    }
+    const nonce = await this.fetchRelayerNonce(walletAddress, 'WALLET');
+    const deadline = Math.floor(Date.now() / 1000 + 3600).toString();
+    const calls = [buildDepositWalletTransferCall(user.chainId, recipientAddress, amount)];
+    return {
+      ...this.buildDepositWalletApprovalPayload(user.chainId, depositWalletAddress, nonce, deadline, calls),
+      recipientAddress,
+      amountMicroUsd: amount,
+      amountUsd: amount / 1_000_000,
+    };
+  }
+
+  async completeDepositWalletTransfer(user: CurrentUser, dto: CompleteDepositWalletTransferDto) {
+    const account = await this.requireDepositWalletAccount(user);
+    const walletAddress = getAddress(user.walletAddress);
+    const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
+    const recipientAddress = getAddress(dto.recipientAddress);
+    const amount = normalizeMicroUsd(dto.amountMicroUsd);
+    if (Number(dto.deadline) <= Math.floor(Date.now() / 1000)) {
+      throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Deposit Wallet transfer payload has expired; prepare the transfer again.');
+    }
+    const calls = [buildDepositWalletTransferCall(user.chainId, recipientAddress, amount)];
+    const payload = this.buildDepositWalletApprovalPayload(user.chainId, depositWalletAddress, dto.nonce, dto.deadline, calls);
+    const valid = await verifyTypedData({
+      address: walletAddress,
+      domain: {
+        ...payload.eip712.domain,
+        verifyingContract: depositWalletAddress,
+      },
+      types: payload.eip712.types,
+      primaryType: payload.eip712.primaryType,
+      message: payload.eip712.message,
+      signature: dto.signature as `0x${string}`,
+    });
+    if (!valid) {
+      throw new ApiException(HttpStatus.UNAUTHORIZED, 'INVALID_SIGNATURE', 'Deposit Wallet transfer signature is invalid');
+    }
+    const request = {
+      type: 'WALLET',
+      from: walletAddress,
+      to: getContractConfig(user.chainId).DepositWalletContracts.DepositWalletFactory,
+      nonce: dto.nonce,
+      signature: dto.signature,
+      depositWalletParams: {
+        depositWallet: depositWalletAddress,
+        deadline: dto.deadline,
+        calls: payload.calls,
+      },
+      metadata: `transfer ${(amount / 1_000_000).toFixed(6)} pUSD to ${recipientAddress}`,
+    };
+    const result = await this.submitRelayerRequest(request, 'Polymarket relayer deposit wallet transfer failed');
+    await this.audit(user, 'trading.deposit_wallet_transfer_submitted', {
+      depositWalletAddress,
+      recipientAddress,
+      amountMicroUsd: amount,
+      transactionId: result.transactionId,
+      state: result.state,
+    });
+    return {
+      transaction: result,
+      readiness: await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' }),
+    };
+  }
+
   async getRelayerTransactionStatus(user: CurrentUser, transactionId: string) {
     if (!/^[A-Za-z0-9:_-]{1,160}$/.test(transactionId)) {
       throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Invalid relayer transaction id');
@@ -914,6 +1002,7 @@ export class TradingService {
       update: {
         walletAddress,
         chainId: user.chainId,
+        signatureType: SignatureTypeV2.POLY_1271,
         depositWalletAddress,
       },
       create: {
@@ -1595,6 +1684,21 @@ function buildSafeTransferTransaction(depositWalletAddress: string, amountMicroU
       abi: ERC20_TRANSFER_ABI,
       functionName: 'transfer',
       args: [getAddress(depositWalletAddress), BigInt(amountMicroUsd)],
+    }),
+  };
+}
+
+function buildDepositWalletTransferCall(chainId: number, recipientAddress: string, amountMicroUsd: number): DepositWalletCallPayload {
+  if (chainId !== 137) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Deposit wallet transfers are only configured for Polygon mainnet');
+  }
+  return {
+    target: COLLATERAL_TOKEN_ADDRESS,
+    value: '0',
+    data: encodeFunctionData({
+      abi: ERC20_TRANSFER_ABI,
+      functionName: 'transfer',
+      args: [getAddress(recipientAddress), BigInt(amountMicroUsd)],
     }),
   };
 }

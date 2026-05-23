@@ -31,3 +31,27 @@ export class CompleteDepositWalletFundingDto {
   @Matches(/^0x[0-9a-fA-F]{130}$/)
   signature!: string;
 }
+
+export class PrepareDepositWalletTransferDto {
+  @IsInt()
+  @Min(1)
+  amountMicroUsd!: number;
+
+  @IsString()
+  @Matches(/^0x[0-9a-fA-F]{40}$/)
+  recipientAddress!: string;
+}
+
+export class CompleteDepositWalletTransferDto extends PrepareDepositWalletTransferDto {
+  @IsString()
+  @Matches(/^\d+$/)
+  nonce!: string;
+
+  @IsString()
+  @Matches(/^\d+$/)
+  deadline!: string;
+
+  @IsString()
+  @Matches(/^0x[0-9a-fA-F]{130}$/)
+  signature!: string;
+}

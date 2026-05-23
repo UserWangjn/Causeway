@@ -1,7 +1,7 @@
 import { IsIn, IsOptional } from 'class-validator';
 
 export const TRADING_ACCOUNT_TYPES = ['auto', 'gnosis_safe', 'proxy', 'deposit_wallet'] as const;
-export const CONCRETE_TRADING_ACCOUNT_TYPES = ['gnosis_safe', 'proxy', 'deposit_wallet'] as const;
+export const CONCRETE_TRADING_ACCOUNT_TYPES = ['deposit_wallet', 'gnosis_safe', 'proxy'] as const;
 
 export type TradingAccountType = typeof TRADING_ACCOUNT_TYPES[number];
 export type ConcreteTradingAccountType = typeof CONCRETE_TRADING_ACCOUNT_TYPES[number];

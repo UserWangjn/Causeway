@@ -27,6 +27,7 @@ export const configuration = () => ({
     gammaBaseUrl: process.env.POLYMARKET_GAMMA_BASE_URL ?? 'https://gamma-api.polymarket.com',
     clobBaseUrl: process.env.POLYMARKET_CLOB_BASE_URL ?? 'https://clob.polymarket.com',
     relayerBaseUrl: process.env.POLYMARKET_RELAYER_BASE_URL ?? 'https://relayer-v2.polymarket.com',
+    bridgeBaseUrl: process.env.POLYMARKET_BRIDGE_BASE_URL ?? 'https://bridge.polymarket.com',
     clobApi: {
       key: process.env.POLYMARKET_CLOB_API_KEY,
       secret: process.env.POLYMARKET_CLOB_API_SECRET,

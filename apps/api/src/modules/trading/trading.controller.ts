@@ -2,7 +2,12 @@ import { Body, Controller, Get, Inject, Param, Post, Query } from '@nestjs/commo
 import { CurrentUser, type CurrentUser as CurrentUserType } from '../../common/decorators/current-user.decorator';
 import { createDtoValidationPipe } from '../../common/pipes/dto-validation.pipe';
 import { CompleteClobAuthDto } from './dto/complete-clob-auth.dto';
-import { CompleteDepositWalletApprovalDto, CompleteDepositWalletFundingDto } from './dto/deposit-wallet-approval.dto';
+import {
+  CompleteDepositWalletApprovalDto,
+  CompleteDepositWalletFundingDto,
+  CompleteDepositWalletTransferDto,
+  PrepareDepositWalletTransferDto,
+} from './dto/deposit-wallet-approval.dto';
 import { TradingService } from './trading.service';
 import { normalizeTradingAccountType } from './trading-account-type';
 
@@ -60,6 +65,22 @@ export class TradingController {
     @Body(createDtoValidationPipe(CompleteDepositWalletFundingDto)) dto: CompleteDepositWalletFundingDto,
   ) {
     return this.tradingService.completeSafeDepositWalletFunding(user, dto);
+  }
+
+  @Post('deposit-wallet/transfer/prepare')
+  prepareDepositWalletTransfer(
+    @CurrentUser() user: CurrentUserType,
+    @Body(createDtoValidationPipe(PrepareDepositWalletTransferDto)) dto: PrepareDepositWalletTransferDto,
+  ) {
+    return this.tradingService.prepareDepositWalletTransfer(user, dto);
+  }
+
+  @Post('deposit-wallet/transfer/complete')
+  completeDepositWalletTransfer(
+    @CurrentUser() user: CurrentUserType,
+    @Body(createDtoValidationPipe(CompleteDepositWalletTransferDto)) dto: CompleteDepositWalletTransferDto,
+  ) {
+    return this.tradingService.completeDepositWalletTransfer(user, dto);
   }
 
   @Get('relayer-transactions/:transactionId')

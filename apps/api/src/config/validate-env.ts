@@ -114,6 +114,7 @@ const envSchema = z
     POLYMARKET_GAMMA_BASE_URL: z.string().url().default('https://gamma-api.polymarket.com'),
     POLYMARKET_CLOB_BASE_URL: z.string().url().default('https://clob.polymarket.com'),
     POLYMARKET_RELAYER_BASE_URL: z.string().url().default('https://relayer-v2.polymarket.com'),
+    POLYMARKET_BRIDGE_BASE_URL: z.string().url().default('https://bridge.polymarket.com'),
     POLYMARKET_CLOB_API_KEY: z.string().optional(),
     POLYMARKET_CLOB_API_SECRET: z.string().optional(),
     POLYMARKET_CLOB_API_PASSPHRASE: z.string().optional(),

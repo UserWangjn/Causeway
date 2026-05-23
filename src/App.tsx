@@ -598,9 +598,74 @@ type DepositWalletFundingPrepareResult = {
   messageHash: string
 }
 
+type DepositWalletTransferPrepareResult = DepositWalletApprovalPrepareResult & {
+  recipientAddress: string
+  amountMicroUsd: number
+  amountUsd: number
+}
+
 type DepositWalletActionResult = {
   transaction: RelayerTransactionResult
   readiness: TradingReadiness
+}
+
+type BridgeWalletResult = {
+  ownerAddress: string
+  polymarketWalletAddress: string
+  walletKind: 'safe' | 'proxy' | 'deposit_wallet'
+  warning: string | null
+  bridgeBaseUrl: string
+}
+
+type BridgeAddressSet = {
+  evm?: string
+  svm?: string
+  btc?: string
+}
+
+type BridgeDepositResult = {
+  wallet: BridgeWalletResult
+  deposit: {
+    address?: BridgeAddressSet
+    note?: string
+  }
+}
+
+type BridgeWithdrawalResult = {
+  wallet: BridgeWalletResult
+  withdrawal: {
+    address?: BridgeAddressSet
+    note?: string
+  }
+}
+
+type BridgeSupportedAsset = {
+  chainId: string
+  chainName: string
+  token: {
+    name: string
+    symbol: string
+    address: string
+    decimals: number
+  }
+  minCheckoutUsd?: number
+}
+
+type BridgeSupportedAssetsResult = {
+  supportedAssets: BridgeSupportedAsset[]
+}
+
+type BridgeTransactionStatusResult = {
+  transactions: Array<{
+    fromChainId?: string
+    fromTokenAddress?: string
+    fromAmountBaseUnit?: string
+    toChainId?: string
+    toTokenAddress?: string
+    status?: string
+    txHash?: string
+    createdTimeMs?: number
+  }>
 }
 
 type TradingWalletActivityItem = {
@@ -1612,6 +1677,33 @@ function depositWalletHasCash(readiness: TradingReadiness, requiredUsd: number) 
   return cashAvailable != null && cashAvailable + Number.EPSILON >= requiredUsd
 }
 
+function readinessNeedsQuickSetup(readiness: TradingReadiness) {
+  if (readiness.tradingAccountType !== 'deposit_wallet') return false
+  if (readiness.canTrade) return false
+  if (readiness.status !== 'ready') return true
+  if (!readiness.depositWalletDeployed) return true
+  if (!readiness.clobApiKeyConfigured) return true
+  const allowance = readinessAllowance(readiness) ?? 0
+  return allowance + Number.EPSILON < TRADING_WALLET_MIN_READY_USD
+}
+
+function readinessCanRunQuickSetup(readiness: TradingReadiness) {
+  return readiness.tradingAccountType === 'deposit_wallet'
+    && readiness.status !== 'disabled'
+    && readiness.status !== 'unavailable'
+    && readiness.builderConfigured
+}
+
+function blockedQuickSetupLogs(readiness: TradingReadiness) {
+  const logs = ['🔍 Checking your account status...']
+  if (readiness.depositWalletAddress) logs.push(`📍 Your Deposit Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
+  logs.push(`⚠️ Quick Setup is blocked: ${readiness.reason || readiness.status}`)
+  if (readiness.status === 'disabled') logs.push('Set ENABLE_REAL_ORDERS=true to allow real Polymarket wallet setup.')
+  if (!readiness.builderConfigured) logs.push('Configure POLYMARKET_BUILDER_API_KEY / SECRET / PASSPHRASE / CODE on the backend.')
+  logs.push('After updating backend env, restart the API and sign in again.')
+  return logs
+}
+
 function depositWalletFundingUnavailableMessage(readiness: TradingReadiness, requiredUsd: number) {
   if (readiness.tradingAccountType !== 'deposit_wallet') return null
   const depositCash = readinessCash(readiness) ?? 0
@@ -1892,6 +1984,39 @@ async function cancelOpenOrder(orderId: string, token: string) {
   }).then((response) => readApiData<CancelOrderResult>(response))
 }
 
+async function fetchBridgeWallet(token: string) {
+  return fetch(`${API_PREFIX}/bridge/wallet`, {
+    headers: authHeaders(token),
+  }).then((response) => readApiData<BridgeWalletResult>(response))
+}
+
+async function fetchBridgeSupportedAssets(token: string) {
+  return fetch(`${API_PREFIX}/bridge/supported-assets`, {
+    headers: authHeaders(token),
+  }).then((response) => readApiData<BridgeSupportedAssetsResult>(response))
+}
+
+async function createBridgeDeposit(token: string) {
+  return fetch(`${API_PREFIX}/bridge/deposit`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  }).then((response) => readApiData<BridgeDepositResult>(response))
+}
+
+async function createBridgeWithdrawal(token: string, input: { toChainId: string; toTokenAddress: string; recipientAddr: string }) {
+  return fetch(`${API_PREFIX}/bridge/withdraw`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(input),
+  }).then((response) => readApiData<BridgeWithdrawalResult>(response))
+}
+
+async function fetchBridgeStatus(token: string, address: string) {
+  return fetch(`${API_PREFIX}/bridge/status/${encodeURIComponent(address)}`, {
+    headers: authHeaders(token),
+  }).then((response) => readApiData<BridgeTransactionStatusResult>(response))
+}
+
 async function fetchTradingReadiness(token: string, tradingAccountType: TradingAccountType = 'auto') {
   const params = new URLSearchParams({ tradingAccountType })
   return fetch(`${API_PREFIX}/trading/readiness?${params.toString()}`, {
@@ -2123,6 +2248,79 @@ async function prepareTradingWalletForRealOrders(input: {
     updateActivity('error', errorMessage(error))
     throw error
   }
+}
+
+async function setupTradingWalletBasics(input: {
+  token: string
+  walletAddress: string | null
+  initialReadiness?: TradingReadiness | null
+  signTypedDataAsync: SignTypedDataAsync
+  walletClient?: TypedDataWalletClient | null
+  onLog?: (line: string) => void
+  onReadiness?: (readiness: TradingReadiness) => void
+}) {
+  const log = (line: string) => input.onLog?.(line)
+  const setReadiness = (readiness: TradingReadiness) => input.onReadiness?.(readiness)
+
+  if (!input.initialReadiness) log('🔍 Checking your account status...')
+  let readiness = input.initialReadiness ?? await fetchTradingReadiness(input.token, 'deposit_wallet')
+  setReadiness(readiness)
+  if (readiness.depositWalletAddress) log(`📍 Your Deposit Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
+
+  if (readiness.status === 'disabled' || readiness.status === 'unavailable') {
+    throw new Error(readiness.reason || 'Polymarket trading setup is unavailable.')
+  }
+
+  if (!readiness.depositWalletDeployed) {
+    log('⚠️ Deposit Wallet not deployed yet')
+    log('🚀 Deploying your Deposit Wallet...')
+    log('💫 This is completely gasless.')
+    readiness = await ensureDepositWallet(input.token)
+    readiness = await waitForDepositWalletReadiness(input.token, readiness, 'deposit_wallet')
+    setReadiness(readiness)
+    if (!readiness.depositWalletDeployed) {
+      throw new Error(readiness.reason || 'Deposit Wallet deployment is still pending.')
+    }
+    log('✅ Deposit Wallet deployed successfully!')
+    if (readiness.depositWalletAddress) log(`📍 Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
+  }
+
+  const allowance = readinessAllowance(readiness) ?? 0
+  if (allowance + Number.EPSILON < TRADING_WALLET_MIN_READY_USD) {
+    log('⚡ Enabling Deposit Wallet trading...')
+    log('🔄 Setting token approvals through the relayer')
+    if (!input.walletAddress) throw new Error('Missing connected wallet address for approval signing.')
+    const approvalPayload = await prepareDepositWalletApproval(input.token)
+    const approvalSignature = await signTypedDataWithFallback({
+      variables: typedDataToSignVariables(approvalPayload.eip712),
+      walletAddress: input.walletAddress,
+      signTypedDataAsync: input.signTypedDataAsync,
+      walletClient: input.walletClient,
+    })
+    const approval = await completeDepositWalletApproval(input.token, approvalPayload, approvalSignature)
+    await waitForRelayerTransaction(input.token, approval.transaction.transactionId)
+    log('✅ Trading approvals are enabled.')
+    readiness = await fetchTradingReadiness(input.token, 'deposit_wallet')
+    setReadiness(readiness)
+  }
+
+  if (!readiness.clobApiKeyConfigured) {
+    log('🔑 Creating your API credentials...')
+    const authPayload = await prepareClobAuth(input.token)
+    const signature = await signTypedDataWithFallback({
+      variables: typedDataToSignVariables(authPayload.eip712),
+      walletAddress: authPayload.walletAddress,
+      signTypedDataAsync: input.signTypedDataAsync,
+      walletClient: input.walletClient,
+    })
+    await completeClobAuth(input.token, authPayload, signature)
+    log('✅ API credentials are ready.')
+    readiness = await fetchTradingReadiness(input.token, 'deposit_wallet')
+    setReadiness(readiness)
+  }
+
+  log('✅ Quick setup completed.')
+  return readiness
 }
 
 async function sleep(ms: number) {
@@ -3451,7 +3649,7 @@ function Header({ activeNav, auth, onNavigate }: { activeNav: string; auth: Caus
       </nav>
       <div className="header-actions">
         <ResourceMenu />
-        <TradingWalletControl auth={auth} />
+        <BridgeWalletControl auth={auth} />
         <button className="icon-button" aria-label="搜索" type="button">
           <Search size={20} />
         </button>
@@ -3466,6 +3664,8 @@ function Header({ activeNav, auth, onNavigate }: { activeNav: string; auth: Caus
 
 function AccountControls({ auth }: { auth: CausewayAuth }) {
   const [copied, setCopied] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const accountMenuRef = useRef<HTMLDivElement | null>(null)
 
   const copyWalletAddress = useCallback(async (address?: string | null) => {
     if (!address) return
@@ -3473,6 +3673,23 @@ function AccountControls({ auth }: { auth: CausewayAuth }) {
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1200)
   }, [])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof globalThis.Node && accountMenuRef.current?.contains(event.target)) return
+      setMenuOpen(false)
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [menuOpen])
 
   return (
     <ConnectButton.Custom>
@@ -3501,23 +3718,20 @@ function AccountControls({ auth }: { auth: CausewayAuth }) {
 
         const address = account.address
         const displayAddress = shortAddress(address)
-        const statusText = auth.isAuthenticated ? 'Signed in' : auth.isSigningIn ? 'Signing...' : 'Sign in'
 
         return (
-          <div className="account-menu">
+          <div className={menuOpen ? 'account-menu open' : 'account-menu'} ref={accountMenuRef}>
             <button
-              className={auth.isAuthenticated ? 'cash-pill wallet-authed' : 'cash-pill wallet-ready'}
+              className={auth.isAuthenticated ? 'avatar wallet-avatar-authed' : 'avatar'}
               type="button"
-              onClick={auth.isAuthenticated ? openAccountModal : auth.signIn}
+              aria-expanded={menuOpen}
+              aria-haspopup="menu"
+              onClick={() => setMenuOpen((current) => !current)}
               disabled={auth.isSigningIn}
             >
-              <WalletCards size={16} />
-              {statusText}
-            </button>
-            <button className="avatar" type="button" onClick={auth.isAuthenticated ? openAccountModal : auth.signIn}>
               {walletInitials(address)}
             </button>
-            <div className="account-popover">
+            <div className="account-popover" role="menu">
               <div className="account-popover-head">
                 <span>{displayAddress}</span>
                 <small>{chain.name}</small>
@@ -3533,11 +3747,17 @@ function AccountControls({ auth }: { auth: CausewayAuth }) {
                 <Copy size={16} />
                 {copied ? 'Copied' : 'Copy address'}
               </button>
-              <button className="account-action" type="button" onClick={openAccountModal}>
+              <button className="account-action" type="button" onClick={() => {
+                setMenuOpen(false)
+                openAccountModal()
+              }}>
                 <WalletCards size={16} />
                 Wallet details
               </button>
-              <button className="account-action danger" type="button" onClick={() => void auth.signOut()}>
+              <button className="account-action danger" type="button" onClick={() => {
+                setMenuOpen(false)
+                void auth.signOut()
+              }}>
                 <LogOut size={16} />
                 Sign out
               </button>
@@ -3547,6 +3767,668 @@ function AccountControls({ auth }: { auth: CausewayAuth }) {
       }}
     </ConnectButton.Custom>
   )
+}
+
+function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
+  const { signTypedDataAsync } = useSignTypedData()
+  const { signMessageAsync } = useSignMessage()
+  const { data: walletClient } = useWalletClient({ chainId: supportedChain.id })
+  const { activityItems, addActivity, updateActivity } = useTradingWalletActivity()
+  const [readiness, setReadiness] = useState<TradingReadiness | null>(null)
+  const [bridgeWallet, setBridgeWallet] = useState<BridgeWalletResult | null>(null)
+  const [supportedAssets, setSupportedAssets] = useState<BridgeSupportedAsset[]>([])
+  const [bridgeDeposit, setBridgeDeposit] = useState<BridgeDepositResult | null>(null)
+  const [bridgeWithdrawal, setBridgeWithdrawal] = useState<BridgeWithdrawalResult | null>(null)
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeTransactionStatusResult | null>(null)
+  const [walletOpen, setWalletOpen] = useState(false)
+  const [walletTab, setWalletTab] = useState<'deposit' | 'withdraw' | 'trade'>('deposit')
+  const [ordersOpen, setOrdersOpen] = useState(false)
+  const [activityOpen, setActivityOpen] = useState(false)
+  const [openOrders, setOpenOrders] = useState<OpenOrdersResult | null>(null)
+  const [openOrdersLoading, setOpenOrdersLoading] = useState(false)
+  const [openOrdersError, setOpenOrdersError] = useState<string | null>(null)
+  const [isLoadingBridge, setIsLoadingBridge] = useState(false)
+  const [isPreparingTrade, setIsPreparingTrade] = useState(false)
+  const [bridgeError, setBridgeError] = useState<string | null>(null)
+  const [withdrawRecipient, setWithdrawRecipient] = useState('')
+  const [withdrawAssetKey, setWithdrawAssetKey] = useState('')
+  const [depositChainId, setDepositChainId] = useState('')
+  const [depositAssetKey, setDepositAssetKey] = useState('')
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null)
+  const [statusAddress, setStatusAddress] = useState('')
+  const [quickSetupOpen, setQuickSetupOpen] = useState(false)
+  const [quickSetupRunning, setQuickSetupRunning] = useState(false)
+  const [quickSetupStarted, setQuickSetupStarted] = useState(false)
+  const [quickSetupLogs, setQuickSetupLogs] = useState<string[]>([])
+
+  const ensureTradingToken = useCallback(async () => {
+    if (!auth.isConnected) throw new Error('请先连接钱包。')
+    if (!auth.isAuthenticated) await auth.signIn()
+    const session = readStoredAuthSession()
+    const token = session?.accessToken ?? auth.accessToken
+    if (!token) throw new Error('钱包认证尚未完成，请先签名登录。')
+    return token
+  }, [auth])
+
+  const refreshWallet = useCallback(async (token?: string | null) => {
+    if (!token) {
+      setReadiness(null)
+      setBridgeWallet(null)
+      return
+    }
+    try {
+      const [wallet, nextReadiness] = await Promise.all([
+        fetchBridgeWallet(token),
+        fetchTradingReadiness(token, 'deposit_wallet').catch(() => null),
+      ])
+      setBridgeWallet(wallet)
+      if (nextReadiness) setReadiness(nextReadiness)
+    } catch (error) {
+      setBridgeError(errorMessage(error))
+    }
+  }, [])
+
+  const refreshOpenOrders = useCallback(async (token?: string | null) => {
+    if (!token) {
+      setOpenOrders(null)
+      setOpenOrdersError(null)
+      return
+    }
+    setOpenOrdersLoading(true)
+    setOpenOrdersError(null)
+    try {
+      setOpenOrders(await fetchOpenOrders(token))
+    } catch (error) {
+      setOpenOrdersError(errorMessage(error))
+    } finally {
+      setOpenOrdersLoading(false)
+    }
+  }, [])
+
+  const depositChainAssets = supportedAssets.filter((asset) => asset.chainId === depositChainId)
+  const selectedDepositAsset = supportedAssets.find((item) => assetOptionKey(item) === depositAssetKey)
+    ?? depositChainAssets[0]
+    ?? supportedAssets[0]
+
+  const refreshDepositAddress = useCallback(async (token?: string | null, showLoading = false) => {
+    if (!token) {
+      setBridgeDeposit(null)
+      return
+    }
+    if (showLoading) setIsLoadingBridge(true)
+    setBridgeError(null)
+    try {
+      const result = await createBridgeDeposit(token)
+      setBridgeDeposit(result)
+      setBridgeWallet(result.wallet)
+      const firstAddress = bridgeAddressForAsset(result.deposit.address, selectedDepositAsset) ?? firstBridgeAddress(result.deposit.address)
+      if (firstAddress) setStatusAddress(firstAddress)
+    } catch (error) {
+      setBridgeError(errorMessage(error))
+    } finally {
+      if (showLoading) setIsLoadingBridge(false)
+    }
+  }, [selectedDepositAsset])
+
+  useEffect(() => {
+    const token = auth.accessToken
+    void refreshWallet(token)
+    if (!token) return
+    const timer = window.setInterval(() => void refreshWallet(token), 60_000)
+    return () => window.clearInterval(timer)
+  }, [auth.accessToken, refreshWallet])
+
+  useEffect(() => {
+    setQuickSetupStarted(false)
+    setQuickSetupRunning(false)
+    setQuickSetupLogs([])
+  }, [auth.walletAddress])
+
+  useEffect(() => {
+    if (!auth.accessToken) return
+    void fetchBridgeSupportedAssets(auth.accessToken)
+      .then((result) => {
+        const assets = result.supportedAssets ?? []
+        setSupportedAssets(assets)
+        const firstAsset = preferredBridgeDepositAsset(assets) ?? assets[0]
+        if (firstAsset) {
+          setWithdrawAssetKey((current) => current || assetOptionKey(firstAsset))
+          setDepositChainId((current) => current || firstAsset.chainId)
+          setDepositAssetKey((current) => current || assetOptionKey(firstAsset))
+        }
+      })
+      .catch((error) => setBridgeError(errorMessage(error)))
+  }, [auth.accessToken])
+
+  useEffect(() => {
+    if (!auth.accessToken || !selectedDepositAsset || bridgeDeposit) return
+    void refreshDepositAddress(auth.accessToken)
+  }, [auth.accessToken, bridgeDeposit, refreshDepositAddress, selectedDepositAsset])
+
+  const handleCopy = useCallback(async (value?: string | null) => {
+    if (!value) return
+    await navigator.clipboard.writeText(value)
+    setCopiedAddress(value)
+    window.setTimeout(() => setCopiedAddress(null), 1200)
+  }, [])
+
+  const handleOpenWallet = useCallback((tab: 'deposit' | 'withdraw' | 'trade' = 'deposit') => {
+    setWalletTab(tab)
+    setWalletOpen(true)
+    void (async () => {
+      try {
+        const token = auth.accessToken ?? readStoredAuthSession()?.accessToken ?? await ensureTradingToken()
+        await refreshWallet(token)
+        if (tab === 'deposit') await refreshDepositAddress(token)
+      } catch (error) {
+        setBridgeError(errorMessage(error))
+      }
+    })()
+  }, [auth.accessToken, ensureTradingToken, refreshDepositAddress, refreshWallet])
+
+  const handleCreateDeposit = useCallback(async () => {
+    const token = await ensureTradingToken()
+    await refreshDepositAddress(token, true)
+  }, [ensureTradingToken, refreshDepositAddress])
+
+  const handleCreateWithdrawal = useCallback(async () => {
+    const asset = supportedAssets.find((item) => assetOptionKey(item) === withdrawAssetKey)
+    if (!asset) {
+      setBridgeError('请选择提现目标链和资产。')
+      return
+    }
+    if (!withdrawRecipient.trim()) {
+      setBridgeError('请输入收款地址。')
+      return
+    }
+    setIsLoadingBridge(true)
+    setBridgeError(null)
+    try {
+      const token = await ensureTradingToken()
+      const result = await createBridgeWithdrawal(token, {
+        toChainId: asset.chainId,
+        toTokenAddress: asset.token.address,
+        recipientAddr: withdrawRecipient.trim(),
+      })
+      setBridgeWithdrawal(result)
+      setBridgeWallet(result.wallet)
+      const firstAddress = firstBridgeAddress(result.withdrawal.address)
+      if (firstAddress) setStatusAddress(firstAddress)
+    } catch (error) {
+      setBridgeError(errorMessage(error))
+    } finally {
+      setIsLoadingBridge(false)
+    }
+  }, [ensureTradingToken, supportedAssets, withdrawAssetKey, withdrawRecipient])
+
+  const handleCheckStatus = useCallback(async (address?: string | null) => {
+    const target = address ?? statusAddress
+    if (!target) return
+    setIsLoadingBridge(true)
+    setBridgeError(null)
+    try {
+      const token = await ensureTradingToken()
+      setBridgeStatus(await fetchBridgeStatus(token, target))
+      setStatusAddress(target)
+    } catch (error) {
+      setBridgeError(errorMessage(error))
+    } finally {
+      setIsLoadingBridge(false)
+    }
+  }, [ensureTradingToken, statusAddress])
+
+  const handlePrepareTrade = useCallback(async () => {
+    setIsPreparingTrade(true)
+    setBridgeError(null)
+    try {
+      const token = await ensureTradingToken()
+      await prepareTradingWalletForRealOrders({
+        token,
+        requiredUsd: TRADING_WALLET_MIN_READY_USD,
+        walletAddress: readStoredAuthSession()?.walletAddress ?? auth.walletAddress,
+        tradingAccountType: 'auto',
+        signTypedDataAsync,
+        signMessageAsync,
+        walletClient: walletClient as TypedDataWalletClient | null | undefined,
+        onActivity: addActivity,
+        updateActivity,
+        onReadiness: setReadiness,
+      })
+    } catch (error) {
+      setBridgeError(errorMessage(error))
+    } finally {
+      setIsPreparingTrade(false)
+      void refreshWallet(auth.accessToken ?? readStoredAuthSession()?.accessToken)
+    }
+  }, [addActivity, auth.accessToken, auth.walletAddress, ensureTradingToken, refreshWallet, signMessageAsync, signTypedDataAsync, updateActivity, walletClient])
+
+  const handleQuickSetup = useCallback(async (initialReadiness?: TradingReadiness | null) => {
+    if (quickSetupRunning) return
+    let completed = false
+    setQuickSetupOpen(true)
+    setQuickSetupRunning(true)
+    setQuickSetupStarted(true)
+    setQuickSetupLogs([])
+    setBridgeError(null)
+    try {
+      const token = await ensureTradingToken()
+      const next = await setupTradingWalletBasics({
+        token,
+        walletAddress: readStoredAuthSession()?.walletAddress ?? auth.walletAddress,
+        initialReadiness,
+        signTypedDataAsync,
+        walletClient: walletClient as TypedDataWalletClient | null | undefined,
+        onLog: (line) => setQuickSetupLogs((current) => [...current, line]),
+        onReadiness: setReadiness,
+      })
+      setReadiness(next)
+      completed = true
+      setQuickSetupRunning(false)
+      setWalletOpen(false)
+      setQuickSetupOpen(false)
+      void Promise.allSettled([
+        refreshWallet(token),
+        refreshDepositAddress(token),
+      ])
+    } catch (error) {
+      const message = errorMessage(error)
+      setBridgeError(message)
+      setQuickSetupLogs((current) => [...current, `❌ ${message}`])
+    } finally {
+      if (!completed) {
+        setQuickSetupRunning(false)
+      }
+    }
+  }, [auth.walletAddress, ensureTradingToken, quickSetupRunning, refreshDepositAddress, refreshWallet, signTypedDataAsync, walletClient])
+
+  useEffect(() => {
+    if (!auth.isAuthenticated || quickSetupStarted || quickSetupRunning || !readiness) return
+    if (readinessNeedsQuickSetup(readiness)) {
+      if (readinessCanRunQuickSetup(readiness)) {
+        void handleQuickSetup(readiness)
+      } else {
+        setQuickSetupOpen(true)
+        setQuickSetupStarted(true)
+        setQuickSetupLogs(blockedQuickSetupLogs(readiness))
+      }
+    }
+  }, [auth.isAuthenticated, handleQuickSetup, quickSetupRunning, quickSetupStarted, readiness])
+
+  const handleOpenOrders = useCallback(() => {
+    setOrdersOpen(true)
+    void refreshOpenOrders(auth.accessToken ?? readStoredAuthSession()?.accessToken)
+  }, [auth.accessToken, refreshOpenOrders])
+
+  const safeOption = readiness
+    ? tradingOption(readiness, 'gnosis_safe') ?? tradingOption(readiness, 'proxy')
+    : null
+  const displayedBalance = safeOption?.cashAvailable ?? (readiness ? readinessCash(readiness) : null)
+  const walletLabel = bridgeWallet?.walletKind === 'safe'
+    ? 'Safe'
+    : bridgeWallet?.walletKind === 'proxy'
+      ? 'Proxy'
+      : bridgeWallet?.walletKind === 'deposit_wallet'
+        ? 'Deposit Wallet'
+        : 'Wallet'
+  const walletAddressLabel = bridgeWallet?.walletKind === 'deposit_wallet' ? 'Deposit Wallet' : 'Safe / Proxy'
+  const statusText = !auth.isAuthenticated
+    ? 'Sign in'
+    : bridgeWallet
+      ? walletLabel
+      : 'Loading'
+  const recentPending = activityItems.filter((item) => item.status === 'pending').length
+  const openOrderCount = openOrders?.items.filter((order) => order.canCancel).length ?? 0
+  const selectedWithdrawAsset = supportedAssets.find((item) => assetOptionKey(item) === withdrawAssetKey)
+  const selectedDepositAddress = bridgeAddressForAsset(bridgeDeposit?.deposit.address, selectedDepositAsset)
+  const bridgeChains = uniqueBridgeChains(supportedAssets)
+  const quickSetupAllowanceReady = readiness ? (readinessAllowance(readiness) ?? 0) + Number.EPSILON >= TRADING_WALLET_MIN_READY_USD : false
+
+  return (
+    <div className="trading-wallet-shell">
+      <button className="trading-wallet-pill ready" type="button" onClick={() => handleOpenWallet('deposit')}>
+        <WalletCards size={16} />
+        <span>Wallet</span>
+        <b>{formatUsd(displayedBalance)}</b>
+        <small>{statusText}</small>
+      </button>
+      <button className="deposit-button" type="button" onClick={() => handleOpenWallet('deposit')}>
+        <Plus size={16} />
+        Deposit
+      </button>
+      <button className="activity-pill" type="button" onClick={() => handleOpenWallet('withdraw')}>
+        <ArrowRight size={16} />
+        Withdraw
+      </button>
+      <button className="activity-pill" type="button" onClick={handleOpenOrders}>
+        <ListOrdered size={16} />
+        {openOrdersLoading && !openOrders ? 'Loading' : openOrderCount ? `${openOrderCount} Orders` : 'Orders'}
+      </button>
+      <button className="activity-pill" type="button" onClick={() => setActivityOpen(true)}>
+        <Activity size={16} />
+        {recentPending ? `${recentPending} Pending` : activityItems.length ? 'Activity' : 'Activity'}
+      </button>
+
+      {walletOpen ? (
+        <BodyPortal>
+          <div className="wallet-modal-backdrop" role="presentation" onMouseDown={() => setWalletOpen(false)}>
+            <div className="wallet-modal bridge-wallet-modal" role="dialog" aria-modal="true" aria-label="Wallet funds" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="wallet-modal-head">
+                <div>
+                  <span><WalletCards size={18} /> 钱包资金</span>
+                  <small>通过 Polymarket Bridge API 生成充值和提现地址；交易准备使用 Deposit Wallet + POLY_1271。</small>
+                </div>
+                <button className="modal-close-button" type="button" onClick={() => setWalletOpen(false)}>×</button>
+              </div>
+
+              <div className="wallet-balance-grid">
+                <div><span>{walletAddressLabel}</span><b>{shortAddress(bridgeWallet?.polymarketWalletAddress ?? null)}</b></div>
+                <div><span>Owner</span><b>{shortAddress(bridgeWallet?.ownerAddress ?? auth.walletAddress ?? null)}</b></div>
+                <div><span>pUSD</span><b>{formatUsd(displayedBalance)}</b></div>
+              </div>
+              {bridgeWallet?.warning ? <div className="status-note warning wallet-status-note">{bridgeWallet.warning}</div> : null}
+              {bridgeError ? <div className="status-note error wallet-status-note">{bridgeError}</div> : null}
+
+              <div className="bridge-wallet-tabs">
+                <button className={walletTab === 'deposit' ? 'active' : ''} type="button" onClick={() => setWalletTab('deposit')}>充值</button>
+                <button className={walletTab === 'withdraw' ? 'active' : ''} type="button" onClick={() => setWalletTab('withdraw')}>提现</button>
+                <button className={walletTab === 'trade' ? 'active' : ''} type="button" onClick={() => setWalletTab('trade')}>交易准备</button>
+              </div>
+
+              {walletTab === 'deposit' ? (
+                <div className="deposit-path-card recommended">
+                  <div className="deposit-path-head">
+                    <span><ArrowRight size={16} /> Bridge Any Token to USDC.e</span>
+                    <small>Deposit from any supported chain. Assets auto-convert to USDC.e on Polygon.</small>
+                  </div>
+                  <div className="bridge-select-grid">
+                    <label>
+                      <span>Select Chain</span>
+                      <select
+                        className="bridge-input"
+                        value={depositChainId}
+                        onChange={(event) => {
+                          const nextChainId = event.target.value
+                          const firstOnChain = supportedAssets.find((asset) => asset.chainId === nextChainId)
+                          setDepositChainId(nextChainId)
+                          if (firstOnChain) setDepositAssetKey(assetOptionKey(firstOnChain))
+                        }}
+                      >
+                        {bridgeChains.map((chain) => (
+                          <option key={chain.chainId} value={chain.chainId}>{chain.chainName}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Select Token</span>
+                      <select className="bridge-input" value={selectedDepositAsset ? assetOptionKey(selectedDepositAsset) : depositAssetKey} onChange={(event) => setDepositAssetKey(event.target.value)}>
+                        {depositChainAssets.map((asset) => (
+                          <option key={assetOptionKey(asset)} value={assetOptionKey(asset)}>{asset.token.symbol}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {selectedDepositAsset?.minCheckoutUsd ? (
+                    <div className="bridge-min-note">
+                      <Info size={16} />
+                      Minimum deposit: ${selectedDepositAsset.minCheckoutUsd} USD worth of {selectedDepositAsset.token.symbol}
+                    </div>
+                  ) : null}
+                  <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected} type="button" onClick={() => void handleCreateDeposit()}>
+                    {isLoadingBridge ? '加载中...' : bridgeDeposit ? '刷新充值地址' : '加载官方充值地址'}
+                  </button>
+                  <div className="bridge-single-address">
+                    <span>Your Deposit Address</span>
+                    <b>{selectedDepositAddress ?? '还没有生成地址。'}</b>
+                    <button className="outline-button" disabled={!selectedDepositAddress} type="button" onClick={() => void handleCopy(selectedDepositAddress)}>
+                      <Copy size={15} />
+                      {copiedAddress === selectedDepositAddress ? '已复制' : 'Copy Address'}
+                    </button>
+                    <button className="outline-button" disabled={!selectedDepositAddress} type="button" onClick={() => void handleCheckStatus(selectedDepositAddress)}>
+                      <Activity size={15} />
+                      Check Status
+                    </button>
+                  </div>
+                  <div className="bridge-facts">
+                    <small><Activity size={14} /> Processing time: Usually &lt; 5 minutes</small>
+                    <small><ArrowRight size={14} /> Auto-converts to USDC.e on Polygon</small>
+                  </div>
+                  {bridgeDeposit?.deposit.note ? <small className="wallet-inline-warning">{bridgeDeposit.deposit.note}</small> : null}
+                </div>
+              ) : null}
+
+              {walletTab === 'withdraw' ? (
+                <div className="deposit-path-card">
+                  <div className="deposit-path-head">
+                    <span><ArrowRight size={16} /> 提现到其他钱包或交易所</span>
+                    <small>选择目标链和资产后生成官方 Bridge 提现地址。不要提前生成，确认要提现时再生成。</small>
+                  </div>
+                  <select className="bridge-input" value={withdrawAssetKey} onChange={(event) => setWithdrawAssetKey(event.target.value)}>
+                    {supportedAssets.map((asset) => (
+                      <option key={assetOptionKey(asset)} value={assetOptionKey(asset)}>
+                        {asset.chainName} · {asset.token.symbol} · min ${asset.minCheckoutUsd ?? 0}
+                      </option>
+                    ))}
+                  </select>
+                  <input className="bridge-input" value={withdrawRecipient} onChange={(event) => setWithdrawRecipient(event.target.value)} placeholder="收款地址" />
+                  <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected || !selectedWithdrawAsset} type="button" onClick={() => void handleCreateWithdrawal()}>
+                    {isLoadingBridge ? '生成中...' : '生成官方提现地址'}
+                  </button>
+                  <BridgeAddressList addresses={bridgeWithdrawal?.withdrawal.address} copiedAddress={copiedAddress} onCopy={handleCopy} onStatus={handleCheckStatus} />
+                  {bridgeWithdrawal?.withdrawal.note ? <small className="wallet-inline-warning">{bridgeWithdrawal.withdrawal.note}</small> : null}
+                </div>
+              ) : null}
+
+              {walletTab === 'trade' ? (
+                <div className="deposit-path-card">
+                  <div className="deposit-path-head">
+                    <span><ShieldCheck size={16} /> 真实下单准备</span>
+                    <small>这一步不是充值/提现；它用于创建或检查 Deposit Wallet、CLOB 凭据和下单授权。</small>
+                  </div>
+                  <div className="wallet-balance-grid">
+                    <div><span>Deposit Wallet</span><b>{formatUsd(readiness ? readinessCash(readiness) : null)}</b></div>
+                    <div><span>状态</span><b>{readiness?.status ?? '待检查'}</b></div>
+                    <div><span>最低准备</span><b>{formatUsd(TRADING_WALLET_MIN_READY_USD)}</b></div>
+                  </div>
+                  {readiness?.reason ? <div className="status-note warning wallet-status-note">{readiness.reason}</div> : null}
+                  <button className="primary-button" disabled={isPreparingTrade || !auth.isConnected} type="button" onClick={() => void handlePrepareTrade()}>
+                    {isPreparingTrade ? '处理中...' : '检查并准备交易钱包'}
+                  </button>
+                </div>
+              ) : null}
+
+              {bridgeStatus ? (
+                <div className="deposit-path-card">
+                  <div className="deposit-path-head">
+                    <span><Activity size={16} /> Bridge 状态</span>
+                    <small>{statusAddress ? shortAddress(statusAddress) : '最近查询'}</small>
+                  </div>
+                  <div className="bridge-status-list">
+                    {bridgeStatus.transactions.length ? bridgeStatus.transactions.map((transaction, index) => (
+                      <div key={`${transaction.txHash ?? transaction.createdTimeMs ?? index}`}>
+                        <b>{transaction.status ?? 'UNKNOWN'}</b>
+                        <small>{transaction.fromAmountBaseUnit ?? '-'} · {transaction.fromChainId ?? '?'} → {transaction.toChainId ?? '?'}</small>
+                      </div>
+                    )) : <small>暂无交易记录。</small>}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </BodyPortal>
+      ) : null}
+
+      {quickSetupOpen ? (
+        <BodyPortal>
+          <div className="wallet-modal-backdrop" role="presentation" onMouseDown={() => !quickSetupRunning && setQuickSetupOpen(false)}>
+            <div className="wallet-modal quick-setup-modal" role="dialog" aria-modal="true" aria-label="Quick setup" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="wallet-modal-head">
+                <div>
+                  <span><Bot size={18} /> Quick Setup</span>
+                  <small>Deploy Deposit Wallet, enable trading, and create Polymarket API credentials.</small>
+                </div>
+                <button className="modal-close-button" type="button" disabled={quickSetupRunning} onClick={() => setQuickSetupOpen(false)}>×</button>
+              </div>
+              <div className="quick-setup-steps">
+                <span className={readiness?.depositWalletDeployed ? 'done' : quickSetupRunning ? 'active' : ''}>Deploy Wallet</span>
+                <span className={quickSetupAllowanceReady ? 'done' : quickSetupRunning && readiness?.depositWalletDeployed ? 'active' : ''}>Enable Trading</span>
+                <span className={readiness?.clobApiKeyConfigured ? 'done' : quickSetupRunning ? 'active' : ''}>API Key</span>
+              </div>
+              <div className="deposit-path-card recommended">
+                <div className="deposit-path-head">
+                  <span><Bot size={16} /> Deploy Your Trading Wallet</span>
+                  <small>New wallets need this once before real Polymarket trading. Deposit addresses are still generated through Bridge.</small>
+                </div>
+                <div className="quick-setup-console">
+                  {(quickSetupLogs.length ? quickSetupLogs : ['Ready to check your account status.']).map((line, index) => (
+                    <span key={`${line}-${index}`}>{line}</span>
+                  ))}
+                </div>
+              </div>
+              {quickSetupRunning || !readiness?.canTrade ? (
+                <button className="primary-button" disabled={quickSetupRunning || !auth.isConnected} type="button" onClick={() => void handleQuickSetup()}>
+                  {quickSetupRunning ? 'Processing...' : quickSetupStarted ? 'Retry Setup' : 'Start Quick Setup'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </BodyPortal>
+      ) : null}
+
+      {ordersOpen ? (
+        <BodyPortal>
+          <div className="wallet-modal-backdrop" role="presentation" onMouseDown={() => setOrdersOpen(false)}>
+            <div className="wallet-modal open-orders-modal" role="dialog" aria-modal="true" aria-label="Open orders" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="wallet-modal-head">
+                <div>
+                  <span><ListOrdered size={18} /> Open Orders</span>
+                  <small>来自 Polymarket CLOB 的实时挂单。取消订单需要已有 CLOB 凭据。</small>
+                </div>
+                <button className="modal-close-button" type="button" onClick={() => setOrdersOpen(false)}>×</button>
+              </div>
+              <div className="open-orders-toolbar">
+                <span>{openOrders?.items.length ?? 0} open orders</span>
+                <button className="outline-button" disabled={openOrdersLoading} type="button" onClick={() => void refreshOpenOrders(auth.accessToken ?? readStoredAuthSession()?.accessToken)}>
+                  <RotateCw size={15} />
+                  {openOrdersLoading ? 'Refreshing' : 'Refresh'}
+                </button>
+              </div>
+              {openOrdersError ? <div className="status-note error wallet-status-note">{openOrdersError}</div> : null}
+              <div className="open-orders-list">
+                {openOrders?.items.length ? openOrders.items.map((order) => (
+                  <div className="open-order-row" key={order.externalOrderId}>
+                    <div className="open-order-main">
+                      <b>{order.eventTitle || order.marketTitle || 'Polymarket order'}</b>
+                      <small>{order.side.toUpperCase()} {order.outcomeLabel || 'Outcome'} · Limit {formatLimitPrice(order.price)}</small>
+                      <em>{shortAddress(order.externalOrderId)} · {order.rawStatus || order.status}</em>
+                    </div>
+                    <div className="open-order-side">
+                      <b>{formatUsd(order.amountUsd)}</b>
+                    </div>
+                  </div>
+                )) : <div className="soft-note">No live limit orders found for this wallet.</div>}
+              </div>
+            </div>
+          </div>
+        </BodyPortal>
+      ) : null}
+
+      {activityOpen ? (
+        <BodyPortal>
+          <div className="wallet-modal-backdrop" role="presentation" onMouseDown={() => setActivityOpen(false)}>
+            <div className="wallet-modal activity-modal" role="dialog" aria-modal="true" aria-label="Activity" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="wallet-modal-head">
+                <div>
+                  <span><Activity size={18} /> Activity</span>
+                  <small>当前浏览器会话内的钱包准备、Bridge 和订单操作。</small>
+                </div>
+                <button className="modal-close-button" type="button" onClick={() => setActivityOpen(false)}>×</button>
+              </div>
+              <div className="wallet-activity-list">
+                {activityItems.length ? activityItems.map((item) => (
+                  <div className={`wallet-activity-row ${item.status}`} key={item.id}>
+                    <span>{item.status === 'done' ? <CheckCircle2 size={16} /> : item.status === 'error' ? <Info size={16} /> : <RotateCw size={16} />}</span>
+                    <div>
+                      <b>{item.label}</b>
+                      <small>{item.detail}</small>
+                      <em>{formatDateTime(item.createdAt)}</em>
+                    </div>
+                  </div>
+                )) : <div className="soft-note">No activity in this session.</div>}
+              </div>
+            </div>
+          </div>
+        </BodyPortal>
+      ) : null}
+    </div>
+  )
+}
+
+function BridgeAddressList({ addresses, copiedAddress, onCopy, onStatus }: {
+  addresses?: BridgeAddressSet
+  copiedAddress: string | null
+  onCopy: (address?: string | null) => void
+  onStatus: (address?: string | null) => void
+}) {
+  const rows = [
+    ['EVM', addresses?.evm],
+    ['Solana', addresses?.svm],
+    ['Bitcoin', addresses?.btc],
+  ] as const
+  if (!addresses || !rows.some(([, value]) => value)) {
+    return <div className="soft-note">还没有生成地址。</div>
+  }
+  return (
+    <div className="bridge-address-list">
+      {rows.map(([label, address]) => address ? (
+        <div className="bridge-address-row" key={label}>
+          <span>{label}</span>
+          <b>{address}</b>
+          <button className="outline-button" type="button" onClick={() => onCopy(address)}>
+            <Copy size={15} />
+            {copiedAddress === address ? '已复制' : '复制'}
+          </button>
+          <button className="outline-button" type="button" onClick={() => onStatus(address)}>
+            <Activity size={15} />
+            状态
+          </button>
+        </div>
+      ) : null)}
+    </div>
+  )
+}
+
+function assetOptionKey(asset: BridgeSupportedAsset) {
+  return `${asset.chainId}:${asset.token.address}`
+}
+
+function firstBridgeAddress(addresses?: BridgeAddressSet) {
+  return addresses?.evm ?? addresses?.svm ?? addresses?.btc ?? null
+}
+
+function bridgeAddressForAsset(addresses: BridgeAddressSet | undefined, asset: BridgeSupportedAsset | undefined) {
+  if (!addresses || !asset) return null
+  const chainName = asset.chainName.toLowerCase()
+  if (chainName.includes('bitcoin')) return addresses.btc ?? null
+  if (chainName.includes('solana') || asset.chainId === '1151111081099710') return addresses.svm ?? null
+  return addresses.evm ?? firstBridgeAddress(addresses)
+}
+
+function preferredBridgeDepositAsset(assets: BridgeSupportedAsset[]) {
+  return assets.find((asset) => asset.chainName.toLowerCase().includes('polygon') && asset.token.symbol.toUpperCase() === 'USDC')
+    ?? assets.find((asset) => asset.chainName.toLowerCase().includes('polygon'))
+    ?? assets.find((asset) => asset.token.symbol.toUpperCase() === 'USDC')
+    ?? null
+}
+
+function uniqueBridgeChains(assets: BridgeSupportedAsset[]) {
+  const seen = new Set<string>()
+  const chains: Array<{ chainId: string; chainName: string }> = []
+  for (const asset of assets) {
+    if (seen.has(asset.chainId)) continue
+    seen.add(asset.chainId)
+    chains.push({ chainId: asset.chainId, chainName: asset.chainName })
+  }
+  return chains
 }
 
 function TradingWalletControl({ auth }: { auth: CausewayAuth }) {
@@ -4701,6 +5583,7 @@ function InferenceProgress({
   const isComplete = hasCurrentResult && !error
   const progress = hasCurrentResult ? 100 : error ? 100 : loading ? 62 : 35
   const currentStep = hasCurrentResult ? 5 : error ? 3 : loading ? 3 : 1
+  const displayedRelatedMarkets = hasCurrentResult ? result?.relatedMarkets : undefined
 
   useEffect(() => {
     if (result?.rootMarket?.id === market.id) {
@@ -4768,9 +5651,9 @@ function InferenceProgress({
             title="AI 核实后的相关市场"
             note={result?.verification ? `候选 ${result.verification.candidateCount || 0} · 保留 ${result.verification.verifiedCount || result.relatedMarkets.length} · 排除 ${result.verification.excludedCount || 0}` : undefined}
           />
-          <DiscoveryTable market={market} relatedMarkets={result?.relatedMarkets} />
+          <DiscoveryTable market={market} relatedMarkets={displayedRelatedMarkets} />
           <button className="link-button" type="button">
-            共 {result?.relatedMarkets.length || 0} 个已核实市场 <ArrowRight size={15} />
+            {displayedRelatedMarkets ? `共 ${displayedRelatedMarkets.length} 个已核实市场` : '正在核实真实市场'} <ArrowRight size={15} />
           </button>
         </Card>
         <Card>
@@ -6803,7 +7686,10 @@ function DiscoveryTable({ market, relatedMarkets }: { market?: Market; relatedMa
       </div>
     )
   }
-  const discoveryMarkets = [seedMarket, ...markets.filter((item) => item.id !== seedMarket.id)].slice(0, 5)
+  const discoveryMarkets = [
+    seedMarket,
+    ...markets.filter((item) => item.id !== seedMarket.id && item.id !== rootMarket.id),
+  ].slice(0, 5)
   return (
     <div className="discovery-table">
       {discoveryMarkets.map((market) => (

@@ -9,6 +9,7 @@ import { PolymarketIntegrationModule } from './integrations/polymarket/polymarke
 import { RateLimitModule } from './common/rate-limit/rate-limit.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { BridgeModule } from './modules/bridge/bridge.module';
 import { HealthModule } from './modules/health/health.module';
 import { InferenceModule } from './modules/inference/inference.module';
 import { MarketsModule } from './modules/markets/markets.module';
@@ -34,6 +35,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     RateLimitModule,
     HealthModule,
     AuthModule,
+    BridgeModule,
     WalletModule,
     MarketsModule,
     PolymarketSyncModule,
