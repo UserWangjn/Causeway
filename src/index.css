@@ -276,6 +276,28 @@ button {
   gap: 12px;
 }
 
+.arc-audit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  color: #047857;
+  background: #ecfdf5;
+  font-size: 13px;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
+.arc-audit-button:hover {
+  border-color: #86efac;
+  color: #065f46;
+  background: #d1fae5;
+}
+
 .resource-menu {
   position: relative;
 }
@@ -1580,11 +1602,19 @@ button {
 .network-summary span {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   min-height: 24px;
   padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: #fff;
+}
+
+.network-summary .arc-summary-pill {
+  color: #047857;
+  border-color: #bbf7d0;
+  background: #ecfdf5;
+  font-weight: 780;
 }
 
 @media (max-width: 720px) {
@@ -5188,6 +5218,23 @@ button {
   font-size: 14px;
 }
 
+.script-row-proof {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 94px;
+  height: 32px;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  color: #047857;
+  background: #ecfdf5;
+  font-size: 12px;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
 .script-list-message {
   display: grid;
   gap: 10px;
@@ -5326,6 +5373,7 @@ button {
 
   .status-badge,
   .script-row-metrics,
+  .script-row-proof,
   .mini-path,
   .row-actions {
     grid-column: 2;

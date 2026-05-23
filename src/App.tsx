@@ -3854,6 +3854,9 @@ function Header({ activeNav, auth, onNavigate }: { activeNav: string; auth: Caus
       </nav>
       <div className="header-actions">
         <ResourceMenu />
+        <button className="arc-audit-button" type="button" onClick={() => onNavigate('scripts')}>
+          <ShieldCheck size={16} /> Arc Proof
+        </button>
         <BridgeWalletControl auth={auth} />
         <button className="icon-button" aria-label="搜索" type="button">
           <Search size={20} />
@@ -4956,6 +4959,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
           <span>{formatCompactCount(networkSummary.returned)} / {formatCompactCount(networkSummary.total)} markets</span>
         )}
         {networkSummary.hasMore ? <span>limit {formatCompactCount(networkSummary.limit)}</span> : null}
+        <span className="arc-summary-pill"><ShieldCheck size={14} /> Arc audit enabled</span>
       </div>
       <div className="network-stage">
         <NetworkMap edges={networkEdges} loading={loading} markets={networkMarkets} onConfirmMarket={onConfirmMarket} />
@@ -6558,6 +6562,7 @@ function MyScripts({
               <span>24h <b>{formatCompactMoney(item.rootVolume24hr)}</b></span>
               <span>市场 <b>{item.marketCount}</b></span>
             </div>
+            <span className="script-row-proof"><ShieldCheck size={15} /> Arc proof</span>
             <div className="row-actions">
               {openingScriptId === item.id ? <RotateCw size={18} /> : <ExternalLink size={18} />}
             </div>
