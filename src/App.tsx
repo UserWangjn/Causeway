@@ -4128,7 +4128,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     ? tradingOption(readiness, 'gnosis_safe') ?? tradingOption(readiness, 'proxy')
     : null
   const displayedBalance = safeOption?.cashAvailable ?? (readiness ? readinessCash(readiness) : null)
-  const withdrawAvailable = readiness ? readinessCash(readiness) : displayedBalance
+  const withdrawAvailable = displayedBalance
   const walletLabel = bridgeWallet?.walletKind === 'safe'
     ? 'Safe'
     : bridgeWallet?.walletKind === 'proxy'
@@ -4266,7 +4266,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                 <div className="deposit-path-card">
                   <div className="deposit-path-head">
                     <span><ArrowRight size={16} /> 转移 pUSD</span>
-                    <small>从当前 Polymarket Deposit Wallet 直接转出 pUSD，不再生成 Bridge 提现地址。</small>
+                    <small>从当前 Polymarket 钱包直接转出 pUSD，不再生成 Bridge 提现地址。</small>
                   </div>
                   <div className="withdraw-available-panel">
                     <span>可用余额</span>
