@@ -4054,17 +4054,17 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
         throw new Error('Polymarket Bridge 没有返回可用的 pUSD 转账地址。')
       }
       setStatusAddress(bridgeAddress)
-      const payload = await preparePolymarketWalletTransfer(token, {
+      const payload = await prepareDepositWalletTransfer(token, {
         amountMicroUsd: orderFundingAmountMicroUsd(amountUsd),
         recipientAddress: bridgeAddress,
       })
-      const signature = await signRawHashWithFallback({
-        messageHash: payload.messageHash,
+      const signature = await signTypedDataWithFallback({
+        variables: typedDataToSignVariables(payload.eip712),
         walletAddress,
-        signMessageAsync,
+        signTypedDataAsync,
         walletClient: walletClient as TypedDataWalletClient | null | undefined,
       })
-      const result = await completePolymarketWalletTransfer(token, payload, signature)
+      const result = await completeDepositWalletTransfer(token, payload, signature)
       await waitForRelayerTransaction(token, result.transaction.transactionId)
       setReadiness(result.readiness)
       setWithdrawAmount('')
@@ -4074,7 +4074,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     } finally {
       setIsLoadingBridge(false)
     }
-  }, [auth.walletAddress, ensureTradingToken, refreshWallet, signMessageAsync, supportedAssets, walletClient, withdrawAmount, withdrawAssetKey, withdrawRecipient])
+  }, [auth.walletAddress, ensureTradingToken, refreshWallet, signTypedDataAsync, supportedAssets, walletClient, withdrawAmount, withdrawAssetKey, withdrawRecipient])
 
   const handleCheckStatus = useCallback(async (address?: string | null) => {
     const target = address ?? statusAddress

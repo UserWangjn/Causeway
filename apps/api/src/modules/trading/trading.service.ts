@@ -1689,6 +1689,7 @@ export class TradingService {
           in: [
             'trading.deposit_wallet_approval_submitted',
             'trading.deposit_wallet_safe_funding_submitted',
+            'trading.deposit_wallet_transfer_submitted',
           ],
         },
         after: {
