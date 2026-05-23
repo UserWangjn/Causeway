@@ -190,6 +190,8 @@ model WalletSession {
 
   @@unique([address, chainId, nonce])
   @@index([address, createdAt(sort: Desc)])
+  @@index([nonceExpiresAt])
+  @@index([sessionExpiresAt])
 }
 
 model PolymarketEvent {
@@ -484,6 +486,8 @@ model OrderIntent {
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([scriptId])
+  @@index([status, previewExpiresAt])
+  @@index([status, updatedAt])
 }
 
 model CausewayOrder {
@@ -617,4 +621,5 @@ model AuditEvent {
   @@index([userId, createdAt(sort: Desc)])
   @@index([requestId])
   @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([createdAt])
 }

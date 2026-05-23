@@ -2,7 +2,7 @@ import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, type UserPolymarketAccount } from '@prisma/client';
 import { randomInt } from 'node:crypto';
-import { encodeFunctionData, encodePacked, getAddress, hashTypedData, maxUint256, verifyMessage, zeroAddress, verifyTypedData } from 'viem';
+import { encodeFunctionData, encodePacked, getAddress, hashTypedData, maxUint256, verifyMessage, zeroAddress, verifyTypedData, type Hex } from 'viem';
 import { buildDepositWalletCreateRequest, deriveDepositWallet } from '@polymarket/builder-relayer-client/dist/builder';
 import { getContractConfig } from '@polymarket/builder-relayer-client/dist/config';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
@@ -914,7 +914,7 @@ export class TradingService {
   }
 
   async preparePolymarketWalletTransfer(user: CurrentUser, dto: PreparePolymarketWalletTransferDto): Promise<PolymarketWalletTransferPayload> {
-    const account = await this.requireDepositWalletAccount(user);
+    await this.requireDepositWalletAccount(user);
     const walletAddress = getAddress(user.walletAddress);
     const recipientAddress = getAddress(dto.recipientAddress);
     const amount = normalizeMicroUsd(dto.amountMicroUsd);
@@ -976,9 +976,9 @@ export class TradingService {
       throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Polymarket wallet transfer payload is stale; prepare the transfer again.');
     }
     const valid = await verifyMessage({
-      address: walletAddress as `0x${string}`,
-      message: { raw: messageHash as `0x${string}` },
-      signature: dto.signature as `0x${string}`,
+      address: walletAddress,
+      message: { raw: messageHash },
+      signature: requireHexSignature(dto.signature, 'Polymarket wallet transfer signature'),
     });
     if (!valid) {
       throw new ApiException(HttpStatus.UNAUTHORIZED, 'INVALID_SIGNATURE', 'Polymarket wallet transfer signature is invalid');
@@ -1828,7 +1828,7 @@ function buildSafeTransactionHash(
   safeAddress: string,
   transaction: ReturnType<typeof buildSafeTransferTransaction>,
   nonce: string,
-): string {
+): Hex {
   return hashTypedData({
     primaryType: 'SafeTx',
     domain: {
@@ -1849,6 +1849,13 @@ function buildSafeTransactionHash(
       nonce: BigInt(nonce),
     },
   });
+}
+
+function requireHexSignature(signature: string, label: string): Hex {
+  if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', `${label} must be a 65-byte hex signature`);
+  }
+  return signature as Hex;
 }
 
 function packSafeSignature(signature: string): string {

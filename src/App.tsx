@@ -598,17 +598,6 @@ type DepositWalletFundingPrepareResult = {
   messageHash: string
 }
 
-type PolymarketWalletTransferPrepareResult = {
-  walletAddress: string
-  chainId: number
-  safeAddress: string
-  recipientAddress: string
-  amountMicroUsd: number
-  amountUsd: number
-  nonce: string
-  messageHash: string
-}
-
 type DepositWalletTransferPrepareResult = DepositWalletApprovalPrepareResult & {
   recipientAddress: string
   amountMicroUsd: number
@@ -1057,17 +1046,82 @@ const ACCESS_CHAIN_STORAGE_KEY = 'causeway.chainId'
 const ACCESS_EXPIRES_STORAGE_KEY = 'causeway.expiresAt'
 
 async function readApiData<T>(response: Response): Promise<T> {
-  const payload = await response.json() as ApiEnvelope<T>
+  const rawText = await response.text()
+  const payload = parseApiPayload<ApiEnvelope<T> | ApiErrorEnvelope>(rawText)
   if (!response.ok) {
     if (response.status === 401) {
       clearAuthSession()
     }
-    const message = payload && typeof payload === 'object' && 'error' in payload
-      ? JSON.stringify((payload as { error?: unknown }).error)
-      : `HTTP ${response.status}`
-    throw new Error(message)
+    throw new Error(formatApiError(response, payload))
+  }
+  if (!payload || !isRecord(payload) || !('data' in payload)) {
+    throw new Error(formatUnexpectedApiResponse(response, rawText))
   }
   return payload.data
+}
+
+type ApiErrorEnvelope = {
+  error?: unknown
+  code?: string
+  message?: string
+  details?: unknown
+  requestId?: string
+}
+
+function parseApiPayload<T>(rawText: string): T | null {
+  if (!rawText.trim()) return null
+  try {
+    return JSON.parse(rawText) as T
+  } catch {
+    return null
+  }
+}
+
+function formatApiError(response: Response, payload: ApiErrorEnvelope | null) {
+  const errorPayload = payload && isRecord(payload) && 'error' in payload ? payload.error : payload
+  const errorRecord = isRecord(errorPayload) ? errorPayload : null
+  const code = readStringField(errorRecord, 'code') ?? readStringField(payload, 'code')
+  const message =
+    readStringField(errorRecord, 'message')
+    ?? readStringField(payload, 'message')
+    ?? (typeof errorPayload === 'string' ? errorPayload : null)
+    ?? response.statusText
+    ?? `HTTP ${response.status}`
+  const detail = summarizeApiDetails(errorRecord?.details ?? payload?.details)
+  const suffix = code ? ` (${code})` : ''
+  const detailSuffix = detail ? `: ${detail}` : ''
+  return `${message}${suffix}${detailSuffix}`
+}
+
+function formatUnexpectedApiResponse(response: Response, rawText: string) {
+  const preview = rawText.trim().slice(0, 160)
+  return preview
+    ? `Unexpected response from backend (${response.status}): ${preview}`
+    : `Unexpected empty response from backend (${response.status}).`
+}
+
+function summarizeApiDetails(value: unknown): string | null {
+  if (!value) return null
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.slice(0, 3).map(summarizeApiDetails).filter(Boolean).join('; ') || null
+  if (!isRecord(value)) return null
+  for (const key of ['reason', 'message', 'error', 'status', 'endpoint']) {
+    const text = readStringField(value, key)
+    if (text) return text
+  }
+  const compact = JSON.stringify(value)
+  return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact
+}
+
+function readStringField(value: unknown, key: string): string | null {
+  if (!isRecord(value)) return null
+  const field = value[key]
+  return typeof field === 'string' && field.trim() ? field.trim() : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
 function backendNetworkToApiNode(node: BackendMarketNetwork['nodes'][number], index: number): ApiMarketNode {
@@ -1174,6 +1228,31 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
+function isWalletUserRejectedError(error: unknown, depth = 0): boolean {
+  if (!error || depth > 3) return false
+  const code = isRecord(error) ? error.code : null
+  if (code === 4001 || code === '4001' || code === 'ACTION_REJECTED' || code === 'USER_REJECTED') return true
+  const message = errorMessage(error).toLowerCase()
+  if (
+    message.includes('user rejected')
+    || message.includes('user denied')
+    || message.includes('rejected the request')
+    || message.includes('request rejected')
+    || message.includes('signature request was rejected')
+    || message.includes('signature rejected')
+  ) {
+    return true
+  }
+  if (!isRecord(error)) return false
+  return isWalletUserRejectedError(error.cause, depth + 1)
+    || isWalletUserRejectedError(error.error, depth + 1)
+    || isWalletUserRejectedError(error.data, depth + 1)
+}
+
+function walletSignatureRejectedMessage(action = 'signature request') {
+  return `The ${action} was rejected in the wallet. No order, transfer, or approval was submitted.`
+}
+
 function invalidOrderPreviewMessage(preview: OrderPreview) {
   const invalidOrder = preview.orders.find((order) => !order.valid)
   return invalidOrder ? orderPreviewErrorText(invalidOrder) : null
@@ -1220,6 +1299,25 @@ function orderPreviewWarningText(warnings: string[]) {
     if (warning.includes('ORDERBOOK_REFRESH_UNAVAILABLE_USING_LOCAL_CACHE')) return '盘口刷新失败，使用本地缓存估算'
     return warning
   }).join('、')
+}
+
+function realOrderConfirmationText(preview: OrderPreview) {
+  const orderLines = preview.orders.slice(0, 5).map((order, index) => {
+    const price = order.orderMode === 'market' ? 'market' : `limit ${formatLimitPrice(order.limitPrice)}`
+    return `${index + 1}. ${order.outcomeLabel || 'Outcome'} - ${price}, ${formatShares(order.size)} shares, max ${formatUsd(order.amountUsd)}`
+  })
+  const extraCount = preview.orders.length - orderLines.length
+  const extraLine = extraCount > 0 ? [`...and ${extraCount} more order${extraCount === 1 ? '' : 's'}.`] : []
+  return [
+    'You are about to sign and submit a real Polymarket order.',
+    '',
+    `Max spend: ${formatUsd(preview.totalAmountUsd)}`,
+    `Orders: ${preview.orders.length}`,
+    ...orderLines,
+    ...extraLine,
+    '',
+    'Canceling here will not submit an order.',
+  ].join('\n')
 }
 
 function formatTickSize(value: number | null | undefined) {
@@ -1474,16 +1572,27 @@ async function signTypedDataWithFallback(input: {
     hasWalletClient: Boolean(input.walletClient?.signTypedData),
     hasInjectedProvider: Boolean(injectedEthereumProvider()),
   })
-  const primarySignature = await input.signTypedDataAsync(input.variables)
-  const normalizedPrimarySignature = normalizeSignatureValue(primarySignature)
-  orderDebugLog('sign_typed_data_attempt', {
-    method: 'wagmi',
-    returned: signatureValueShape(primarySignature),
-    normalizedLength: normalizedPrimarySignature.length,
-    valid: isHexSignature(normalizedPrimarySignature),
-  })
-  if (isHexSignature(normalizedPrimarySignature)) return normalizedPrimarySignature
-  attempts.push(`wagmi returned ${signatureValueShape(primarySignature)}`)
+  try {
+    const primarySignature = await input.signTypedDataAsync(input.variables)
+    const normalizedPrimarySignature = normalizeSignatureValue(primarySignature)
+    orderDebugLog('sign_typed_data_attempt', {
+      method: 'wagmi',
+      returned: signatureValueShape(primarySignature),
+      normalizedLength: normalizedPrimarySignature.length,
+      valid: isHexSignature(normalizedPrimarySignature),
+    })
+    if (isHexSignature(normalizedPrimarySignature)) return normalizedPrimarySignature
+    attempts.push(`wagmi returned ${signatureValueShape(primarySignature)}`)
+  } catch (error) {
+    orderDebugLog('sign_typed_data_attempt_error', {
+      method: 'wagmi',
+      message: errorMessage(error),
+    })
+    if (isWalletUserRejectedError(error)) {
+      throw new Error(walletSignatureRejectedMessage('typed-data signature request'), { cause: error })
+    }
+    attempts.push(`wagmi failed: ${errorMessage(error)}`)
+  }
 
   if (input.walletClient?.signTypedData && isHexAddress(input.walletAddress)) {
     try {
@@ -1505,6 +1614,9 @@ async function signTypedDataWithFallback(input: {
         method: 'walletClient',
         message: errorMessage(error),
       })
+      if (isWalletUserRejectedError(error)) {
+        throw new Error(walletSignatureRejectedMessage('typed-data signature request'), { cause: error })
+      }
       attempts.push(`wallet client failed: ${errorMessage(error)}`)
     }
   }
@@ -1530,11 +1642,14 @@ async function signTypedDataWithFallback(input: {
         method: 'injectedProvider',
         message: errorMessage(error),
       })
+      if (isWalletUserRejectedError(error)) {
+        throw new Error(walletSignatureRejectedMessage('typed-data signature request'), { cause: error })
+      }
       attempts.push(`injected provider failed: ${errorMessage(error)}`)
     }
   }
 
-  throw new Error(`钱包没有返回有效 EIP-712 签名。账户 ${shortAddress(input.walletAddress)}，返回：${attempts.join('；')}。请确认当前钱包支持 Polygon typed data 签名后重试。`)
+  throw new Error(`The wallet did not return a valid EIP-712 signature for ${shortAddress(input.walletAddress)}. Please confirm that the active wallet supports Polygon typed-data signing and try again. Details: ${attempts.join('; ')}`)
 }
 
 async function signRawHashWithFallback(input: {
@@ -1554,6 +1669,9 @@ async function signRawHashWithFallback(input: {
     if (isHexSignature(normalized)) return normalized
     attempts.push(`wagmi returned ${signatureValueShape(primarySignature)}`)
   } catch (error) {
+    if (isWalletUserRejectedError(error)) {
+      throw new Error(walletSignatureRejectedMessage('wallet signature request'), { cause: error })
+    }
     attempts.push(`wagmi failed: ${errorMessage(error)}`)
   }
 
@@ -1567,6 +1685,9 @@ async function signRawHashWithFallback(input: {
       if (isHexSignature(normalized)) return normalized
       attempts.push(`wallet client returned ${signatureValueShape(walletClientSignature)}`)
     } catch (error) {
+      if (isWalletUserRejectedError(error)) {
+        throw new Error(walletSignatureRejectedMessage('wallet signature request'), { cause: error })
+      }
       attempts.push(`wallet client failed: ${errorMessage(error)}`)
     }
   }
@@ -1582,11 +1703,14 @@ async function signRawHashWithFallback(input: {
       if (isHexSignature(normalized)) return normalized
       attempts.push(`injected provider returned ${signatureValueShape(providerSignature)}`)
     } catch (error) {
+      if (isWalletUserRejectedError(error)) {
+        throw new Error(walletSignatureRejectedMessage('wallet signature request'), { cause: error })
+      }
       attempts.push(`injected provider failed: ${errorMessage(error)}`)
     }
   }
 
-  throw new Error(`钱包没有返回有效的 Safe 资金迁移签名：${attempts.join('；')}。`)
+  throw new Error(`The wallet did not return a valid transfer signature. Please check the active wallet and try again. Details: ${attempts.join('; ')}`)
 }
 
 function assertSignedOrderPayloads(value: Array<{ orderId: string; signature: unknown }>): { orderId: string; signature: string }[] {
@@ -1688,16 +1812,6 @@ function depositWalletHasCash(readiness: TradingReadiness, requiredUsd: number) 
   return cashAvailable != null && cashAvailable + Number.EPSILON >= requiredUsd
 }
 
-function readinessNeedsQuickSetup(readiness: TradingReadiness) {
-  if (readiness.tradingAccountType !== 'deposit_wallet') return false
-  if (readiness.canTrade) return false
-  if (readiness.status !== 'ready') return true
-  if (!readiness.depositWalletDeployed) return true
-  if (!readiness.clobApiKeyConfigured) return true
-  const allowance = readinessAllowance(readiness) ?? 0
-  return allowance + Number.EPSILON < TRADING_WALLET_MIN_READY_USD
-}
-
 function readinessCanRunQuickSetup(readiness: TradingReadiness) {
   return readiness.tradingAccountType === 'deposit_wallet'
     && readiness.status !== 'disabled'
@@ -1706,12 +1820,12 @@ function readinessCanRunQuickSetup(readiness: TradingReadiness) {
 }
 
 function blockedQuickSetupLogs(readiness: TradingReadiness) {
-  const logs = ['🔍 Checking your account status...']
-  if (readiness.depositWalletAddress) logs.push(`📍 Your Deposit Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
-  logs.push(`⚠️ Quick Setup is blocked: ${readiness.reason || readiness.status}`)
-  if (readiness.status === 'disabled') logs.push('Set ENABLE_REAL_ORDERS=true to allow real Polymarket wallet setup.')
-  if (!readiness.builderConfigured) logs.push('Configure POLYMARKET_BUILDER_API_KEY / SECRET / PASSPHRASE / CODE on the backend.')
-  logs.push('After updating backend env, restart the API and sign in again.')
+  const logs = ['Checking your account status...']
+  if (readiness.depositWalletAddress) logs.push(`Deposit Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
+  logs.push(`Trading setup is blocked: ${readiness.reason || readiness.status}`)
+  if (readiness.status === 'disabled') logs.push('Real trading is not enabled on this environment.')
+  if (!readiness.builderConfigured) logs.push('Trading wallet management is not configured on the backend.')
+  logs.push('After backend configuration is updated, restart the API and sign in again.')
   return logs
 }
 
@@ -1722,10 +1836,10 @@ function depositWalletFundingUnavailableMessage(readiness: TradingReadiness, req
   const missingUsd = Math.max(requiredUsd - depositCash, 0)
   const safeCash = tradingOption(readiness, 'gnosis_safe')?.cashAvailable
   if (safeCash == null) {
-    return `Deposit Wallet 至少需要 ${formatUsd(requiredUsd)}；当前 ${formatUsd(depositCash)}，还差 ${formatUsd(missingUsd)}。暂时无法确认 Polymarket Safe 余额，请刷新后重试。`
+    return `Deposit Wallet requires at least ${formatUsd(requiredUsd)}. Current balance is ${formatUsd(depositCash)}, missing ${formatUsd(missingUsd)}. Polymarket Safe balance is temporarily unavailable; refresh and try again.`
   }
   if (safeCash + Number.EPSILON >= missingUsd) return null
-  return `Deposit Wallet 至少需要 ${formatUsd(requiredUsd)}；当前 ${formatUsd(depositCash)}，还差 ${formatUsd(missingUsd)}。Polymarket Safe 可用 ${formatUsd(safeCash)}，无法自动从已有 Polymarket 余额转入。请先在 Polymarket 充值，或使用下方 Deposit Wallet 地址直接充值 pUSD。`
+  return `Deposit Wallet requires at least ${formatUsd(requiredUsd)}. Current balance is ${formatUsd(depositCash)}, missing ${formatUsd(missingUsd)}. Polymarket Safe has ${formatUsd(safeCash)}, so there is not enough existing Polymarket balance to transfer. Deposit through the wallet deposit flow, then refresh.`
 }
 
 function orderFundingAmountMicroUsd(amountUsd: number) {
@@ -2102,29 +2216,6 @@ async function completeSafeDepositWalletFunding(token: string, payload: DepositW
   }).then((response) => readApiData<DepositWalletActionResult>(response))
 }
 
-async function preparePolymarketWalletTransfer(token: string, input: { amountMicroUsd: number; recipientAddress: string }) {
-  return fetch(`${API_PREFIX}/trading/polymarket-wallet/transfer/prepare`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    body: JSON.stringify(input),
-  }).then((response) => readApiData<PolymarketWalletTransferPrepareResult>(response))
-}
-
-async function completePolymarketWalletTransfer(token: string, payload: PolymarketWalletTransferPrepareResult, signature: string) {
-  return fetch(`${API_PREFIX}/trading/polymarket-wallet/transfer/complete`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    body: JSON.stringify({
-      amountMicroUsd: payload.amountMicroUsd,
-      recipientAddress: payload.recipientAddress,
-      safeAddress: payload.safeAddress,
-      nonce: payload.nonce,
-      messageHash: payload.messageHash,
-      signature,
-    }),
-  }).then((response) => readApiData<DepositWalletActionResult>(response))
-}
-
 async function prepareDepositWalletTransfer(token: string, input: { amountMicroUsd: number; recipientAddress: string }) {
   return fetch(`${API_PREFIX}/trading/deposit-wallet/transfer/prepare`, {
     method: 'POST',
@@ -2208,7 +2299,7 @@ async function prepareTradingWalletForRealOrders(input: {
 }) {
   const tradingAccountType = input.tradingAccountType ?? 'auto'
   const requiredUsd = Math.max(positiveNumberOrNull(input.requiredUsd) ?? 0, TRADING_WALLET_MIN_READY_USD)
-  const activityId = input.onActivity?.('准备交易钱包', '检查 Deposit Wallet、资金和授权。', 'pending') ?? null
+  const activityId = input.onActivity?.('Prepare trading wallet', 'Checking Deposit Wallet, funds, and permissions.', 'pending') ?? null
   const updateActivity = (status: TradingWalletActivityStatus, detail: string) => {
     if (activityId) input.updateActivity?.(activityId, status, detail)
   }
@@ -2221,7 +2312,7 @@ async function prepareTradingWalletForRealOrders(input: {
     setReadiness(readiness)
 
     if (!readiness.clobApiKeyConfigured) {
-      updateActivity('pending', '需要签名创建 Polymarket CLOB 交易凭据。')
+      updateActivity('pending', 'Waiting for signature to create Polymarket trading credentials.')
       const authPayload = await prepareClobAuth(input.token)
       const signature = await signTypedDataWithFallback({
         variables: typedDataToSignVariables(authPayload.eip712),
@@ -2230,30 +2321,30 @@ async function prepareTradingWalletForRealOrders(input: {
         walletClient: input.walletClient,
       })
       await completeClobAuth(input.token, authPayload, signature)
-      updateActivity('pending', 'CLOB 交易凭据已创建，继续检查 Deposit Wallet 和 Polymarket Safe 余额。')
+      updateActivity('pending', 'Trading credentials are ready. Checking Deposit Wallet and Polymarket Safe balance.')
       readiness = await fetchTradingReadiness(input.token, tradingAccountType)
       setReadiness(readiness)
     }
 
     if (readiness.tradingAccountType !== 'deposit_wallet') {
-      throw new Error('当前真实下单只支持 Deposit Wallet + POLY_1271，请刷新交易钱包状态后重试。')
+      throw new Error('Real orders currently require Deposit Wallet + POLY_1271. Refresh the wallet status and try again.')
     }
 
     if (!readiness.depositWalletDeployed) {
-      updateActivity('pending', '正在通过 Builder relayer 创建 Deposit Wallet。')
+      updateActivity('pending', 'Creating the Deposit Wallet through Polymarket.')
       readiness = await ensureDepositWallet(input.token)
       readiness = await waitForDepositWalletReadiness(input.token, readiness, tradingAccountType)
       setReadiness(readiness)
     }
 
     if (readiness.status === 'deposit_wallet_pending') {
-      updateActivity('pending', 'Deposit Wallet 正在确认，等待 relayer 状态刷新。')
+      updateActivity('pending', 'Deposit Wallet confirmation is pending. Waiting for Polymarket status to refresh.')
       readiness = await waitForDepositWalletReadiness(input.token, readiness, tradingAccountType)
       setReadiness(readiness)
     }
 
     if (readiness.status === 'deposit_wallet_pending') {
-      throw new Error(readiness.reason || 'Deposit Wallet 正在确认，请稍后重试。')
+      throw new Error(readiness.reason || 'Deposit Wallet confirmation is still pending. Please try again shortly.')
     }
 
     const depositCash = readinessCash(readiness) ?? 0
@@ -2261,7 +2352,7 @@ async function prepareTradingWalletForRealOrders(input: {
       const missingUsd = Math.max(requiredUsd - depositCash, 0)
       const fundingUnavailableMessage = depositWalletFundingUnavailableMessage(readiness, requiredUsd)
       if (fundingUnavailableMessage) throw new Error(fundingUnavailableMessage)
-      updateActivity('pending', `等待签名：从 Polymarket Safe 转入 ${formatUsd(missingUsd)} 到 Deposit Wallet。`)
+      updateActivity('pending', `Waiting for signature to transfer ${formatUsd(missingUsd)} from Polymarket Safe to Deposit Wallet.`)
       const fundingPayload = await prepareSafeDepositWalletFunding(input.token, orderFundingAmountMicroUsd(missingUsd))
       const fundingSignature = await signRawHashWithFallback({
         messageHash: fundingPayload.messageHash,
@@ -2270,7 +2361,7 @@ async function prepareTradingWalletForRealOrders(input: {
         walletClient: input.walletClient,
       })
       const funding = await completeSafeDepositWalletFunding(input.token, fundingPayload, fundingSignature)
-      updateActivity('pending', 'Safe 转账已提交，等待 Polymarket relayer 确认。')
+      updateActivity('pending', 'Safe transfer submitted. Waiting for Polymarket confirmation.')
       await waitForRelayerTransaction(input.token, funding.transaction.transactionId)
       readiness = await waitForDepositWalletBalance(input.token, requiredUsd, tradingAccountType)
       setReadiness(readiness)
@@ -2278,9 +2369,9 @@ async function prepareTradingWalletForRealOrders(input: {
 
     const allowance = readinessAllowance(readiness) ?? 0
     if (allowance + Number.EPSILON < requiredUsd) {
-      updateActivity('pending', '等待签名：一次性授权 Deposit Wallet 用于 Polymarket 下单。')
+      updateActivity('pending', 'Waiting for signature to enable one-time Deposit Wallet trading permissions.')
       const approvalPayload = await prepareDepositWalletApproval(input.token)
-      if (!input.walletAddress) throw new Error('Deposit Wallet 授权缺少已登录的钱包地址。')
+      if (!input.walletAddress) throw new Error('Deposit Wallet permission signing requires the connected wallet address.')
       const approvalSignature = await signTypedDataWithFallback({
         variables: typedDataToSignVariables(approvalPayload.eip712),
         walletAddress: input.walletAddress,
@@ -2288,17 +2379,17 @@ async function prepareTradingWalletForRealOrders(input: {
         walletClient: input.walletClient,
       })
       const approval = await completeDepositWalletApproval(input.token, approvalPayload, approvalSignature)
-      updateActivity('pending', '授权已提交，等待 Polymarket relayer 确认。')
+      updateActivity('pending', 'Trading permissions submitted. Waiting for Polymarket confirmation.')
       await waitForRelayerTransaction(input.token, approval.transaction.transactionId)
       readiness = await waitForFundingReadiness(input.token, requiredUsd, tradingAccountType)
       setReadiness(readiness)
     }
 
     if (!depositWalletReadyForAmount(readiness, requiredUsd)) {
-      throw new Error(readiness.reason || `Deposit Wallet 资金或授权仍不足，需要至少 ${formatUsd(requiredUsd)}。`)
+      throw new Error(readiness.reason || `Deposit Wallet still needs enough funds and permissions for at least ${formatUsd(requiredUsd)}.`)
     }
 
-    updateActivity('done', 'Deposit Wallet 已具备真实下单条件。')
+    updateActivity('done', 'Deposit Wallet is ready for real orders.')
     return readiness
   } catch (error) {
     updateActivity('error', errorMessage(error))
@@ -2318,33 +2409,33 @@ async function setupTradingWalletBasics(input: {
   const log = (line: string) => input.onLog?.(line)
   const setReadiness = (readiness: TradingReadiness) => input.onReadiness?.(readiness)
 
-  if (!input.initialReadiness) log('🔍 Checking your account status...')
+  if (!input.initialReadiness) log('Checking your account status...')
   let readiness = input.initialReadiness ?? await fetchTradingReadiness(input.token, 'deposit_wallet')
   setReadiness(readiness)
-  if (readiness.depositWalletAddress) log(`📍 Your Deposit Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
+  if (readiness.depositWalletAddress) log(`Deposit Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
 
   if (readiness.status === 'disabled' || readiness.status === 'unavailable') {
     throw new Error(readiness.reason || 'Polymarket trading setup is unavailable.')
   }
 
   if (!readiness.depositWalletDeployed) {
-    log('⚠️ Deposit Wallet not deployed yet')
-    log('🚀 Deploying your Deposit Wallet...')
-    log('💫 This is completely gasless.')
+    log('Deposit Wallet is not deployed yet.')
+    log('Creating your Deposit Wallet through Polymarket...')
+    log('This setup does not require gas from your connected wallet.')
     readiness = await ensureDepositWallet(input.token)
     readiness = await waitForDepositWalletReadiness(input.token, readiness, 'deposit_wallet')
     setReadiness(readiness)
     if (!readiness.depositWalletDeployed) {
       throw new Error(readiness.reason || 'Deposit Wallet deployment is still pending.')
     }
-    log('✅ Deposit Wallet deployed successfully!')
-    if (readiness.depositWalletAddress) log(`📍 Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
+    log('Deposit Wallet is ready.')
+    if (readiness.depositWalletAddress) log(`Wallet address: ${shortAddress(readiness.depositWalletAddress)}`)
   }
 
   const allowance = readinessAllowance(readiness) ?? 0
   if (allowance + Number.EPSILON < TRADING_WALLET_MIN_READY_USD) {
-    log('⚡ Enabling Deposit Wallet trading...')
-    log('🔄 Setting token approvals through the relayer')
+    log('Enabling Deposit Wallet trading permissions...')
+    log('Requesting one-time trading approvals through Polymarket.')
     if (!input.walletAddress) throw new Error('Missing connected wallet address for approval signing.')
     const approvalPayload = await prepareDepositWalletApproval(input.token)
     const approvalSignature = await signTypedDataWithFallback({
@@ -2355,13 +2446,13 @@ async function setupTradingWalletBasics(input: {
     })
     const approval = await completeDepositWalletApproval(input.token, approvalPayload, approvalSignature)
     await waitForRelayerTransaction(input.token, approval.transaction.transactionId)
-    log('✅ Trading approvals are enabled.')
+    log('Trading permissions are enabled.')
     readiness = await fetchTradingReadiness(input.token, 'deposit_wallet')
     setReadiness(readiness)
   }
 
   if (!readiness.clobApiKeyConfigured) {
-    log('🔑 Creating your API credentials...')
+    log('Creating Polymarket trading credentials...')
     const authPayload = await prepareClobAuth(input.token)
     const signature = await signTypedDataWithFallback({
       variables: typedDataToSignVariables(authPayload.eip712),
@@ -2370,12 +2461,12 @@ async function setupTradingWalletBasics(input: {
       walletClient: input.walletClient,
     })
     await completeClobAuth(input.token, authPayload, signature)
-    log('✅ API credentials are ready.')
+    log('Trading credentials are ready.')
     readiness = await fetchTradingReadiness(input.token, 'deposit_wallet')
     setReadiness(readiness)
   }
 
-  log('✅ Quick setup completed.')
+  log('Trading setup is complete.')
   return readiness
 }
 
@@ -3827,14 +3918,12 @@ function AccountControls({ auth }: { auth: CausewayAuth }) {
 
 function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   const { signTypedDataAsync } = useSignTypedData()
-  const { signMessageAsync } = useSignMessage()
   const { data: walletClient } = useWalletClient({ chainId: supportedChain.id })
   const { activityItems, addActivity, updateActivity } = useTradingWalletActivity()
   const [readiness, setReadiness] = useState<TradingReadiness | null>(null)
   const [bridgeWallet, setBridgeWallet] = useState<BridgeWalletResult | null>(null)
   const [supportedAssets, setSupportedAssets] = useState<BridgeSupportedAsset[]>([])
   const [bridgeDeposit, setBridgeDeposit] = useState<BridgeDepositResult | null>(null)
-  const [bridgeWithdrawal, setBridgeWithdrawal] = useState<BridgeWithdrawalResult | null>(null)
   const [bridgeStatus, setBridgeStatus] = useState<BridgeTransactionStatusResult | null>(null)
   const [walletOpen, setWalletOpen] = useState(false)
   const [walletTab, setWalletTab] = useState<'deposit' | 'withdraw' | 'trade'>('deposit')
@@ -3843,8 +3932,8 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   const [openOrders, setOpenOrders] = useState<OpenOrdersResult | null>(null)
   const [openOrdersLoading, setOpenOrdersLoading] = useState(false)
   const [openOrdersError, setOpenOrdersError] = useState<string | null>(null)
+  const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null)
   const [isLoadingBridge, setIsLoadingBridge] = useState(false)
-  const [isPreparingTrade, setIsPreparingTrade] = useState(false)
   const [bridgeError, setBridgeError] = useState<string | null>(null)
   const [withdrawRecipient, setWithdrawRecipient] = useState('')
   const [withdrawAmount, setWithdrawAmount] = useState('')
@@ -3906,6 +3995,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   const selectedDepositAsset = supportedAssets.find((item) => assetOptionKey(item) === depositAssetKey)
     ?? depositChainAssets[0]
     ?? supportedAssets[0]
+  const selectedDepositAssetKey = selectedDepositAsset ? assetOptionKey(selectedDepositAsset) : ''
 
   const refreshDepositAddress = useCallback(async (token?: string | null, showLoading = false) => {
     if (!token) {
@@ -3918,27 +4008,36 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       const result = await createBridgeDeposit(token)
       setBridgeDeposit(result)
       setBridgeWallet(result.wallet)
-      const firstAddress = bridgeAddressForAsset(result.deposit.address, selectedDepositAsset) ?? firstBridgeAddress(result.deposit.address)
+      const asset = supportedAssets.find((item) => assetOptionKey(item) === selectedDepositAssetKey)
+      const firstAddress = bridgeAddressForAsset(result.deposit.address, asset) ?? firstBridgeAddress(result.deposit.address)
       if (firstAddress) setStatusAddress(firstAddress)
     } catch (error) {
       setBridgeError(errorMessage(error))
     } finally {
       if (showLoading) setIsLoadingBridge(false)
     }
-  }, [selectedDepositAsset])
+  }, [selectedDepositAssetKey, supportedAssets])
 
   useEffect(() => {
     const token = auth.accessToken
-    void refreshWallet(token)
-    if (!token) return
+    const initialTimer = window.setTimeout(() => {
+      void refreshWallet(token)
+    }, 0)
+    if (!token) return () => window.clearTimeout(initialTimer)
     const timer = window.setInterval(() => void refreshWallet(token), 60_000)
-    return () => window.clearInterval(timer)
+    return () => {
+      window.clearTimeout(initialTimer)
+      window.clearInterval(timer)
+    }
   }, [auth.accessToken, refreshWallet])
 
   useEffect(() => {
-    setQuickSetupStarted(false)
-    setQuickSetupRunning(false)
-    setQuickSetupLogs([])
+    const timer = window.setTimeout(() => {
+      setQuickSetupStarted(false)
+      setQuickSetupRunning(false)
+      setQuickSetupLogs([])
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [auth.walletAddress])
 
   useEffect(() => {
@@ -3956,11 +4055,6 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       })
       .catch((error) => setBridgeError(errorMessage(error)))
   }, [auth.accessToken])
-
-  useEffect(() => {
-    if (!auth.accessToken || !selectedDepositAsset || bridgeDeposit) return
-    void refreshDepositAddress(auth.accessToken)
-  }, [auth.accessToken, bridgeDeposit, refreshDepositAddress, selectedDepositAsset])
 
   const handleCopy = useCallback(async (value?: string | null) => {
     if (!value) return
@@ -3988,35 +4082,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     await refreshDepositAddress(token, true)
   }, [ensureTradingToken, refreshDepositAddress])
 
-  const handleCreateWithdrawal = useCallback(async () => {
-    const asset = supportedAssets.find((item) => assetOptionKey(item) === withdrawAssetKey)
-    if (!asset) {
-      setBridgeError('请选择提现目标链和资产。')
-      return
-    }
-    if (!withdrawRecipient.trim()) {
-      setBridgeError('请输入收款地址。')
-      return
-    }
-    setIsLoadingBridge(true)
-    setBridgeError(null)
-    try {
-      const token = await ensureTradingToken()
-      const result = await createBridgeWithdrawal(token, {
-        toChainId: asset.chainId,
-        toTokenAddress: asset.token.address,
-        recipientAddr: withdrawRecipient.trim(),
-      })
-      setBridgeWithdrawal(result)
-      setBridgeWallet(result.wallet)
-      const firstAddress = firstBridgeAddress(result.withdrawal.address)
-      if (firstAddress) setStatusAddress(firstAddress)
-    } catch (error) {
-      setBridgeError(errorMessage(error))
-    } finally {
-      setIsLoadingBridge(false)
-    }
-  }, [ensureTradingToken, supportedAssets, withdrawAssetKey, withdrawRecipient])
+  const withdrawAvailable = readiness ? readinessCash(readiness) : null
 
   const handleSubmitWithdrawTransfer = useCallback(async () => {
     const amountUsd = parseDraftNumber(withdrawAmount)
@@ -4034,6 +4100,10 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       setBridgeError('请输入收款地址。')
       return
     }
+    if (withdrawAvailable != null && amountUsd > withdrawAvailable + Number.EPSILON) {
+      setBridgeError(`Deposit Wallet only has ${formatUsd(withdrawAvailable)} available for withdrawal.`)
+      return
+    }
     if (!walletAddress) {
       setBridgeError('缺少已连接的钱包地址，请重新登录。')
       return
@@ -4047,11 +4117,10 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
         toTokenAddress: asset.token.address,
         recipientAddr: withdrawRecipient.trim(),
       })
-      setBridgeWithdrawal(withdrawal)
       setBridgeWallet(withdrawal.wallet)
-      const bridgeAddress = firstBridgeAddress(withdrawal.withdrawal.address)
+      const bridgeAddress = evmBridgeAddressForDepositWalletTransfer(withdrawal.withdrawal.address)
       if (!bridgeAddress) {
-        throw new Error('Polymarket Bridge 没有返回可用的 pUSD 转账地址。')
+        throw new Error(`Polymarket Bridge did not return an EVM receiving address for ${asset.chainName} ${asset.token.symbol}. Please choose another route or try again later.`)
       }
       setStatusAddress(bridgeAddress)
       const payload = await prepareDepositWalletTransfer(token, {
@@ -4074,7 +4143,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     } finally {
       setIsLoadingBridge(false)
     }
-  }, [auth.walletAddress, ensureTradingToken, refreshWallet, signTypedDataAsync, supportedAssets, walletClient, withdrawAmount, withdrawAssetKey, withdrawRecipient])
+  }, [auth.walletAddress, ensureTradingToken, refreshWallet, signTypedDataAsync, supportedAssets, walletClient, withdrawAmount, withdrawAssetKey, withdrawAvailable, withdrawRecipient])
 
   const handleCheckStatus = useCallback(async (address?: string | null) => {
     const target = address ?? statusAddress
@@ -4091,31 +4160,6 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       setIsLoadingBridge(false)
     }
   }, [ensureTradingToken, statusAddress])
-
-  const handlePrepareTrade = useCallback(async () => {
-    setIsPreparingTrade(true)
-    setBridgeError(null)
-    try {
-      const token = await ensureTradingToken()
-      await prepareTradingWalletForRealOrders({
-        token,
-        requiredUsd: TRADING_WALLET_MIN_READY_USD,
-        walletAddress: readStoredAuthSession()?.walletAddress ?? auth.walletAddress,
-        tradingAccountType: 'auto',
-        signTypedDataAsync,
-        signMessageAsync,
-        walletClient: walletClient as TypedDataWalletClient | null | undefined,
-        onActivity: addActivity,
-        updateActivity,
-        onReadiness: setReadiness,
-      })
-    } catch (error) {
-      setBridgeError(errorMessage(error))
-    } finally {
-      setIsPreparingTrade(false)
-      void refreshWallet(auth.accessToken ?? readStoredAuthSession()?.accessToken)
-    }
-  }, [addActivity, auth.accessToken, auth.walletAddress, ensureTradingToken, refreshWallet, signMessageAsync, signTypedDataAsync, updateActivity, walletClient])
 
   const handleQuickSetup = useCallback(async (initialReadiness?: TradingReadiness | null) => {
     if (quickSetupRunning) return
@@ -4148,7 +4192,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     } catch (error) {
       const message = errorMessage(error)
       setBridgeError(message)
-      setQuickSetupLogs((current) => [...current, `❌ ${message}`])
+      setQuickSetupLogs((current) => [...current, `Error: ${message}`])
     } finally {
       if (!completed) {
         setQuickSetupRunning(false)
@@ -4156,29 +4200,48 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     }
   }, [auth.walletAddress, ensureTradingToken, quickSetupRunning, refreshDepositAddress, refreshWallet, signTypedDataAsync, walletClient])
 
-  useEffect(() => {
-    if (!auth.isAuthenticated || quickSetupStarted || quickSetupRunning || !readiness) return
-    if (readinessNeedsQuickSetup(readiness)) {
-      if (readinessCanRunQuickSetup(readiness)) {
-        void handleQuickSetup(readiness)
-      } else {
-        setQuickSetupOpen(true)
-        setQuickSetupStarted(true)
-        setQuickSetupLogs(blockedQuickSetupLogs(readiness))
-      }
+  const handleStartTradingSetup = useCallback(() => {
+    if (quickSetupRunning) return
+    if (readiness && !readinessCanRunQuickSetup(readiness)) {
+      setQuickSetupOpen(true)
+      setQuickSetupStarted(true)
+      setQuickSetupLogs(blockedQuickSetupLogs(readiness))
+      return
     }
-  }, [auth.isAuthenticated, handleQuickSetup, quickSetupRunning, quickSetupStarted, readiness])
+    void handleQuickSetup(readiness)
+  }, [handleQuickSetup, quickSetupRunning, readiness])
 
   const handleOpenOrders = useCallback(() => {
     setOrdersOpen(true)
     void refreshOpenOrders(auth.accessToken ?? readStoredAuthSession()?.accessToken)
   }, [auth.accessToken, refreshOpenOrders])
 
+  const handleCancelOpenOrder = useCallback(async (order: OpenOrderItem) => {
+    const cancelId = order.orderId ?? order.externalOrderId
+    if (!cancelId || cancelingOrderId) return
+    setCancelingOrderId(cancelId)
+    setOpenOrdersError(null)
+    const activityId = addActivity('Cancel order', `Submitting cancellation for ${shortAddress(order.externalOrderId)}.`, 'pending')
+    try {
+      const token = await ensureTradingToken()
+      await cancelOpenOrder(cancelId, token)
+      updateActivity(activityId, 'done', `Cancelled ${shortAddress(order.externalOrderId)}.`)
+      void refreshOpenOrders(token)
+      window.dispatchEvent(new Event('causeway:orders-changed'))
+    } catch (error) {
+      const message = errorMessage(error)
+      setOpenOrdersError(message)
+      updateActivity(activityId, 'error', message)
+    } finally {
+      setCancelingOrderId(null)
+    }
+  }, [addActivity, cancelingOrderId, ensureTradingToken, refreshOpenOrders, updateActivity])
+
   const safeOption = readiness
     ? tradingOption(readiness, 'gnosis_safe') ?? tradingOption(readiness, 'proxy')
     : null
-  const displayedBalance = safeOption?.cashAvailable ?? (readiness ? readinessCash(readiness) : null)
-  const withdrawAvailable = displayedBalance
+  const depositWalletBalance = withdrawAvailable
+  const displayedBalance = depositWalletBalance ?? safeOption?.cashAvailable ?? null
   const walletLabel = bridgeWallet?.walletKind === 'safe'
     ? 'Safe'
     : bridgeWallet?.walletKind === 'proxy'
@@ -4194,7 +4257,6 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       : 'Loading'
   const recentPending = activityItems.filter((item) => item.status === 'pending').length
   const openOrderCount = openOrders?.items.filter((order) => order.canCancel).length ?? 0
-  const selectedWithdrawAsset = supportedAssets.find((item) => assetOptionKey(item) === withdrawAssetKey)
   const selectedDepositAddress = bridgeAddressForAsset(bridgeDeposit?.deposit.address, selectedDepositAsset)
   const bridgeChains = uniqueBridgeChains(supportedAssets)
   const quickSetupAllowanceReady = readiness ? (readinessAllowance(readiness) ?? 0) + Number.EPSILON >= TRADING_WALLET_MIN_READY_USD : false
@@ -4239,7 +4301,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               <div className="wallet-balance-grid">
                 <div><span>{walletAddressLabel}</span><b>{shortAddress(bridgeWallet?.polymarketWalletAddress ?? null)}</b></div>
                 <div><span>Owner</span><b>{shortAddress(bridgeWallet?.ownerAddress ?? auth.walletAddress ?? null)}</b></div>
-                <div><span>pUSD</span><b>{formatUsd(displayedBalance)}</b></div>
+                <div><span>Deposit Wallet pUSD</span><b>{formatUsd(depositWalletBalance)}</b></div>
               </div>
               {bridgeWallet?.warning ? <div className="status-note warning wallet-status-note">{bridgeWallet.warning}</div> : null}
               {bridgeError ? <div className="status-note error wallet-status-note">{bridgeError}</div> : null}
@@ -4319,7 +4381,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                     <small>从当前 Polymarket 钱包直接转出 pUSD，不再生成 Bridge 提现地址。</small>
                   </div>
                   <div className="withdraw-available-panel">
-                    <span>可用余额</span>
+                    <span>Deposit Wallet available</span>
                     <b>{formatUsd(withdrawAvailable)} <small>pUSD</small></b>
                   </div>
                   <div className="bridge-select-grid">
@@ -4348,7 +4410,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                     <span>转账金额（美元）</span>
                     <div className="bridge-input-action">
                       <input className="bridge-input" inputMode="decimal" value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} placeholder="0.00" />
-                      <button type="button" onClick={() => setWithdrawAmount(withdrawAvailable != null ? withdrawAvailable.toFixed(2) : '')}>最大限度</button>
+                      <button disabled={withdrawAvailable == null} type="button" onClick={() => setWithdrawAmount(withdrawAvailable != null ? withdrawAvailable.toFixed(2) : '')}>Max</button>
                     </div>
                   </label>
                   <label className="bridge-field">
@@ -4358,7 +4420,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                       <button type="button" onClick={() => setWithdrawRecipient(auth.walletAddress ?? '')}>使用关联钱包</button>
                     </div>
                   </label>
-                  <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected} type="button" onClick={() => void handleSubmitWithdrawTransfer()}>
+                  <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected || withdrawAvailable == null} type="button" onClick={() => void handleSubmitWithdrawTransfer()}>
                     {isLoadingBridge ? '提交中...' : '提交转账'}
                   </button>
                 </div>
@@ -4367,17 +4429,17 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               {walletTab === 'trade' ? (
                 <div className="deposit-path-card">
                   <div className="deposit-path-head">
-                    <span><ShieldCheck size={16} /> 真实下单准备</span>
-                    <small>这一步不是充值/提现；它用于创建或检查 Deposit Wallet、CLOB 凭据和下单授权。</small>
+                    <span><ShieldCheck size={16} /> Trading setup</span>
+                    <small>This is not a deposit or withdrawal. It prepares the Deposit Wallet, trading credentials, and trading permissions.</small>
                   </div>
                   <div className="wallet-balance-grid">
                     <div><span>Deposit Wallet</span><b>{formatUsd(readiness ? readinessCash(readiness) : null)}</b></div>
-                    <div><span>状态</span><b>{readiness?.status ?? '待检查'}</b></div>
-                    <div><span>最低准备</span><b>{formatUsd(TRADING_WALLET_MIN_READY_USD)}</b></div>
+                    <div><span>Status</span><b>{readiness?.status ?? 'Not checked'}</b></div>
+                    <div><span>Minimum ready</span><b>{formatUsd(TRADING_WALLET_MIN_READY_USD)}</b></div>
                   </div>
                   {readiness?.reason ? <div className="status-note warning wallet-status-note">{readiness.reason}</div> : null}
-                  <button className="primary-button" disabled={isPreparingTrade || !auth.isConnected} type="button" onClick={() => void handlePrepareTrade()}>
-                    {isPreparingTrade ? '处理中...' : '检查并准备交易钱包'}
+                  <button className="primary-button" disabled={quickSetupRunning || !auth.isConnected} type="button" onClick={handleStartTradingSetup}>
+                    {quickSetupRunning ? 'Processing...' : 'Check and prepare trading wallet'}
                   </button>
                 </div>
               ) : null}
@@ -4409,20 +4471,20 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
             <div className="wallet-modal quick-setup-modal" role="dialog" aria-modal="true" aria-label="Quick setup" onMouseDown={(event) => event.stopPropagation()}>
               <div className="wallet-modal-head">
                 <div>
-                  <span><Bot size={18} /> Quick Setup</span>
-                  <small>Deploy Deposit Wallet, enable trading, and create Polymarket API credentials.</small>
+                  <span><Bot size={18} /> Trading Setup</span>
+                  <small>Create the Deposit Wallet, enable trading permissions, and create Polymarket trading credentials.</small>
                 </div>
                 <button className="modal-close-button" type="button" disabled={quickSetupRunning} onClick={() => setQuickSetupOpen(false)}>×</button>
               </div>
               <div className="quick-setup-steps">
                 <span className={readiness?.depositWalletDeployed ? 'done' : quickSetupRunning ? 'active' : ''}>Deploy Wallet</span>
                 <span className={quickSetupAllowanceReady ? 'done' : quickSetupRunning && readiness?.depositWalletDeployed ? 'active' : ''}>Enable Trading</span>
-                <span className={readiness?.clobApiKeyConfigured ? 'done' : quickSetupRunning ? 'active' : ''}>API Key</span>
+                <span className={readiness?.clobApiKeyConfigured ? 'done' : quickSetupRunning ? 'active' : ''}>Credentials</span>
               </div>
               <div className="deposit-path-card recommended">
                 <div className="deposit-path-head">
-                  <span><Bot size={16} /> Deploy Your Trading Wallet</span>
-                  <small>New wallets need this once before real Polymarket trading. Deposit addresses are still generated through Bridge.</small>
+                  <span><Bot size={16} /> Prepare Your Trading Wallet</span>
+                  <small>New wallets need this once before real Polymarket trading. You stay in control of every required wallet signature.</small>
                 </div>
                 <div className="quick-setup-console">
                   {(quickSetupLogs.length ? quickSetupLogs : ['Ready to check your account status.']).map((line, index) => (
@@ -4432,7 +4494,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               </div>
               {quickSetupRunning || !readiness?.canTrade ? (
                 <button className="primary-button" disabled={quickSetupRunning || !auth.isConnected} type="button" onClick={() => void handleQuickSetup()}>
-                  {quickSetupRunning ? 'Processing...' : quickSetupStarted ? 'Retry Setup' : 'Start Quick Setup'}
+                  {quickSetupRunning ? 'Processing...' : quickSetupStarted ? 'Retry Setup' : 'Start Setup'}
                 </button>
               ) : null}
             </div>
@@ -4447,7 +4509,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               <div className="wallet-modal-head">
                 <div>
                   <span><ListOrdered size={18} /> Open Orders</span>
-                  <small>来自 Polymarket CLOB 的实时挂单。取消订单需要已有 CLOB 凭据。</small>
+                  <small>Live limit orders from Polymarket CLOB. Cancel here if you no longer want the order resting on the book.</small>
                 </div>
                 <button className="modal-close-button" type="button" onClick={() => setOrdersOpen(false)}>×</button>
               </div>
@@ -4459,19 +4521,40 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                 </button>
               </div>
               {openOrdersError ? <div className="status-note error wallet-status-note">{openOrdersError}</div> : null}
+              {openOrders?.refreshedAt ? <small className="open-orders-refreshed">Updated {formatDateTime(openOrders.refreshedAt)}</small> : null}
               <div className="open-orders-list">
-                {openOrders?.items.length ? openOrders.items.map((order) => (
-                  <div className="open-order-row" key={order.externalOrderId}>
-                    <div className="open-order-main">
-                      <b>{order.eventTitle || order.marketTitle || 'Polymarket order'}</b>
-                      <small>{order.side.toUpperCase()} {order.outcomeLabel || 'Outcome'} · Limit {formatLimitPrice(order.price)}</small>
-                      <em>{shortAddress(order.externalOrderId)} · {order.rawStatus || order.status}</em>
+                {openOrdersLoading && !openOrders ? (
+                  <div className="soft-note">Loading open orders...</div>
+                ) : openOrders?.items.length ? openOrders.items.map((order) => {
+                  const cancelId = order.orderId ?? order.externalOrderId
+                  const isCanceling = cancelingOrderId === cancelId
+                  return (
+                    <div className="open-order-row" key={order.externalOrderId}>
+                      <div className="open-order-main">
+                        <b>{order.eventTitle || order.marketTitle || 'Polymarket order'}</b>
+                        {order.eventTitle && order.marketTitle ? <span>{order.marketTitle}</span> : null}
+                        <small>
+                          {order.side.toUpperCase()} {order.outcomeLabel || 'Outcome'} | Limit {formatLimitPrice(order.price)} | {formatShares(order.remainingSize)} / {formatShares(order.originalSize)} shares
+                        </small>
+                        <em>{shortAddress(order.externalOrderId)} | {order.rawStatus || order.status}</em>
+                      </div>
+                      <div className="open-order-side">
+                        <b>{formatUsd(order.amountUsd)}</b>
+                        <small>{order.createdAt ? formatDateTime(order.createdAt) : 'No timestamp'}</small>
+                        <button
+                          className="order-cancel-button"
+                          disabled={!order.canCancel || isCanceling}
+                          type="button"
+                          onClick={() => void handleCancelOpenOrder(order)}
+                        >
+                          {isCanceling ? 'Canceling' : order.canCancel ? 'Cancel' : 'Locked'}
+                        </button>
+                      </div>
                     </div>
-                    <div className="open-order-side">
-                      <b>{formatUsd(order.amountUsd)}</b>
-                    </div>
-                  </div>
-                )) : <div className="soft-note">No live limit orders found for this wallet.</div>}
+                  )
+                }) : (
+                  <div className="soft-note">No live limit orders found for this wallet.</div>
+                )}
               </div>
             </div>
           </div>
@@ -4509,46 +4592,16 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   )
 }
 
-function BridgeAddressList({ addresses, copiedAddress, onCopy, onStatus }: {
-  addresses?: BridgeAddressSet
-  copiedAddress: string | null
-  onCopy: (address?: string | null) => void
-  onStatus: (address?: string | null) => void
-}) {
-  const rows = [
-    ['EVM', addresses?.evm],
-    ['Solana', addresses?.svm],
-    ['Bitcoin', addresses?.btc],
-  ] as const
-  if (!addresses || !rows.some(([, value]) => value)) {
-    return <div className="soft-note">还没有生成地址。</div>
-  }
-  return (
-    <div className="bridge-address-list">
-      {rows.map(([label, address]) => address ? (
-        <div className="bridge-address-row" key={label}>
-          <span>{label}</span>
-          <b>{address}</b>
-          <button className="outline-button" type="button" onClick={() => onCopy(address)}>
-            <Copy size={15} />
-            {copiedAddress === address ? '已复制' : '复制'}
-          </button>
-          <button className="outline-button" type="button" onClick={() => onStatus(address)}>
-            <Activity size={15} />
-            状态
-          </button>
-        </div>
-      ) : null)}
-    </div>
-  )
-}
-
 function assetOptionKey(asset: BridgeSupportedAsset) {
   return `${asset.chainId}:${asset.token.address}`
 }
 
 function firstBridgeAddress(addresses?: BridgeAddressSet) {
   return addresses?.evm ?? addresses?.svm ?? addresses?.btc ?? null
+}
+
+function evmBridgeAddressForDepositWalletTransfer(addresses?: BridgeAddressSet) {
+  return addresses?.evm ?? null
 }
 
 function bridgeAddressForAsset(addresses: BridgeAddressSet | undefined, asset: BridgeSupportedAsset | undefined) {
@@ -4575,386 +4628,6 @@ function uniqueBridgeChains(assets: BridgeSupportedAsset[]) {
     chains.push({ chainId: asset.chainId, chainName: asset.chainName })
   }
   return chains
-}
-
-function TradingWalletControl({ auth }: { auth: CausewayAuth }) {
-  const { signTypedDataAsync } = useSignTypedData()
-  const { signMessageAsync } = useSignMessage()
-  const { data: walletClient } = useWalletClient({ chainId: supportedChain.id })
-  const { activityItems, addActivity, updateActivity } = useTradingWalletActivity()
-  const [readiness, setReadiness] = useState<TradingReadiness | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isPreparing, setIsPreparing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [depositOpen, setDepositOpen] = useState(false)
-  const [activityOpen, setActivityOpen] = useState(false)
-  const [ordersOpen, setOrdersOpen] = useState(false)
-  const [openOrders, setOpenOrders] = useState<OpenOrdersResult | null>(null)
-  const [openOrdersLoading, setOpenOrdersLoading] = useState(false)
-  const [openOrdersError, setOpenOrdersError] = useState<string | null>(null)
-  const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
-
-  const refreshReadiness = useCallback(async (token?: string | null) => {
-    if (!token) {
-      setReadiness(null)
-      return null
-    }
-    setIsLoading(true)
-    setError(null)
-    try {
-      const next = await fetchTradingReadiness(token, 'auto')
-      setReadiness(next)
-      return next
-    } catch (refreshError) {
-      const message = errorMessage(refreshError)
-      setError(message)
-      return null
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
-  const refreshOpenOrders = useCallback(async (token?: string | null) => {
-    if (!token) {
-      setOpenOrders(null)
-      setOpenOrdersError(null)
-      return null
-    }
-    setOpenOrdersLoading(true)
-    setOpenOrdersError(null)
-    try {
-      const next = await fetchOpenOrders(token)
-      setOpenOrders(next)
-      return next
-    } catch (refreshError) {
-      const message = errorMessage(refreshError)
-      setOpenOrdersError(message)
-      return null
-    } finally {
-      setOpenOrdersLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    const initialTimer = window.setTimeout(() => {
-      void refreshReadiness(auth.accessToken)
-    }, 0)
-    if (!auth.accessToken) {
-      return () => window.clearTimeout(initialTimer)
-    }
-    const timer = window.setInterval(() => {
-      void refreshReadiness(auth.accessToken)
-    }, 60_000)
-    return () => {
-      window.clearTimeout(initialTimer)
-      window.clearInterval(timer)
-    }
-  }, [auth.accessToken, refreshReadiness])
-
-  useEffect(() => {
-    const initialTimer = window.setTimeout(() => {
-      void refreshOpenOrders(auth.accessToken)
-    }, 0)
-    if (!auth.accessToken) {
-      return () => window.clearTimeout(initialTimer)
-    }
-    const timer = window.setInterval(() => {
-      void refreshOpenOrders(auth.accessToken)
-    }, 60_000)
-    return () => {
-      window.clearTimeout(initialTimer)
-      window.clearInterval(timer)
-    }
-  }, [auth.accessToken, refreshOpenOrders])
-
-  useEffect(() => {
-    const refreshAfterOrderChange = () => {
-      void refreshOpenOrders(auth.accessToken ?? readStoredAuthSession()?.accessToken)
-    }
-    window.addEventListener('causeway:orders-changed', refreshAfterOrderChange)
-    return () => window.removeEventListener('causeway:orders-changed', refreshAfterOrderChange)
-  }, [auth.accessToken, refreshOpenOrders])
-
-  const ensureTradingToken = useCallback(async () => {
-    if (!auth.isConnected) {
-      throw new Error('请先连接钱包。')
-    }
-    if (!auth.isAuthenticated) {
-      await auth.signIn()
-    }
-    const session = readStoredAuthSession()
-    const token = session?.accessToken ?? auth.accessToken
-    if (!token) throw new Error('钱包认证尚未完成，请先签名登录。')
-    return token
-  }, [auth])
-
-  const depositWalletAddress = readiness?.depositWalletAddress ?? null
-
-  const handleCopyDepositWallet = useCallback(async () => {
-    if (!depositWalletAddress) return
-    await navigator.clipboard.writeText(depositWalletAddress)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1200)
-  }, [depositWalletAddress])
-
-  const handlePrepareWallet = useCallback(async () => {
-    setIsPreparing(true)
-    setError(null)
-    try {
-      const token = await ensureTradingToken()
-      await prepareTradingWalletForRealOrders({
-        token,
-        requiredUsd: TRADING_WALLET_MIN_READY_USD,
-        walletAddress: readStoredAuthSession()?.walletAddress ?? auth.walletAddress,
-        tradingAccountType: 'auto',
-        signTypedDataAsync,
-        signMessageAsync,
-        walletClient: walletClient as TypedDataWalletClient | null | undefined,
-        onActivity: addActivity,
-        updateActivity,
-        onReadiness: setReadiness,
-      })
-      setDepositOpen(false)
-    } catch (prepareError) {
-      const message = errorMessage(prepareError)
-      setError(message)
-    } finally {
-      setIsPreparing(false)
-      void refreshReadiness(auth.accessToken ?? readStoredAuthSession()?.accessToken)
-    }
-  }, [
-    addActivity,
-    auth,
-    ensureTradingToken,
-    refreshReadiness,
-    signMessageAsync,
-    signTypedDataAsync,
-    updateActivity,
-    walletClient,
-  ])
-
-  const handleOpenOrders = useCallback(() => {
-    setOrdersOpen(true)
-    void refreshOpenOrders(auth.accessToken ?? readStoredAuthSession()?.accessToken)
-  }, [auth.accessToken, refreshOpenOrders])
-
-  const handleCancelOpenOrder = useCallback(async (order: OpenOrderItem) => {
-    const cancelId = order.orderId ?? order.externalOrderId
-    if (!cancelId || cancelingOrderId) return
-    setCancelingOrderId(cancelId)
-    setOpenOrdersError(null)
-    const activityId = addActivity('Cancel order', `Submitting cancellation for ${shortAddress(order.externalOrderId)}.`, 'pending')
-    try {
-      const token = await ensureTradingToken()
-      await cancelOpenOrder(cancelId, token)
-      updateActivity(activityId, 'done', `Cancelled ${shortAddress(order.externalOrderId)}.`)
-      void refreshOpenOrders(token)
-    } catch (cancelError) {
-      const message = errorMessage(cancelError)
-      setOpenOrdersError(message)
-      updateActivity(activityId, 'error', message)
-    } finally {
-      setCancelingOrderId(null)
-    }
-  }, [addActivity, cancelingOrderId, ensureTradingToken, refreshOpenOrders, updateActivity])
-
-  const depositCash = readiness ? readinessCash(readiness) : null
-  const allowance = readiness ? readinessAllowance(readiness) : null
-  const safeCash = readiness ? tradingOption(readiness, 'gnosis_safe')?.cashAvailable ?? null : null
-  const ready = readiness ? depositWalletReadyForAmount(readiness, TRADING_WALLET_MIN_READY_USD) : false
-  const needsFunds = readiness?.tradingAccountType === 'deposit_wallet' && (depositCash ?? 0) + Number.EPSILON < TRADING_WALLET_MIN_READY_USD
-  const needsApproval = readiness?.tradingAccountType === 'deposit_wallet' && !needsFunds && (allowance ?? 0) + Number.EPSILON < TRADING_WALLET_MIN_READY_USD
-  const fundingUnavailableMessage = readiness ? depositWalletFundingUnavailableMessage(readiness, TRADING_WALLET_MIN_READY_USD) : null
-  const allowanceStatus = allowance == null
-    ? '待检查'
-    : allowance + Number.EPSILON >= TRADING_WALLET_MIN_READY_USD
-      ? '充足'
-      : allowance > 0
-        ? `不足（${formatUsd(allowance)}）`
-        : '未授权'
-  const statusText = !auth.isAuthenticated
-    ? 'Sign in'
-    : isLoading && !readiness
-      ? 'Loading'
-      : ready
-        ? 'Ready'
-        : needsFunds
-          ? 'Needs funds'
-          : needsApproval
-            ? 'Approval needed'
-            : readiness?.status === 'deposit_wallet_pending'
-              ? 'Pending'
-              : 'Check wallet'
-  const recentPending = activityItems.filter((item) => item.status === 'pending').length
-  const openOrderCount = openOrders?.items.filter((order) => order.canCancel).length ?? 0
-
-  return (
-    <div className="trading-wallet-shell">
-      <button className={ready ? 'trading-wallet-pill ready' : 'trading-wallet-pill'} type="button" onClick={() => setDepositOpen(true)}>
-        <WalletCards size={16} />
-        <span>Trading Wallet</span>
-        <b>{formatUsd(depositCash)}</b>
-        <small>{statusText}</small>
-      </button>
-      <button className="deposit-button" type="button" onClick={() => setDepositOpen(true)}>
-        <Plus size={16} />
-        Deposit
-      </button>
-      <button className="activity-pill" type="button" onClick={handleOpenOrders}>
-        <ListOrdered size={16} />
-        {openOrdersLoading && !openOrders ? 'Loading' : openOrderCount ? `${openOrderCount} Orders` : 'Orders'}
-      </button>
-      <button className="activity-pill" type="button" onClick={() => setActivityOpen(true)}>
-        <Activity size={16} />
-        {recentPending ? `${recentPending} Pending` : activityItems.length ? 'Activity' : 'No Activity'}
-      </button>
-
-      {depositOpen ? (
-        <BodyPortal>
-          <div className="wallet-modal-backdrop" role="presentation" onMouseDown={() => setDepositOpen(false)}>
-            <div className="wallet-modal" role="dialog" aria-modal="true" aria-label="准备交易钱包" onMouseDown={(event) => event.stopPropagation()}>
-              <div className="wallet-modal-head">
-                <div>
-                  <span><WalletCards size={18} /> 准备交易钱包</span>
-                  <small>真实下单固定使用 Deposit Wallet + POLY_1271。</small>
-                </div>
-                <button className="modal-close-button" type="button" onClick={() => setDepositOpen(false)}>×</button>
-              </div>
-
-              <div className="wallet-balance-grid">
-                <div><span>Deposit Wallet</span><b>{formatUsd(depositCash)}</b></div>
-                <div><span>Polymarket Safe</span><b>{formatUsd(safeCash)}</b></div>
-                <div><span>一次性授权</span><b>{allowanceStatus}</b></div>
-              </div>
-              {error ? <div className="status-note error wallet-status-note">{error}</div> : fundingUnavailableMessage ? <div className="status-note warning wallet-status-note">{fundingUnavailableMessage}</div> : null}
-
-              <div className="deposit-path-card recommended">
-                <div className="deposit-path-head">
-                  <span><Star size={16} /> 推荐：从已有 Polymarket 余额转入</span>
-                  <small>如果你已经在 Polymarket 充值，系统会把 Safe 里的 pUSD 转入 Deposit Wallet。</small>
-                </div>
-                <ol>
-                  <li>检查或创建 Deposit Wallet。</li>
-                  <li>资金不足时，请签名授权从 Polymarket Safe 转入。</li>
-                  <li>授权不足时，请签名一次性 Deposit Wallet 授权。</li>
-                  <li>完成后，每次真实下单只需要签订单。</li>
-                </ol>
-                <button className="primary-button" disabled={isPreparing || !auth.isConnected || ready} type="button" onClick={() => void handlePrepareWallet()}>
-                  {ready ? '交易钱包已就绪' : isPreparing ? '处理中...' : fundingUnavailableMessage ? '重新检查余额' : '签名并准备交易钱包'}
-                </button>
-                {!auth.isConnected ? <small className="wallet-inline-warning">请先连接钱包。</small> : null}
-              </div>
-
-              <div className="deposit-path-card">
-                <div className="deposit-path-head">
-                  <span><ArrowRight size={16} /> 从其他钱包或交易所充值</span>
-                  <small>使用 Polygon 网络向 Deposit Wallet 充值 pUSD。到账后刷新状态即可下单。</small>
-                </div>
-                <div className="deposit-address-box">
-                  <span>{readiness?.depositWalletAddress || '完成钱包准备后生成 Deposit Wallet 地址'}</span>
-                  <button className="outline-button" disabled={!readiness?.depositWalletAddress} type="button" onClick={() => void handleCopyDepositWallet()}>
-                    <Copy size={15} />
-                    {copied ? '已复制' : '复制地址'}
-                  </button>
-                </div>
-              </div>
-
-            </div>
-          </div>
-        </BodyPortal>
-      ) : null}
-
-      {ordersOpen ? (
-        <BodyPortal>
-          <div className="wallet-modal-backdrop" role="presentation" onMouseDown={() => setOrdersOpen(false)}>
-            <div className="wallet-modal open-orders-modal" role="dialog" aria-modal="true" aria-label="Open orders" onMouseDown={(event) => event.stopPropagation()}>
-              <div className="wallet-modal-head">
-                <div>
-                  <span><ListOrdered size={18} /> Open Orders</span>
-                  <small>Live limit orders from Polymarket CLOB. Cancel here if you no longer want the order resting on the book.</small>
-                </div>
-                <button className="modal-close-button" type="button" onClick={() => setOrdersOpen(false)}>×</button>
-              </div>
-              <div className="open-orders-toolbar">
-                <span>{openOrders?.items.length ?? 0} open order{(openOrders?.items.length ?? 0) === 1 ? '' : 's'}</span>
-                <button className="outline-button" disabled={openOrdersLoading} type="button" onClick={() => void refreshOpenOrders(auth.accessToken ?? readStoredAuthSession()?.accessToken)}>
-                  <RotateCw size={15} />
-                  {openOrdersLoading ? 'Refreshing' : 'Refresh'}
-                </button>
-              </div>
-              {openOrdersError ? <div className="status-note error wallet-status-note">{openOrdersError}</div> : null}
-              {openOrders?.refreshedAt ? <small className="open-orders-refreshed">Updated {formatDateTime(openOrders.refreshedAt)}</small> : null}
-              <div className="open-orders-list">
-                {openOrdersLoading && !openOrders ? (
-                  <div className="soft-note">Loading open orders...</div>
-                ) : openOrders?.items.length ? openOrders.items.map((order) => {
-                  const cancelId = order.orderId ?? order.externalOrderId
-                  const isCanceling = cancelingOrderId === cancelId
-                  return (
-                    <div className="open-order-row" key={order.externalOrderId}>
-                      <div className="open-order-main">
-                        <b>{order.eventTitle || order.marketTitle || 'Polymarket order'}</b>
-                        {order.eventTitle && order.marketTitle ? <span>{order.marketTitle}</span> : null}
-                        <small>
-                          {order.side.toUpperCase()} {order.outcomeLabel || 'Outcome'} · Limit {formatLimitPrice(order.price)} · {formatShares(order.remainingSize)} / {formatShares(order.originalSize)} shares
-                        </small>
-                        <em>{shortAddress(order.externalOrderId)} · {order.rawStatus || order.status}</em>
-                      </div>
-                      <div className="open-order-side">
-                        <b>{formatUsd(order.amountUsd)}</b>
-                        <small>{order.createdAt ? formatDateTime(order.createdAt) : 'No timestamp'}</small>
-                        <button
-                          className="order-cancel-button"
-                          disabled={!order.canCancel || isCanceling}
-                          type="button"
-                          onClick={() => void handleCancelOpenOrder(order)}
-                        >
-                          {isCanceling ? 'Canceling' : order.canCancel ? 'Cancel' : 'Locked'}
-                        </button>
-                      </div>
-                    </div>
-                  )
-                }) : (
-                  <div className="soft-note">No live limit orders found for this wallet.</div>
-                )}
-              </div>
-            </div>
-          </div>
-        </BodyPortal>
-      ) : null}
-
-      {activityOpen ? (
-        <BodyPortal>
-          <div className="wallet-modal-backdrop" role="presentation" onMouseDown={() => setActivityOpen(false)}>
-            <div className="wallet-modal activity-modal" role="dialog" aria-modal="true" aria-label="交易活动" onMouseDown={(event) => event.stopPropagation()}>
-              <div className="wallet-modal-head">
-                <div>
-                  <span><Activity size={18} /> 交易活动</span>
-                  <small>展示本机当前会话内的 Deposit Wallet 准备和 relayer 状态。</small>
-                </div>
-                <button className="modal-close-button" type="button" onClick={() => setActivityOpen(false)}>×</button>
-              </div>
-              <div className="wallet-activity-list">
-                {activityItems.length ? activityItems.map((item) => (
-                  <div className={`wallet-activity-row ${item.status}`} key={item.id}>
-                    <span>{item.status === 'done' ? <CheckCircle2 size={16} /> : item.status === 'error' ? <Info size={16} /> : <RotateCw size={16} />}</span>
-                    <div>
-                      <b>{item.label}</b>
-                      <small>{item.detail}</small>
-                      <em>{formatDateTime(item.createdAt)}</em>
-                    </div>
-                  </div>
-                )) : (
-                  <div className="soft-note">暂无活动。准备交易钱包或提交订单后，这里会显示进度。</div>
-                )}
-              </div>
-            </div>
-          </div>
-        </BodyPortal>
-      ) : null}
-    </div>
-  )
 }
 
 function ResourceMenu() {
@@ -6127,7 +5800,7 @@ function ScriptOrderPanelState({
         setError(nextPreview.tradingCapabilityReason || '当前后端真实 CLOB 下单能力不可用。')
         return
       }
-      if (!window.confirm('将向 Polymarket CLOB 提交真实订单，请确认金额、数量和限价无误。')) {
+      if (!window.confirm(realOrderConfirmationText(nextPreview))) {
         return
       }
     }
@@ -6423,18 +6096,38 @@ function OrderSubmitBlock({ result }: { result: OrderSubmitResult }) {
   return (
     <div className={`order-submit-block ${result.status}`}>
       <div>
-        <b>{result.status === 'dry_run_completed' ? 'Dry-run 已完成' : `提交状态：${result.status}`}</b>
-        <span>Intent: {result.intentId}</span>
+        <b>{orderSubmitTitle(result)}</b>
+        <span>{orderSubmitSubtitle(result)}</span>
       </div>
       <div className="order-submit-list">
         {result.orders.map((order) => (
           <span key={order.orderId}>
-            {order.externalOrderId || order.orderId}: {order.status}{order.errorMessage ? ` · ${order.errorMessage}` : ''}
+            {orderSubmitOrderLine(order)}
           </span>
         ))}
       </div>
     </div>
   )
+}
+
+function orderSubmitTitle(result: OrderSubmitResult) {
+  if (result.status === 'dry_run_completed') return 'Dry-run completed'
+  if (result.status === 'submitted') return 'Order submitted to Polymarket'
+  if (result.status === 'partially_submitted') return 'Some orders were submitted'
+  if (result.status === 'unknown') return 'Submission status is being verified'
+  return 'Order submission failed'
+}
+
+function orderSubmitSubtitle(result: OrderSubmitResult) {
+  if (result.status === 'unknown') return 'Refresh open orders before submitting the same order again.'
+  if (result.status === 'failed') return 'No successful Polymarket order was confirmed.'
+  return `Intent: ${result.intentId}`
+}
+
+function orderSubmitOrderLine(order: OrderSubmitResult['orders'][number]) {
+  const orderId = order.externalOrderId ? shortAddress(order.externalOrderId) : shortAddress(order.orderId)
+  const status = order.status === 'submitted' ? 'submitted' : order.status
+  return `${orderId}: ${status}${order.errorMessage ? ` - ${order.errorMessage}` : ''}`
 }
 
 function MyScripts({

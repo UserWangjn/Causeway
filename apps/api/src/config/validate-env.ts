@@ -162,6 +162,12 @@ const envSchema = z
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
     RATE_LIMIT_AUTH_MAX: z.coerce.number().int().positive().default(20),
     RATE_LIMIT_INTERNAL_MAX: z.coerce.number().int().positive().default(300),
+    MAINTENANCE_CLEANUP_ENABLED: z.enum(['true', 'false']).default('true'),
+    MAINTENANCE_CLEANUP_INTERVAL_MS: z.coerce.number().int().min(300_000).default(3_600_000),
+    WALLET_SESSION_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    POLYMARKET_AUTH_CHALLENGE_RETENTION_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+    ORDER_PREVIEW_RETENTION_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+    AUDIT_EVENT_RETENTION_DAYS: z.coerce.number().int().min(7).max(3650).default(90),
   })
   .superRefine((value, ctx) => {
     if (value.ENABLE_REAL_ORDERS === 'true') {

@@ -92,4 +92,12 @@ export const configuration = () => ({
     internalMax: Number(process.env.RATE_LIMIT_INTERNAL_MAX ?? 300),
     redisUrl: process.env.REDIS_URL,
   },
+  maintenance: {
+    cleanupEnabled: process.env.MAINTENANCE_CLEANUP_ENABLED !== 'false',
+    cleanupIntervalMs: Number(process.env.MAINTENANCE_CLEANUP_INTERVAL_MS ?? 3_600_000),
+    walletSessionRetentionDays: Number(process.env.WALLET_SESSION_RETENTION_DAYS ?? 30),
+    polymarketAuthChallengeRetentionDays: Number(process.env.POLYMARKET_AUTH_CHALLENGE_RETENTION_DAYS ?? 7),
+    orderPreviewRetentionDays: Number(process.env.ORDER_PREVIEW_RETENTION_DAYS ?? 7),
+    auditEventRetentionDays: Number(process.env.AUDIT_EVENT_RETENTION_DAYS ?? 90),
+  },
 });

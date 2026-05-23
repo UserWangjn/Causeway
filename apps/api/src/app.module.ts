@@ -12,6 +12,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { BridgeModule } from './modules/bridge/bridge.module';
 import { HealthModule } from './modules/health/health.module';
 import { InferenceModule } from './modules/inference/inference.module';
+import { MaintenanceModule } from './modules/maintenance/maintenance.module';
 import { MarketsModule } from './modules/markets/markets.module';
 import { MonitorModule } from './modules/monitor/monitor.module';
 import { OrdersModule } from './modules/orders/orders.module';
@@ -39,6 +40,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
     WalletModule,
     MarketsModule,
     PolymarketSyncModule,
+    MaintenanceModule,
     InferenceModule,
     ScriptsModule,
     TradingModule,

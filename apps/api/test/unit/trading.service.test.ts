@@ -179,12 +179,13 @@ describe('TradingService', () => {
     const service = createService(prisma, cryptoMock());
 
     const payload = await service.prepareDepositWalletApproval(user);
+    const expectedDeadline = String(Math.floor(new Date('2026-05-20T00:00:00.000Z').getTime() / 1000) + 3600);
 
     expect(payload).toMatchObject({
       walletAddress: account.depositWalletAddress,
       chainId: 137,
       nonce: '17',
-      deadline: '1779235440',
+      deadline: expectedDeadline,
       eip712: {
         primaryType: 'Batch',
         domain: {
@@ -196,7 +197,7 @@ describe('TradingService', () => {
         message: {
           wallet: account.depositWalletAddress,
           nonce: '17',
-          deadline: '1779235440',
+          deadline: expectedDeadline,
         },
       },
     });
