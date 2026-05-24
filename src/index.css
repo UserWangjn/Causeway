@@ -3924,6 +3924,61 @@ button {
   align-items: start;
 }
 
+.settings-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 22px;
+}
+
+.settings-page-head > div:first-child {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-page-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.settings-page-head h1 {
+  margin: 0;
+  color: #071327;
+  font-size: 30px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.settings-page-head p {
+  max-width: 640px;
+  margin: 0;
+  color: #52637c;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.settings-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-head-actions span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #dbe7f4;
+  border-radius: 999px;
+  color: #243853;
+  background: #f8fbff;
+  white-space: nowrap;
+}
+
 .root-market-card {
   display: grid;
   grid-template-columns: auto 1fr auto auto auto auto;
@@ -4038,6 +4093,43 @@ button {
   color: var(--muted);
 }
 
+.settings-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-summary-grid > div {
+  display: grid;
+  min-height: 84px;
+  align-content: center;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid #dbe7f4;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.settings-summary-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.settings-summary-grid b {
+  color: #071327;
+  font-size: 16px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.settings-control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4058,7 +4150,7 @@ button {
   font-weight: 760;
 }
 
-.field div {
+.field > div:not(.segmented) {
   display: flex;
   justify-content: space-between;
   height: 38px;
@@ -4078,6 +4170,24 @@ button {
   background: #fff;
   font: inherit;
   font-weight: 760;
+}
+
+.depth-field .segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  height: auto;
+  align-items: stretch;
+  justify-content: normal;
+  padding: 0;
+  border: 0;
+}
+
+.depth-field .segmented button {
+  min-width: 0;
+  height: 38px;
+  padding: 0 8px;
+  font-size: 13px;
 }
 
 .field em {
@@ -4134,6 +4244,30 @@ button {
   margin-top: 22px;
 }
 
+.confidence-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.confidence-presets button {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid #dbe7f4;
+  border-radius: 8px;
+  color: #243853;
+  background: #fff;
+  font-weight: 760;
+}
+
+.confidence-presets button.active {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: #f7faff;
+  box-shadow: inset 0 0 0 1px rgba(22, 119, 255, 0.18);
+}
+
 .range-label,
 .range-scale {
   display: flex;
@@ -4175,7 +4309,7 @@ button {
 
 .estimate-strip {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   margin-top: 24px;
 }
@@ -4187,11 +4321,32 @@ button {
   gap: 8px;
   min-height: 46px;
   padding: 12px 16px;
-  border: 1px solid #fed7aa;
+  border: 1px solid #dbe7f4;
   border-radius: 8px;
+  color: #243853;
+  background: #f8fbff;
+  font-size: 14px;
+}
+
+.estimate-strip span {
+  min-width: 0;
+  flex-wrap: wrap;
+  line-height: 1.35;
+}
+
+.estimate-strip span b {
+  color: #071327;
+}
+
+.estimate-strip svg {
+  flex: none;
+  color: var(--blue);
+}
+
+.soft-note {
+  border-color: #fed7aa;
   color: #68420b;
   background: #fff8ed;
-  font-size: 14px;
 }
 
 .preview-list > div {
@@ -4235,6 +4390,38 @@ button {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin: 36px 0 30px;
+}
+
+.progress-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 10px 0 22px;
+}
+
+.progress-overview > div {
+  display: grid;
+  min-height: 78px;
+  align-content: center;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid #dbe7f4;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.progress-overview span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.progress-overview b {
+  overflow: hidden;
+  color: #071327;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .step {
@@ -4400,6 +4587,33 @@ button {
 .discovery-table strong {
   color: var(--green);
   font-size: 18px;
+}
+
+.discovery-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 166px;
+  padding: 18px;
+  border: 1px dashed #cbd8ea;
+  border-radius: 8px;
+  color: #52637c;
+  background: #f8fbff;
+}
+
+.discovery-empty svg {
+  flex: none;
+  color: var(--blue);
+}
+
+.discovery-empty b {
+  display: block;
+  margin-bottom: 6px;
+  color: #071327;
+}
+
+.discovery-empty span {
+  line-height: 1.5;
 }
 
 .discovery-table .mini-chart {
@@ -5907,8 +6121,12 @@ button {
   .option-grid.three,
   .option-grid.two,
   .form-grid,
+  .settings-summary-grid,
+  .settings-control-grid,
+  .estimate-strip,
   .metric-grid,
   .stats-row,
+  .progress-overview,
   .info-strip-grid,
   .orders-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5979,6 +6197,7 @@ button {
   }
 
   .detail-header,
+  .settings-page-head,
   .market-page-head,
   .orders-page-head,
   .orders-panel-head,
@@ -5990,6 +6209,10 @@ button {
   .search-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .settings-head-actions {
+    justify-content: flex-start;
   }
 
   .orders-page-actions {
@@ -6008,6 +6231,9 @@ button {
   .price-summary,
   .market-live-strip,
   .estimate-strip,
+  .settings-summary-grid,
+  .settings-control-grid,
+  .confidence-presets,
   .option-grid.four,
   .option-grid.three,
   .option-grid.two,
@@ -6015,6 +6241,7 @@ button {
   .metric-grid,
   .arc-proof-grid,
   .stats-row,
+  .progress-overview,
   .info-strip-grid,
   .orders-summary-grid,
   .progress-steps {

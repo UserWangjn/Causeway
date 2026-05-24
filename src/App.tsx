@@ -866,7 +866,6 @@ type ArcProofResult = {
 
 type ScriptStatusFilter = 'all' | 'draft' | 'active' | 'archived'
 
-type InferenceScope = 'markets' | 'all'
 type InferenceDepth = 1 | 2 | 3
 type InferenceModelPreference =
   | 'gpt-5.5'
@@ -889,24 +888,18 @@ const INFERENCE_MODEL_ORDER: readonly InferenceModelPreference[] = [
 ]
 
 type InferenceSettingsState = {
-  scope: InferenceScope
-  timeRange: 'until_close' | '24h' | '7d' | '30d'
   modelPreference: InferenceModelPreference
   confidenceMode: ConfidenceMode
   depth: InferenceDepth
   confidenceThreshold: number
-  includeWebSearch: boolean
   rootOutcomeId: string | null
 }
 
 const defaultInferenceSettings: InferenceSettingsState = {
-  scope: 'markets',
-  timeRange: 'until_close',
   modelPreference: FREE_INFERENCE_MODEL,
   confidenceMode: 'balanced',
   depth: 1,
   confidenceThreshold: 0.55,
-  includeWebSearch: false,
   rootOutcomeId: null,
 }
 
@@ -2920,7 +2913,12 @@ async function sleepWithAbort(ms: number, signal: AbortSignal) {
   })
 }
 
-async function runBackendInference(market: Market, settings: InferenceSettingsState, signal: AbortSignal): Promise<InferenceResult> {
+async function runBackendInference(
+  market: Market,
+  settings: InferenceSettingsState,
+  signal: AbortSignal,
+  onStatus?: (status: BackendInferenceStatus) => void,
+): Promise<InferenceResult> {
   const token = getAccessToken()
   if (!token) {
     throw new Error(copy('Sign in with your wallet before starting AI inference.'))
@@ -2952,18 +2950,20 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
   let status: BackendInferenceStatus = {
     id: createRun.runId,
     status: createRun.status,
-    stage: 'candidate_retrieval',
+    stage: createRun.status === 'queued' ? 'queued' : 'candidate_retrieval',
     progress: 0,
     cacheHit: createRun.cacheHit,
     scriptId: createRun.scriptId,
     errorMessage: null,
   }
+  onStatus?.(status)
 
   for (let attempt = 0; attempt < 90; attempt += 1) {
     status = await fetch(`${API_PREFIX}/inference-runs/${createRun.runId}`, {
       signal,
       headers: { Authorization: `Bearer ${token}` },
     }).then((response) => readApiData<BackendInferenceStatus>(response))
+    onStatus?.(status)
 
     if (status.status === 'completed' && status.scriptId) break
     if (status.status === 'failed' || status.status === 'cancelled') {
@@ -3309,8 +3309,6 @@ const rootMarket: Market = {
   y: 46,
   tone: 'purple',
 }
-
-const markets: Market[] = []
 
 const categoryTones: Record<string, Market['tone']> = {
   politics: 'blue',
@@ -6442,22 +6440,6 @@ function MarketDetail({
   )
 }
 
-function scopeLabel(scope: InferenceScope) {
-  return {
-    markets: copy('Related Markets'),
-    all: copy('Polymarket Context'),
-  }[scope]
-}
-
-function timeRangeLabel(range: InferenceSettingsState['timeRange'], market: Market) {
-  return {
-    until_close: copy(`Until market close: ${formatDate(market.endDate)}`),
-    '24h': copy('Last 24 hours'),
-    '7d': copy('Last 7 days'),
-    '30d': copy('Last 30 days'),
-  }[range]
-}
-
 function modelPreferenceLabel(model: InferenceModelPreference) {
   return {
     'gpt-5.5': 'GPT-5.5',
@@ -6517,11 +6499,45 @@ function confidenceModeLabel(mode: ConfidenceMode) {
   }[mode]
 }
 
+function confidenceThresholdForMode(mode: ConfidenceMode) {
+  return mode === 'broad' ? 0.35 : mode === 'strict' ? 0.7 : 0.55
+}
+
+function confidenceModeFromThreshold(threshold: number): ConfidenceMode {
+  if (threshold < 0.5) return 'broad'
+  if (threshold >= 0.65) return 'strict'
+  return 'balanced'
+}
+
+function confidenceThresholdPercent(threshold: number) {
+  const min = 0.1
+  const max = 0.85
+  return ((clamp(threshold, min, max) - min) / (max - min)) * 100
+}
+
 function estimateInference(settings: InferenceSettingsState) {
+  const maxMarketsPerLayer = inferenceMaxMarketsPerLayer(settings.depth)
+  const maxOutputMarkets = settings.depth * maxMarketsPerLayer
+  const candidateBudget = clamp(Math.max(maxOutputMarkets * 5, maxMarketsPerLayer * 4, 30), 30, 120)
   const minutes = inferenceModelRequiresPremium(settings.modelPreference)
     ? settings.depth === 3 ? '3-6 min' : '2-4 min'
     : settings.depth === 3 ? '2-5 min' : '1-3 min'
-  return { minutes }
+  return {
+    candidateBudget,
+    maxMarketsPerLayer,
+    maxOutputMarkets,
+    minutes,
+  }
+}
+
+function expectedInferenceItems(settings: InferenceSettingsState) {
+  const estimate = estimateInference(settings)
+  return [
+    copy(`Up to ${estimate.candidateBudget} candidate markets prepared for the prompt`),
+    copy(`Causal graph capped at ${settings.depth} layer${settings.depth > 1 ? 's' : ''}`),
+    copy(`AI output must meet minimum confidence ${settings.confidenceThreshold.toFixed(2)}`),
+    copy(`Up to ${estimate.maxOutputMarkets} related markets can be kept in the generated script`),
+  ]
 }
 
 function InferenceSettings({
@@ -6566,19 +6582,24 @@ function InferenceSettings({
   const selectConfidenceMode = useCallback((mode: ConfidenceMode) => {
     updateSettings({
       confidenceMode: mode,
-      confidenceThreshold: mode === 'broad' ? 0.35 : mode === 'strict' ? 0.7 : 0.55,
+      confidenceThreshold: confidenceThresholdForMode(mode),
     })
   }, [updateSettings])
   const estimate = estimateInference(settings)
-  const canStartInference = Boolean(marketInferenceOutcome(market))
+  const outcomeReady = Boolean(marketInferenceOutcome(market))
   const isPremium = auth.isAuthenticated && membershipState.membership?.tier === 'premium'
+  const modelOptions = inferenceModelOptions(capability)
+  const capabilityLoading = !capability && !capabilityError
+  const selectedModelSupported = modelOptions.includes(settings.modelPreference)
+  const capabilityUnavailable = Boolean(capabilityError)
+    || capability?.status === 'unavailable'
+    || (capability?.status === 'available' && !selectedModelSupported)
   const advancedModelLocked = inferenceModelRequiresPremium(settings.modelPreference) && !isPremium
   const advancedDepthLocked = settings.depth > 1 && !isPremium
-  const premiumScopeLocked = settings.scope === 'all' && !isPremium
-  const premiumConfidenceLocked = settings.confidenceMode === 'strict' && !isPremium
-  const advancedSettingsLocked = advancedModelLocked || advancedDepthLocked || premiumScopeLocked || premiumConfidenceLocked
+  const advancedSettingsLocked = advancedModelLocked || advancedDepthLocked
+  const startDisabled = auth.isSigningIn || !outcomeReady || advancedSettingsLocked || capabilityLoading || capabilityUnavailable
   const handleStartInference = useCallback(() => {
-    if (!canStartInference) return
+    if (!outcomeReady || capabilityLoading || capabilityUnavailable) return
     if (advancedSettingsLocked) return
     if (!auth.isConnected) {
       openConnectModal?.()
@@ -6589,22 +6610,44 @@ function InferenceSettings({
       return
     }
     onStart(settings)
-  }, [advancedSettingsLocked, auth, canStartInference, onStart, openConnectModal, settings])
-  const scopeOptions: Array<[InferenceScope, string, string]> = [
-    ['markets', copy('Related Markets'), copy('Related Polymarket markets only')],
-    ['all', copy('Polymarket Context'), copy('Root market, same-event markets, and related markets')],
-  ]
-  const modelOptions = inferenceModelOptions(capability)
+  }, [advancedSettingsLocked, auth, capabilityLoading, capabilityUnavailable, onStart, openConnectModal, outcomeReady, settings])
   const capabilityHint = capabilityError
     ? copy(`Model capability check failed: ${capabilityError}`)
     : capability?.status === 'available'
-      ? copy(`Default ${capability.defaultModel ? displayInferenceModel(capability.defaultModel) : 'Not configured'}`)
-      : capability?.reason ?? modelPreferenceHint(settings.modelPreference)
+      ? copy(`Available · Default ${capability.defaultModel ? displayInferenceModel(capability.defaultModel) : 'Not configured'}`)
+      : capabilityLoading
+        ? copy('Checking model availability')
+        : capability?.reason ?? modelPreferenceHint(settings.modelPreference)
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId) ?? market.outcomes?.find((outcome) => outcome.outcomeId)
   const selectedOutcomePercent = outcomePriceToPercent(selectedOutcome?.price) ?? market.price
+  const startButtonLabel = capabilityLoading
+    ? copy('Checking AI Availability')
+    : capabilityUnavailable
+      ? copy('AI Inference Unavailable')
+      : !outcomeReady
+        ? copy('Outcome Not Ready')
+        : advancedSettingsLocked
+          ? copy('Premium Required')
+          : !auth.isConnected
+            ? copy('Connect Wallet to Start')
+            : !auth.isAuthenticated
+              ? copy('Sign In to Start')
+              : copy('Start AI Inference')
   return (
     <section className="page">
       <BackButton onClick={onBack} />
+      <div className="settings-page-head">
+        <div>
+          <span>{copy('AI run setup')}</span>
+          <h1>{copy('AI Inference Settings')}</h1>
+          <p>{copy('Configure the request fields that are sent to the backend inference run.')}</p>
+        </div>
+        <div className="settings-head-actions">
+          <span><BrainCircuit size={16} />{modelPreferenceLabel(settings.modelPreference)}</span>
+          <span><ListOrdered size={16} />{copy(`${settings.depth} layer${settings.depth > 1 ? 's' : ''}`)}</span>
+          <span><ShieldCheck size={16} />{copy(`Threshold ${settings.confidenceThreshold.toFixed(2)}`)}</span>
+        </div>
+      </div>
       <div className="content-grid settings-grid">
         <Card className="span-8 settings-panel">
           <SectionHeader title={copy('Root Market')} />
@@ -6627,36 +6670,27 @@ function InferenceSettings({
             </div>
           </div>
           <Divider />
-          <SectionHeader title={copy('Inference Scope')} note={copy('Choose the data context to include in the analysis.')} />
-          <div className="option-grid two">
-            {scopeOptions.map(([scope, title, subtitle], index) => {
-              const locked = scope === 'all' && !isPremium
-              return (
-              <button
-                className={[settings.scope === scope ? 'option-card selected' : 'option-card', locked ? 'locked' : ''].filter(Boolean).join(' ')}
-                disabled={locked}
-                key={scope}
-                type="button"
-                onClick={() => updateSettings({ scope, includeWebSearch: false })}
-              >
-                <span className="option-icon">{index + 1}</span>
-                <b>{title}{locked ? ' - Premium' : ''}</b>
-                <small>{subtitle}</small>
-              </button>
-            )})}
+          <SectionHeader title={copy('Backend Request')} note={copy('Only active inference parameters are shown here.')} />
+          <div className="settings-summary-grid">
+            <div>
+              <span>{copy('Root outcome')}</span>
+              <b>{selectedOutcome?.label ?? copy('Not selected')}</b>
+            </div>
+            <div>
+              <span>{copy('Candidate budget')}</span>
+              <b>{copy(`Up to ${estimate.candidateBudget}`)}</b>
+            </div>
+            <div>
+              <span>{copy('Output cap')}</span>
+              <b>{copy(`Up to ${estimate.maxOutputMarkets}`)}</b>
+            </div>
+            <div>
+              <span>{copy('Cache')}</span>
+              <b>{copy('Enabled')}</b>
+            </div>
           </div>
           <Divider />
-          <div className="form-grid">
-            <label className="field">
-              <span>{copy('Time Range')}</span>
-              <select value={settings.timeRange} onChange={(event) => updateSettings({ timeRange: event.target.value as InferenceSettingsState['timeRange'] })}>
-                <option value="until_close">{copy('Until market close')}</option>
-                <option value="24h">{copy('Last 24 hours')}</option>
-                <option value="7d">{copy('Last 7 days')}</option>
-                <option value="30d">{copy('Last 30 days')}</option>
-              </select>
-              <small>{timeRangeLabel(settings.timeRange, market)}</small>
-            </label>
+          <div className="settings-control-grid">
             <label className="field">
               <span>{copy('AI Model')}</span>
               <select value={settings.modelPreference} onChange={(event) => updateSettings({ modelPreference: event.target.value as InferenceModelPreference })}>
@@ -6668,57 +6702,78 @@ function InferenceSettings({
               </select>
               <small>{modelPreferenceHint(settings.modelPreference)} · {capabilityHint}</small>
             </label>
-            <label className="field">
-              <span>{copy('Confidence Preference')}</span>
-              <select value={settings.confidenceMode} onChange={(event) => selectConfidenceMode(event.target.value as ConfidenceMode)}>
-                <option value="broad">{copy('Broad coverage')}</option>
-                <option value="balanced">{copy('Balanced (Recommended)')}</option>
-                <option disabled={!isPremium} value="strict">{copy('High confidence')} - Premium</option>
-              </select>
-              <small>{confidenceModeLabel(settings.confidenceMode)} · {copy('Threshold')} {settings.confidenceThreshold.toFixed(2)}</small>
-            </label>
-          </div>
-          <SectionHeader title={copy('Inference Depth')} note={copy('Control how much explanation and downstream reasoning AI generates.')} />
-          <div className="segmented">
-            {[1, 2, 3].map((depth) => (
-              <button
-                className={settings.depth === depth ? 'active' : ''}
-                disabled={depth > 1 && !isPremium}
-                key={depth}
-                type="button"
-                onClick={() => updateSettings({ depth: depth as InferenceDepth })}
-              >
-                {depth} layer{depth > 1 ? ' - Premium' : ' - Free'}
-              </button>
-            ))}
+            <div className="field depth-field">
+              <span>{copy('Inference Depth')}</span>
+              <div className="segmented">
+                {[1, 2, 3].map((depth) => (
+                  <button
+                    className={settings.depth === depth ? 'active' : ''}
+                    disabled={depth > 1 && !isPremium}
+                    key={depth}
+                    type="button"
+                    onClick={() => updateSettings({ depth: depth as InferenceDepth })}
+                  >
+                    {depth} layer{depth > 1 ? ' · Premium' : ' · Free'}
+                  </button>
+                ))}
+              </div>
+              <small>{copy(`Max ${estimate.maxMarketsPerLayer} related markets per layer`)}</small>
+            </div>
           </div>
           <div className="range-block">
             <div className="range-label">
               <span>{copy('Confidence Threshold')}</span>
-              <b>{settings.confidenceThreshold.toFixed(2)}</b>
+              <b>{settings.confidenceThreshold.toFixed(2)} · {confidenceModeLabel(settings.confidenceMode)}</b>
+            </div>
+            <div className="confidence-presets">
+              {(['broad', 'balanced', 'strict'] as const).map((mode) => (
+                <button
+                  className={settings.confidenceMode === mode ? 'active' : ''}
+                  key={mode}
+                  type="button"
+                  onClick={() => selectConfidenceMode(mode)}
+                >
+                  {confidenceModeLabel(mode)}
+                </button>
+              ))}
             </div>
             <input
               aria-label={copy('Confidence threshold')}
               className="confidence-slider"
               max="0.85"
               min="0.1"
-              onChange={(event) => updateSettings({ confidenceThreshold: Number(event.target.value) })}
+              onChange={(event) => {
+                const confidenceThreshold = Number(event.target.value)
+                updateSettings({
+                  confidenceMode: confidenceModeFromThreshold(confidenceThreshold),
+                  confidenceThreshold,
+                })
+              }}
               step="0.05"
               type="range"
               value={settings.confidenceThreshold}
             />
             <div className="range-track">
-              <span style={{ width: `${(settings.confidenceThreshold / 0.85) * 100}%` }} />
+              <span style={{ width: `${confidenceThresholdPercent(settings.confidenceThreshold)}%` }} />
             </div>
             <div className="range-scale">
-              <span>{copy('Broad')}</span>
-              <span>{copy('Balanced')}</span>
-              <span>{copy('Strict')}</span>
+              <span>0.10</span>
+              <span>0.55</span>
+              <span>0.85</span>
             </div>
           </div>
           <div className="estimate-strip">
             <span>
-              <Bot size={18} /> {copy(`Estimated time: ${estimate.minutes}`)}
+              <Bot size={18} /> <b>{copy('Runtime')}</b> {estimate.minutes}
+            </span>
+            <span>
+              <Cpu size={18} /> <b>{copy('Candidates')}</b> {copy(`Up to ${estimate.candidateBudget}`)}
+            </span>
+            <span>
+              <ListOrdered size={18} /> <b>{copy('Output')}</b> {copy(`Up to ${estimate.maxOutputMarkets}`)}
+            </span>
+            <span>
+              <ShieldCheck size={18} /> <b>{copy('Minimum confidence')}</b> {settings.confidenceThreshold.toFixed(2)}
             </span>
           </div>
           {!auth.isAuthenticated ? (
@@ -6727,16 +6782,22 @@ function InferenceSettings({
               {copy('AI inference requires wallet sign-in. The backend protects your scripts, orders, and portfolio data with a bearer token.')}
             </div>
           ) : null}
-          {!canStartInference ? (
+          {!outcomeReady ? (
             <div className="soft-note auth-note">
               <Info size={18} />
               {copy('Market outcome data is still loading. Return to details and wait until inference is available.')}
             </div>
           ) : null}
+          {capabilityLoading || capabilityUnavailable ? (
+            <div className="soft-note auth-note">
+              <Info size={18} />
+              {capabilityLoading ? copy('AI model availability is being checked.') : capabilityHint}
+            </div>
+          ) : null}
           {advancedSettingsLocked ? (
             <div className="soft-note auth-note">
               <Star size={18} />
-              Premium membership is required for Polymarket Context, High confidence, advanced GPT/Claude models, or inference deeper than 1 layer.
+              {copy('Premium membership is required for advanced GPT/Claude models or inference deeper than 1 layer.')}
             </div>
           ) : null}
           {auth.isAuthenticated && membershipState.error ? (
@@ -6749,9 +6810,9 @@ function InferenceSettings({
             className="primary-action inside"
             type="button"
             onClick={handleStartInference}
-            disabled={auth.isSigningIn || !canStartInference || advancedSettingsLocked}
+            disabled={startDisabled}
           >
-            <Play size={18} /> {copy('Start AI Inference')}
+            <Play size={18} /> {startButtonLabel}
           </button>
         </Card>
         <div className="side-stack">
@@ -6762,26 +6823,90 @@ function InferenceSettings({
           <Card>
             <SectionHeader title={copy('Expected Analysis')} />
             <Checklist
-              items={[
-                copy('Directly affected related markets'),
-                copy('Medium and long-term causal pathways'),
-                copy('Key event triggers and timeline'),
-                copy('Risk factors and uncertainty analysis'),
-              ]}
+              items={expectedInferenceItems(settings)}
             />
           </Card>
           <Card className="tip-card">
-            <SectionHeader title={copy('Tips')} />
+            <SectionHeader title={copy('Backend Contract')} />
             <ul>
-              <li>{copy('Broader scope can discover more potential impacts, but takes longer.')}</li>
-              <li>{copy('Use balanced confidence for the first exploration.')}</li>
-              <li>{copy('Inference results are generated from market data and AI reasoning.')}</li>
+              <li>{copy('Candidate retrieval uses same-event markets, tag overlap, text overlap, prices, and order-book context.')}</li>
+              <li>{copy('Equivalent runs use backend caching when the prompt input and model match.')}</li>
+              <li>{copy('Only model and depth are premium-gated by the inference API.')}</li>
             </ul>
           </Card>
         </div>
       </div>
     </section>
   )
+}
+
+function inferenceProgressSteps() {
+  return [
+    { stage: 'queued', label: copy('Run queued') },
+    { stage: 'candidate_retrieval', label: copy('Candidate retrieval') },
+    { stage: 'ai_reasoning', label: copy('AI reasoning') },
+    { stage: 'outcome_mapping', label: copy('Outcome mapping') },
+    { stage: 'script_generation', label: copy('Script generation') },
+  ] as const
+}
+
+function inferenceProgressStepIndex(stage: string | null | undefined) {
+  const steps = inferenceProgressSteps()
+  const index = steps.findIndex((step) => step.stage === stage)
+  return index >= 0 ? index : 0
+}
+
+function inferenceStageLabel(stage: string | null | undefined) {
+  if (stage === 'queued') return copy('Queued')
+  if (stage === 'candidate_retrieval') return copy('Candidate retrieval')
+  if (stage === 'ai_reasoning') return copy('AI reasoning')
+  if (stage === 'outcome_mapping') return copy('Outcome mapping')
+  if (stage === 'script_generation') return copy('Script generation')
+  return copy('Waiting')
+}
+
+function inferenceRunStatusLabel(
+  runStatus: BackendInferenceStatus | null,
+  loading: boolean,
+  error: string | null,
+  complete: boolean,
+) {
+  if (complete) return copy('Complete')
+  if (error) return copy('Failed')
+  if (runStatus?.status === 'queued') return copy('Queued')
+  if (runStatus?.status === 'running') return copy('Running')
+  if (runStatus?.status === 'completed') return copy('Complete')
+  if (runStatus?.status === 'failed') return copy('Failed')
+  if (runStatus?.status === 'cancelled') return copy('Cancelled')
+  return loading ? copy('Starting') : copy('Waiting')
+}
+
+function inferenceCacheLabel(runStatus: BackendInferenceStatus | null, complete: boolean) {
+  if (!runStatus) return complete ? copy('Loaded') : copy('Checking')
+  if (runStatus.status === 'completed' || complete) return runStatus.cacheHit ? copy('Hit') : copy('Miss')
+  if (runStatus.status === 'failed' || runStatus.status === 'cancelled') return copy('Not resolved')
+  return copy('Resolving')
+}
+
+function inferenceProgressCaption(runStatus: BackendInferenceStatus | null, settings: InferenceSettingsState) {
+  const model = displayInferenceModel(runStatus?.model ?? settings.modelPreference)
+  const stage = inferenceStageLabel(runStatus?.stage ?? 'queued')
+  return copy(`${model} - ${stage}`)
+}
+
+function inferenceVerificationNote(
+  result: InferenceResult | null,
+  runStatus: BackendInferenceStatus | null,
+  loading: boolean,
+) {
+  if (result?.verification) {
+    const candidateCount = result.verification.candidateCount ?? 0
+    const verifiedCount = result.verification.verifiedCount ?? result.relatedMarkets.length
+    const excludedCount = result.verification.excludedCount ?? 0
+    return copy(`Candidates ${candidateCount} | Kept ${verifiedCount} | Excluded ${excludedCount}`)
+  }
+  if (loading) return copy(`${inferenceStageLabel(runStatus?.stage ?? 'queued')} in progress`)
+  return copy('No verified candidate markets yet')
 }
 
 function InferenceProgress({
@@ -6803,21 +6928,31 @@ function InferenceProgress({
 }) {
   const { chainId } = useAccount()
   const { switchChainAsync } = useSwitchChain()
-  const steps = [
-    copy('Root selected'),
-    copy('Candidate retrieval'),
-    copy('Evidence verification'),
-    copy('AI relevance scoring'),
-    copy('Causal script generation'),
-  ]
+  const steps = inferenceProgressSteps()
   const [loading, setLoading] = useState(!result)
   const [error, setError] = useState<string | null>(null)
+  const [runStatus, setRunStatus] = useState<BackendInferenceStatus | null>(null)
   const { isAuthenticated, isConnected, signIn } = auth
   const hasCurrentResult = result?.rootMarket?.id === market.id
+  const currentResult = hasCurrentResult ? result : null
   const isComplete = hasCurrentResult && !error
-  const progress = hasCurrentResult ? 100 : error ? 100 : loading ? 62 : 35
-  const currentStep = hasCurrentResult ? 5 : error ? 3 : loading ? 3 : 1
-  const displayedRelatedMarkets = hasCurrentResult ? result?.relatedMarkets : undefined
+  const statusComplete = runStatus?.status === 'completed'
+  const progress = isComplete || statusComplete
+    ? 100
+    : error
+      ? 100
+      : runStatus
+        ? clamp(Math.round(runStatus.progress), 0, 100)
+        : loading
+          ? 5
+          : 0
+  const activeStage = isComplete || statusComplete ? 'script_generation' : runStatus?.stage ?? (loading ? 'queued' : null)
+  const activeStep = inferenceProgressStepIndex(activeStage)
+  const runStatusLabel = inferenceRunStatusLabel(runStatus, loading, error, isComplete)
+  const stageLabel = inferenceStageLabel(activeStage)
+  const cacheLabel = inferenceCacheLabel(runStatus, isComplete)
+  const displayedRelatedMarkets = currentResult?.relatedMarkets
+  const currentEstimate = estimateInference(settings)
 
   useEffect(() => {
     if (result?.rootMarket?.id === market.id) {
@@ -6825,6 +6960,7 @@ function InferenceProgress({
     }
     if (!isAuthenticated && !isConnected) {
       const timer = window.setTimeout(() => {
+        setRunStatus(null)
         setError(copy('Connect and sign in with your wallet before starting AI inference.'))
         setLoading(false)
       }, 0)
@@ -6833,6 +6969,7 @@ function InferenceProgress({
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
       setError(null)
+      setRunStatus(null)
       setLoading(true)
       const run = async () => {
         if (!isAuthenticated) {
@@ -6843,7 +6980,9 @@ function InferenceProgress({
           await switchChainAsync({ chainId: supportedChain.id })
         }
         if (controller.signal.aborted) return null
-        return runBackendInference(market, settings, controller.signal)
+        return runBackendInference(market, settings, controller.signal, (nextStatus) => {
+          if (!controller.signal.aborted) setRunStatus(nextStatus)
+        })
       }
       run()
         .then((payload) => {
@@ -6865,14 +7004,32 @@ function InferenceProgress({
   return (
     <section className="page">
       <BackButton onClick={onBack} />
+      <div className="progress-overview">
+        <div>
+          <span>{copy('Run status')}</span>
+          <b>{runStatusLabel}</b>
+        </div>
+        <div>
+          <span>{copy('Backend progress')}</span>
+          <b>{progress}%</b>
+        </div>
+        <div>
+          <span>{copy('Current stage')}</span>
+          <b>{stageLabel}</b>
+        </div>
+        <div>
+          <span>{copy('Cache')}</span>
+          <b>{cacheLabel}</b>
+        </div>
+      </div>
       <div className="progress-steps">
         {steps.map((step, index) => {
-          const done = isComplete || index < currentStep - 1
-          const current = !isComplete && index === currentStep - 1
+          const done = isComplete || statusComplete || index < activeStep
+          const current = !isComplete && !statusComplete && !error && index === activeStep
           return (
-          <div className={done ? 'step done' : current ? 'step current' : 'step'} key={step}>
+          <div className={done ? 'step done' : current ? 'step current' : 'step'} key={step.stage}>
             <div className="step-circle">{done ? <CheckCircle2 size={26} /> : index + 1}</div>
-            <strong>{step}</strong>
+            <strong>{step.label}</strong>
             <span>{done ? copy('Complete') : current ? copy('Processing') : copy('Waiting')}</span>
           </div>
         )})}
@@ -6881,32 +7038,33 @@ function InferenceProgress({
         <span style={{ width: `${progress}%` }} />
       </div>
       <div className="progress-caption">
-        <span>{hasCurrentResult ? copy('Inference complete') : error ? copy('Inference error') : copy('Inference running...')} <b>{progress}%</b></span>
-        <span>{result?.model ? copy(`Model: ${displayInferenceModel(result.model)}`) : copy(`${modelPreferenceLabel(settings.modelPreference)} is verifying Polymarket candidate markets`)}</span>
+        <span>{runStatusLabel} <b>{progress}%</b></span>
+        <span>{currentResult?.model ? copy(`Model: ${displayInferenceModel(currentResult.model)}`) : inferenceProgressCaption(runStatus, settings)}</span>
       </div>
       {error ? <div className="status-note error">{copy(`Inference request failed: ${error}`)}</div> : null}
       <div className="content-grid progress-grid">
         <Card>
           <SectionHeader
-            title={copy('AI-Verified Related Markets')}
-            note={result?.verification ? copy(`Candidates ${result.verification.candidateCount || 0} · Kept ${result.verification.verifiedCount || result.relatedMarkets.length} · Excluded ${result.verification.excludedCount || 0}`) : undefined}
+            title={copy('Verified Candidate Markets')}
+            note={inferenceVerificationNote(currentResult, runStatus, loading && !hasCurrentResult)}
           />
-          <DiscoveryTable market={market} relatedMarkets={displayedRelatedMarkets} />
+          <DiscoveryTable market={market} relatedMarkets={displayedRelatedMarkets} loading={loading && !hasCurrentResult} />
         </Card>
         <Card>
           <SectionHeader title={copy('Live Inference Log')} />
-          <LogList logs={result?.logs} loading={loading && !hasCurrentResult} />
+          <LogList error={error} logs={currentResult?.logs} loading={loading && !hasCurrentResult} runStatus={runStatus} />
         </Card>
       </div>
       <Card>
         <SectionHeader title={copy('Current Inference Info')} />
         <div className="info-strip-grid">
-          {[ 
+          {[
             [copy('Root Market'), market.title],
             [copy('Inference Depth'), copy(`${settings.depth} layer${settings.depth > 1 ? 's' : ''}`)],
-            [copy('Time Range'), timeRangeLabel(settings.timeRange, market)],
-            [copy('Analysis Scope'), scopeLabel(settings.scope)],
-            [copy('AI Model'), displayInferenceModel(result?.model ?? settings.modelPreference)],
+            [copy('AI Model'), displayInferenceModel(currentResult?.model ?? settings.modelPreference)],
+            [copy('Candidate Budget'), copy(`Up to ${currentEstimate.candidateBudget}`)],
+            [copy('Output Cap'), copy(`Up to ${currentEstimate.maxOutputMarkets}`)],
+            [copy('Confidence Threshold'), settings.confidenceThreshold.toFixed(2)],
           ].map(([label, value]) => (
             <div className="info-item" key={label}>
               <div className="info-icon">
@@ -8791,14 +8949,6 @@ function CategoryChips({
   )
 }
 
-function ChartMini() {
-  return (
-    <svg className="mini-chart" viewBox="0 0 220 64" aria-hidden="true">
-      <path d="M6 48 L28 44 L42 46 L60 38 L83 34 L105 30 L125 36 L143 22 L165 29 L188 20 L213 13" />
-    </svg>
-  )
-}
-
 function InfoTable({ rows }: { rows: [string, string][] }) {
   return (
     <div className="info-table">
@@ -8817,13 +8967,17 @@ function Divider() {
 }
 
 function PreviewList({ market, settings }: { market: Market; settings: InferenceSettingsState }) {
+  const estimate = estimateInference(settings)
+  const selectedOutcome = market.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId)
+    ?? market.outcomes?.find((outcome) => outcome.outcomeId)
   const items = [
     [copy('Root Market'), market.title],
-    [copy('Inference Scope'), scopeLabel(settings.scope)],
-    [copy('Time Range'), timeRangeLabel(settings.timeRange, market)],
-    ['Depth', `${settings.depth} layers`],
+    [copy('Root Outcome'), selectedOutcome?.label ?? copy('Not selected')],
     [copy('AI Model'), modelPreferenceLabel(settings.modelPreference)],
-    [copy('Confidence Preference'), `${confidenceModeLabel(settings.confidenceMode)} · ${settings.confidenceThreshold.toFixed(2)}`],
+    [copy('Depth'), `${settings.depth} layer${settings.depth > 1 ? 's' : ''}`],
+    [copy('Candidate Budget'), copy(`Up to ${estimate.candidateBudget}`)],
+    [copy('Output Cap'), copy(`Up to ${estimate.maxOutputMarkets}`)],
+    [copy('Confidence Threshold'), `${settings.confidenceThreshold.toFixed(2)} · ${confidenceModeLabel(settings.confidenceMode)}`],
   ]
   return (
     <div className="preview-list">
@@ -8841,7 +8995,7 @@ function Checklist({ items }: { items: string[] }) {
   return <ul className="checklist">{items.map((item) => <li key={item}><CheckCircle2 size={16} />{item}</li>)}</ul>
 }
 
-function DiscoveryTable({ market, relatedMarkets }: { market?: Market; relatedMarkets?: InferenceRelatedMarket[] }) {
+function DiscoveryTable({ market, relatedMarkets, loading }: { market?: Market; relatedMarkets?: InferenceRelatedMarket[]; loading?: boolean }) {
   const seedMarket = market || rootMarket
   if (relatedMarkets?.length) {
     return (
@@ -8874,43 +9028,83 @@ function DiscoveryTable({ market, relatedMarkets }: { market?: Market; relatedMa
       </div>
     )
   }
-  const discoveryMarkets = [
-    seedMarket,
-    ...markets.filter((item) => item.id !== seedMarket.id && item.id !== rootMarket.id),
-  ].slice(0, 5)
   return (
-    <div className="discovery-table">
-      {discoveryMarkets.map((market) => (
-        <div key={market.id}>
-          <MarketIcon market={market} size="small" />
-          <b>{market.title}</b>
-          <span>{market.category}</span>
-          <strong>{market.price}%</strong>
-          <em>{market.volume}</em>
-          <ChartMini />
-        </div>
-      ))}
+    <div className="discovery-empty">
+      <Info size={18} />
+      <div>
+        <b>{loading ? copy('Candidate markets are being verified') : copy('No verified markets returned')}</b>
+        <span>{loading ? copy('Results will appear here after the backend finishes candidate scoring.') : copy('Run inference again with lower confidence or refresh market data if this looks too narrow.')}</span>
+      </div>
     </div>
   )
 }
 
-function LogList({ logs, loading }: { logs?: string[]; loading?: boolean }) {
-  const displayLogs = logs?.length
-    ? logs
-    : [
-        copy('Retrieving directly related markets for the root node...'),
-        copy('Expanding second-order related markets...'),
-        copy('Collecting Polymarket market context...'),
-        copy('Requesting the selected GPT or Claude inference model...'),
-      ]
+type InferenceLogState = 'waiting' | 'processing' | 'complete' | 'error'
+
+function inferenceRuntimeLogs(
+  runStatus: BackendInferenceStatus | null | undefined,
+  loading: boolean | undefined,
+  error: string | null | undefined,
+) {
+  const stage = error ? runStatus?.stage : runStatus?.stage ?? (loading ? 'queued' : null)
+  const activeIndex = inferenceProgressStepIndex(stage)
+  const steps = inferenceProgressSteps()
+  return steps.map((step, index) => {
+    const state: InferenceLogState = error && index === activeIndex
+      ? 'error'
+      : index < activeIndex || runStatus?.status === 'completed'
+        ? 'complete'
+        : index === activeIndex && loading
+          ? 'processing'
+          : 'waiting'
+    return {
+      detail: inferenceStepDetail(step.stage),
+      state,
+      title: step.label,
+    }
+  })
+}
+
+function inferenceStepDetail(stage: string) {
+  if (stage === 'queued') return copy('The run is registered and waiting for backend capacity.')
+  if (stage === 'candidate_retrieval') return copy('Causeway loads same-event markets, cached market links, prices, and order-book context.')
+  if (stage === 'ai_reasoning') return copy('The selected GPT or Claude model scores relevance and causal direction.')
+  if (stage === 'outcome_mapping') return copy('AI output is mapped back to tradable Polymarket outcomes and verified market ids.')
+  if (stage === 'script_generation') return copy('Causeway persists the causal script, graph, and tradable order candidates.')
+  return copy('Waiting for the next backend update.')
+}
+
+function inferenceLogStateLabel(state: InferenceLogState) {
+  if (state === 'complete') return copy('Complete')
+  if (state === 'processing') return copy('Processing')
+  if (state === 'error') return copy('Failed')
+  return copy('Waiting')
+}
+
+function LogList({
+  error,
+  logs,
+  loading,
+  runStatus,
+}: {
+  error?: string | null
+  logs?: string[]
+  loading?: boolean
+  runStatus?: BackendInferenceStatus | null
+}) {
+  const displayLogs = logs?.length ? logs.map((title) => ({
+    detail: copy('Persisted by the completed inference run.'),
+    state: 'complete' as const,
+    title,
+  })) : inferenceRuntimeLogs(runStatus, loading, error)
   return (
     <div className="log-list">
-      {displayLogs.map((title, index) => (
-        <div key={`${title}-${index}`}>
-          <i className={`dot ${index > 3 ? 'green' : index > 1 ? 'cyan' : 'blue'}`} />
-          <span>{loading && index === displayLogs.length - 1 ? copy('Processing') : copy('Complete')}</span>
-          <b>{title}</b>
-          <small>{index === 0 ? copy('Root node, same-event markets, and local edges are included in context.') : copy('Used to generate causal paths, scenarios, and risk notes.')}</small>
+      {displayLogs.map((item, index) => (
+        <div key={`${item.title}-${index}`}>
+          <i className={`dot ${item.state === 'complete' ? 'green' : item.state === 'processing' ? 'cyan' : item.state === 'error' ? 'red' : 'blue'}`} />
+          <span>{inferenceLogStateLabel(item.state)}</span>
+          <b>{item.title}</b>
+          <small>{item.detail}</small>
         </div>
       ))}
     </div>
