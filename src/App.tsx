@@ -5709,7 +5709,6 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
   if (!auth.isAuthenticated && !token) {
     return (
       <section className="page account-page">
-        <PageTitle title={copy('Account')} subtitle={copy('Connect and sign in to view portfolio, positions, open orders, and recent trading history.')} />
         <Card className="account-empty-card">
           <WalletCards size={28} />
           <div>
@@ -5727,16 +5726,13 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
 
   return (
     <section className="page account-page">
-      <div className="account-page-head">
-        <PageTitle title={copy('Account')} subtitle={copy('Portfolio, positions, open orders, and trading history.')} />
-        <div className="account-page-actions">
-          <button className="outline-button" disabled={loading} type="button" onClick={() => void loadAccount()}>
-            <RotateCw size={16} /> {loading ? copy('Refreshing') : copy('Refresh')}
-          </button>
-          <button className="primary-button" disabled={syncingPositions} type="button" onClick={() => void handleSyncPositions()}>
-            <Activity size={16} /> {syncingPositions ? copy('Syncing') : copy('Sync positions')}
-          </button>
-        </div>
+      <div className="account-page-actions account-page-actions-end">
+        <button className="outline-button" disabled={loading} type="button" onClick={() => void loadAccount()}>
+          <RotateCw size={16} /> {loading ? copy('Refreshing') : copy('Refresh')}
+        </button>
+        <button className="primary-button" disabled={syncingPositions} type="button" onClick={() => void handleSyncPositions()}>
+          <Activity size={16} /> {syncingPositions ? copy('Syncing') : copy('Sync positions')}
+        </button>
       </div>
 
       <div className="account-dashboard">
@@ -6622,7 +6618,6 @@ function InferenceSettings({
   return (
     <section className="page">
       <BackButton onClick={onBack} />
-      <PageTitle title={copy('AI Inference Settings')} subtitle={copy('Configure the inference parameters before AI analyzes potential market impacts.')} />
       <div className="content-grid settings-grid">
         <Card className="span-8 settings-panel">
           <SectionHeader title={copy('Root Market')} />
@@ -6883,10 +6878,6 @@ function InferenceProgress({
   return (
     <section className="page">
       <BackButton onClick={onBack} />
-      <PageTitle
-        title={hasCurrentResult ? copy('AI Inference Complete') : copy('AI Inference Running...')}
-        subtitle={copy(`Verifying related markets and building causal paths from "${market.title}".`)}
-      />
       <div className="progress-steps">
         {steps.map((step, index) => {
           const done = isComplete || index < currentStep - 1
@@ -6987,10 +6978,7 @@ function CausalScript({
     <section className="page">
       <BackButton onClick={onBack} />
       <div className="script-header">
-        <PageTitle
-          title={copy('Causal Script')}
-          subtitle={scriptSubtitle}
-        />
+        <div className="script-context-line">{scriptSubtitle}</div>
         <div className="script-actions">
           <button className="outline-button" type="button">
             <Download size={17} /> {copy('Export Map')}
@@ -7988,8 +7976,7 @@ function MyScripts({
 
   return (
     <section className="page">
-      <div className="scripts-headline">
-        <PageTitle title={copy('My Scripts')} subtitle={copy('Manage and review your event inference scripts and analysis history.')} />
+      <div className="scripts-headline scripts-headline-actions">
         <button className="primary-button" type="button" onClick={onNew}>
           <Plus size={17} /> {copy('New Inference')}
         </button>
@@ -8685,15 +8672,6 @@ function MarketHoverCard({
         {topMarket ? <span>{topMarketLabel}: {formatUnitPercent(topMarket.price)}</span> : topOutcome ? <span>{topOutcome.label}: {formatUnitPercent(topOutcome.price)}</span> : null}
       </div>
     </aside>
-  )
-}
-
-function PageTitle({ title, subtitle }: { title: string; subtitle: string }) {
-  return (
-    <div className="page-title">
-      <h1>{title}</h1>
-      <p>{subtitle}</p>
-    </div>
   )
 }
 
