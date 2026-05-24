@@ -263,7 +263,7 @@ describe('PortfolioService', () => {
             status: true,
             errorMessage: true,
             market: {
-              select: { id: true, slug: true, question: true },
+              select: { id: true, slug: true, question: true, icon: true, image: true },
             },
             outcome: {
               select: { id: true, label: true, clobTokenId: true },
@@ -840,7 +840,7 @@ describe('PortfolioService', () => {
           },
         },
         market: {
-          select: { id: true, slug: true, question: true },
+          select: { id: true, slug: true, question: true, icon: true, image: true },
         },
         outcome: {
           select: { id: true, label: true, clobTokenId: true },

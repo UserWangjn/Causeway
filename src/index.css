@@ -3351,7 +3351,6 @@ button {
 }
 
 .tag-list,
-.related-list,
 .preview-list,
 .summary-list,
 .log-list {
@@ -3830,6 +3829,33 @@ button {
   border-radius: 8px;
 }
 
+.orderbook-settled-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  margin-bottom: 10px;
+  padding: 0 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  color: #475569;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.orderbook-settled-toggle span {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.orderbook-settled-toggle b {
+  color: #0f172a;
+}
+
 .orderbook-row {
   display: grid;
   grid-template-columns: minmax(230px, 1fr) 130px 150px 220px;
@@ -3838,6 +3864,20 @@ button {
   min-height: 76px;
   padding: 14px 16px;
   background: #fff;
+}
+
+.orderbook-row.settled {
+  background: #f8fafc;
+}
+
+.orderbook-row.settled .orderbook-title b,
+.orderbook-row.settled .orderbook-price strong {
+  color: #64748b;
+}
+
+.orderbook-row.settled .orderbook-actions button {
+  background: #e2e8f0;
+  color: #475569;
 }
 
 .orderbook-row + .orderbook-row {
@@ -3944,20 +3984,6 @@ button {
 
 .market-rule-copy p {
   margin: 0;
-}
-
-.market-side-card .related-list {
-  display: grid;
-  gap: 10px;
-}
-
-.market-side-card .related-item {
-  grid-template-columns: auto 1fr auto;
-}
-
-.market-side-card .related-item > span,
-.market-side-card .related-item > svg {
-  display: none;
 }
 
 .chart {

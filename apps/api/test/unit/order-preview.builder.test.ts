@@ -315,4 +315,25 @@ describe('buildPreviewOrder', () => {
     expect(order.valid).toBe(false);
     expect(order.error).toBe('MARKET_NOT_TRADABLE');
   });
+
+  it('rejects settled markets even when old trading flags still look enabled', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'market',
+        amountUsd: 10,
+      },
+      {
+        ...tradableContext,
+        market: {
+          ...tradableContext.market,
+          active: false,
+          closed: true,
+        },
+      },
+    );
+
+    expect(order.valid).toBe(false);
+    expect(order.error).toBe('MARKET_NOT_TRADABLE');
+  });
 });

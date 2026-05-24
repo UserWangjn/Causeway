@@ -7,6 +7,7 @@ import { createDtoValidationPipe } from '../../src/common/pipes/dto-validation.p
 import { AuthVerifyDto } from '../../src/modules/auth/dto/auth-verify.dto';
 import { CreateInferenceRunDto } from '../../src/modules/inference/dto/create-inference-run.dto';
 import { InferenceRunParamDto } from '../../src/modules/inference/dto/inference-run-param.dto';
+import { EventDetailQueryDto } from '../../src/modules/markets/dto/market-explorer-query.dto';
 import { MarketQueryDto } from '../../src/modules/markets/dto/market-query.dto';
 import { MarketIdParamDto, MarketOrderBookQueryDto, MarketSlugParamDto } from '../../src/modules/markets/dto/market-route.dto';
 import { OrderIntentParamDto } from '../../src/modules/orders/dto/order-intent-param.dto';
@@ -29,6 +30,10 @@ describe('DTO validation boundaries', () => {
       sort: 'volume',
       cursor: 'cursor-token',
       limit: 100,
+    });
+    await expectValid(EventDetailQueryDto, {
+      marketId: 'market_1',
+      refresh: 'true',
     });
     await expectValid(OrderPreviewDto, {
       scriptId: 'script_1',
@@ -62,6 +67,10 @@ describe('DTO validation boundaries', () => {
       q: 'x'.repeat(201),
       category: 'x'.repeat(65),
       cursor: 'x'.repeat(2049),
+    });
+    await expectInvalid(EventDetailQueryDto, {
+      marketId: 'market_1',
+      refresh: 'yes',
     });
     await expectInvalid(AuthVerifyDto, {
       address: '0x1111111111111111111111111111111111111111',

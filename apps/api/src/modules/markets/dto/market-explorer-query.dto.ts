@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBooleanString, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { TrimString } from '../../../common/decorators/trim-string.decorator';
 
 export class MarketSearchQueryDto {
@@ -36,6 +36,10 @@ export class EventDetailQueryDto {
   @IsString()
   @MaxLength(128)
   eventSlug?: string;
+
+  @IsOptional()
+  @IsBooleanString()
+  refresh?: string;
 }
 
 export class MarketHistoryQueryDto {

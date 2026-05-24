@@ -537,12 +537,16 @@ describe('MarketsService', () => {
         markets: 2,
       },
       markets: [
-        selectedMarket,
+        marketRecordWithoutEvent(selectedMarket),
         {
-          ...selectedMarket,
+          ...marketRecordWithoutEvent(selectedMarket),
           id: 'market_2',
           slug: 'market-two',
           question: 'Will another market resolve?',
+          active: false,
+          closed: true,
+          acceptingOrders: false,
+          enableOrderBook: false,
         },
       ],
     };
@@ -584,9 +588,93 @@ describe('MarketsService', () => {
         {
           id: 'market_2',
           title: 'Will another market resolve?',
+          active: false,
+          closed: true,
+          acceptingOrders: false,
+          enableOrderBook: false,
         },
       ],
     });
+  });
+
+  it('serves repeated event detail requests from a short in-memory cache', async () => {
+    const selectedMarket = {
+      ...marketRecord('market_1', 'market-one', 'Will selected market resolve?'),
+      description: 'Selected market description',
+      rules: null,
+      orderMinSize: '1',
+      orderPriceMinTickSize: '0.01',
+      event: {
+        id: 'event_1',
+        slug: 'event-one',
+        title: 'Parent Event Title',
+        tags: ['sports'],
+        icon: null,
+        image: null,
+        volume: '100',
+        liquidity: '50',
+        endDate: new Date('2026-12-31T00:00:00.000Z'),
+        syncedAt: new Date('2026-05-18T00:00:00.000Z'),
+        description: 'Parent event description',
+      },
+      outcomes: [outcomeRecord('outcome_yes', 0, 'Yes', 'token_yes', '0.42')],
+    };
+    const eventRecord = {
+      id: 'event_1',
+      slug: 'event-one',
+      title: 'Parent Event Title',
+      description: 'Parent event description',
+      icon: null,
+      image: null,
+      tags: ['sports'],
+      endDate: new Date('2026-12-31T00:00:00.000Z'),
+      volume: '100',
+      liquidity: '50',
+      syncedAt: new Date('2026-05-18T00:00:00.000Z'),
+      _count: {
+        markets: 1,
+      },
+      markets: [marketRecordWithoutEvent(selectedMarket)],
+    };
+    const refreshedEventRecord = {
+      ...eventRecord,
+      title: 'Refreshed Parent Event Title',
+      syncedAt: new Date('2026-05-18T00:00:20.000Z'),
+      markets: [
+        {
+          ...marketRecordWithoutEvent(selectedMarket),
+          volume: '200',
+        },
+      ],
+    };
+    const marketFindUnique = vi.fn().mockResolvedValue(selectedMarket);
+    const eventFindUnique = vi.fn()
+      .mockResolvedValueOnce(eventRecord)
+      .mockResolvedValueOnce(refreshedEventRecord);
+    const service = createService({
+      polymarketMarket: {
+        findUnique: marketFindUnique,
+      },
+      polymarketEvent: {
+        findUnique: eventFindUnique,
+      },
+    });
+
+    const first = await service.getEventDetail({ marketId: 'market_1' });
+    const second = await service.getEventDetail({ marketId: 'market_1' });
+
+    expect(first).toBe(second);
+    expect(marketFindUnique).toHaveBeenCalledTimes(1);
+    expect(eventFindUnique).toHaveBeenCalledTimes(1);
+
+    const refreshed = await service.getEventDetail({ marketId: 'market_1', refresh: 'true' });
+    const afterRefresh = await service.getEventDetail({ marketId: 'market_1' });
+
+    expect(marketFindUnique).toHaveBeenCalledTimes(2);
+    expect(eventFindUnique).toHaveBeenCalledTimes(2);
+    expect(refreshed).toBe(afterRefresh);
+    expect(refreshed.event?.title).toBe('Refreshed Parent Event Title');
+    expect(refreshed.markets[0]?.volume).toBe(200);
   });
 
   it('throws MARKET_NOT_FOUND for missing markets', async () => {
@@ -1118,6 +1206,36 @@ describe('MarketsService', () => {
     });
   });
 
+  it('serves repeated price history requests from a short in-memory cache', async () => {
+    const getPriceHistory = vi.fn().mockResolvedValue({
+      history: {
+        '11111111111111111111': [{ t: 1, p: 0.42 }],
+      },
+      source: 'clob',
+      generatedAt: '2026-05-18T00:00:00.000Z',
+    });
+    const service = createService({}, { getPriceHistory });
+
+    const first = await service.getMarketPriceHistory({
+      tokenIds: '11111111111111111111,22222222222222222222',
+      interval: 'all',
+      fidelity: 1440,
+    });
+    const second = await service.getMarketPriceHistory({
+      tokenIds: '11111111111111111111,22222222222222222222',
+      interval: 'all',
+      fidelity: 1440,
+    });
+
+    expect(first).toBe(second);
+    expect(getPriceHistory).toHaveBeenCalledTimes(1);
+    expect(getPriceHistory).toHaveBeenCalledWith({
+      tokenIds: ['11111111111111111111', '22222222222222222222'],
+      interval: 'all',
+      fidelity: 1440,
+    });
+  });
+
   it('validates outcome ownership before returning an orderbook contract', async () => {
     const getOrderBook = vi.fn().mockResolvedValue({
       tokenId: 'token_yes',
@@ -1300,6 +1418,11 @@ function marketRecord(id: string, slug: string, question: string) {
     endDate: new Date('2026-12-31T00:00:00.000Z'),
     syncedAt: new Date('2026-05-18T00:00:00.000Z'),
   };
+}
+
+function marketRecordWithoutEvent<T extends { event?: unknown }>(market: T): Omit<T, 'event'> {
+  const { event: _event, ...withoutEvent } = market;
+  return withoutEvent;
 }
 
 function outcomeRecord(id: string, outcomeIndex: number, label: string, clobTokenId: string, price: string) {

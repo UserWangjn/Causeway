@@ -26,7 +26,13 @@ const OPEN_MARKET_WHERE = Prisma.validator<Prisma.PolymarketMarketWhereInput>()(
   archived: false,
   staleDetectedAt: null,
 });
-const EVENT_DETAIL_MARKET_LIMIT = 500;
+const EVENT_DETAIL_MARKET_WHERE = Prisma.validator<Prisma.PolymarketMarketWhereInput>()({
+  archived: false,
+  staleDetectedAt: null,
+});
+const EVENT_DETAIL_MARKET_LIMIT = 200;
+const DETAIL_CACHE_TTL_MS = 20 * 1000;
+const DETAIL_CACHE_MAX_ENTRIES = 240;
 
 const MARKET_OUTCOME_SELECT = Prisma.validator<Prisma.PolymarketOutcomeSelect>()({
   id: true,
@@ -136,6 +142,8 @@ const EXPLORER_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()
   ...MARKET_LIST_SELECT,
   description: true,
   rules: true,
+  archived: true,
+  staleDetectedAt: true,
   orderMinSize: true,
   orderPriceMinTickSize: true,
   event: {
@@ -155,6 +163,16 @@ const EXPLORER_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()
   },
 });
 
+const EVENT_DETAIL_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
+  ...MARKET_LIST_SELECT,
+  description: true,
+  rules: true,
+  archived: true,
+  staleDetectedAt: true,
+  orderMinSize: true,
+  orderPriceMinTickSize: true,
+});
+
 const EVENT_DETAIL_SELECT = Prisma.validator<Prisma.PolymarketEventSelect>()({
   id: true,
   slug: true,
@@ -170,15 +188,23 @@ const EVENT_DETAIL_SELECT = Prisma.validator<Prisma.PolymarketEventSelect>()({
   _count: {
     select: {
       markets: {
-        where: OPEN_MARKET_WHERE,
+        where: EVENT_DETAIL_MARKET_WHERE,
       },
     },
   },
   markets: {
-    where: OPEN_MARKET_WHERE,
-    orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+    where: EVENT_DETAIL_MARKET_WHERE,
+    orderBy: [
+      { closed: 'asc' },
+      { active: 'desc' },
+      { acceptingOrders: 'desc' },
+      { enableOrderBook: 'desc' },
+      { volume24hr: { sort: 'desc', nulls: 'last' } },
+      { volume: { sort: 'desc', nulls: 'last' } },
+      { id: 'asc' },
+    ],
     take: EVENT_DETAIL_MARKET_LIMIT,
-    select: EXPLORER_MARKET_SELECT,
+    select: EVENT_DETAIL_MARKET_SELECT,
   },
 });
 
@@ -186,7 +212,12 @@ type MarketListRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof MARKE
 type MarketDetailRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof MARKET_DETAIL_SELECT }>;
 type NetworkMarketRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof NETWORK_MARKET_SELECT }>;
 type ExplorerMarketRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof EXPLORER_MARKET_SELECT }>;
+type EventDetailMarketRecord = Prisma.PolymarketMarketGetPayload<{ select: typeof EVENT_DETAIL_MARKET_SELECT }>;
 type EventDetailRecord = Prisma.PolymarketEventGetPayload<{ select: typeof EVENT_DETAIL_SELECT }>;
+type ExplorerMarketEventRecord = NonNullable<ExplorerMarketRecord['event']>;
+type ExplorerMarketFormatRecord = (ExplorerMarketRecord | EventDetailMarketRecord) & {
+  event?: ExplorerMarketEventRecord | null;
+};
 type NetworkTopologySource = 'precomputed' | 'deterministic';
 type NetworkNodeType = 'event' | 'market';
 type NetworkMarketCandidate = {
@@ -236,6 +267,11 @@ type MarketNetworkCacheEntry = {
   freshUntil: number;
   staleUntil: number;
 };
+type DetailCacheEntry<T> = {
+  value: T;
+  expiresAt: number;
+  loadedAt: number;
+};
 type MarketCategoryCountRow = { category: string | null; count: bigint | number | string };
 type MarketCategorySummary = {
   totalCount: number;
@@ -266,6 +302,8 @@ export class MarketsService {
   private readonly logger = new Logger(MarketsService.name);
   private readonly marketNetworkCache = new Map<string, MarketNetworkCacheEntry>();
   private readonly marketNetworkInFlight = new Map<string, Promise<MarketNetworkResponse>>();
+  private readonly detailCache = new Map<string, DetailCacheEntry<unknown>>();
+  private readonly detailInFlight = new Map<string, Promise<unknown>>();
 
   constructor(
     @Inject(ClobClient)
@@ -455,6 +493,10 @@ export class MarketsService {
   }
 
   async getMarket(marketId: string) {
+    return this.withDetailCache(`market:id:${marketId}`, () => this.loadMarketById(marketId));
+  }
+
+  private async loadMarketById(marketId: string) {
     const market = await this.prisma.polymarketMarket.findUnique({
       where: { id: marketId },
       select: MARKET_DETAIL_SELECT,
@@ -466,6 +508,10 @@ export class MarketsService {
   }
 
   async getMarketBySlug(slug: string) {
+    return this.withDetailCache(`market:slug:${slug}`, () => this.loadMarketBySlug(slug));
+  }
+
+  private async loadMarketBySlug(slug: string) {
     const market = await this.prisma.polymarketMarket.findUnique({
       where: { slug },
       select: MARKET_DETAIL_SELECT,
@@ -477,6 +523,13 @@ export class MarketsService {
   }
 
   async getEventDetail(query: EventDetailQueryDto) {
+    const cacheKey = eventDetailCacheKey(query);
+    return this.withDetailCache(cacheKey, () => this.loadEventDetail(query), {
+      force: parseBoolean(query.refresh) === true,
+    });
+  }
+
+  private async loadEventDetail(query: EventDetailQueryDto) {
     const marketId = trimToUndefined(query.marketId);
     const eventId = trimToUndefined(query.eventId);
     const eventSlug = trimToUndefined(query.eventSlug);
@@ -605,11 +658,13 @@ export class MarketsService {
       };
     }
 
-    return this.clobClient.getPriceHistory({
+    const interval = normalizeHistoryInterval(query.interval);
+    const fidelity = query.fidelity ?? 1440;
+    return this.withDetailCache(`history:${interval}:${fidelity}:${tokenIds.join(',')}`, () => this.clobClient.getPriceHistory({
       tokenIds,
-      interval: normalizeHistoryInterval(query.interval),
-      fidelity: query.fidelity ?? 1440,
-    });
+      interval,
+      fidelity,
+    }));
   }
 
   async getMarketNetwork(query: MarketQueryDto): Promise<MarketNetworkResponse> {
@@ -673,11 +728,52 @@ export class MarketsService {
     });
   }
 
+  private async withDetailCache<T>(
+    cacheKey: string,
+    load: () => Promise<T>,
+    options: { force?: boolean } = {},
+  ): Promise<T> {
+    const cached = this.detailCache.get(cacheKey) as DetailCacheEntry<T> | undefined;
+    const now = Date.now();
+    if (!options.force && cached && cached.expiresAt > now) return cached.value;
+
+    const inFlight = this.detailInFlight.get(cacheKey) as Promise<T> | undefined;
+    if (!options.force && inFlight) return inFlight;
+
+    const loadedAt = now;
+    const request = load()
+      .then((result) => {
+        this.writeDetailCache(cacheKey, result, loadedAt);
+        return result;
+      })
+      .finally(() => {
+        if (this.detailInFlight.get(cacheKey) === request) {
+          this.detailInFlight.delete(cacheKey);
+        }
+      });
+    this.detailInFlight.set(cacheKey, request);
+    return request;
+  }
+
+  private writeDetailCache<T>(cacheKey: string, value: T, loadedAt = Date.now()): void {
+    const current = this.detailCache.get(cacheKey);
+    if (current && current.loadedAt > loadedAt) return;
+    if (this.detailCache.size >= DETAIL_CACHE_MAX_ENTRIES && !this.detailCache.has(cacheKey)) {
+      const oldestKey = this.detailCache.keys().next().value;
+      if (oldestKey) this.detailCache.delete(oldestKey);
+    }
+    this.detailCache.set(cacheKey, {
+      value,
+      expiresAt: Date.now() + DETAIL_CACHE_TTL_MS,
+      loadedAt,
+    });
+  }
+
   private async getEventLevelNetwork(query: MarketQueryDto): Promise<MarketNetworkResponse> {
     const limit = query.limit ?? 100;
     const marketWhere = this.buildWhere(query);
     const candidateLimit = networkCandidateLimit(limit);
-    const nodes = await this.prisma.marketNetworkNode.findMany({
+    const nodesPromise = this.prisma.marketNetworkNode.findMany({
       where: this.buildNetworkNodeWhere(query),
       orderBy: { score: 'desc' },
       take: candidateLimit,
@@ -687,6 +783,9 @@ export class MarketsService {
         },
       },
     });
+    const totalPromise = this.safeNetworkMarketCount(marketWhere, 0);
+    const totalEventsPromise = this.safeNetworkEventGroupCount(marketWhere, 0);
+    const nodes = await nodesPromise;
     const candidates = nodes.length
       ? mergeNetworkCandidates(
           nodes.map((node, index) => ({
@@ -699,8 +798,9 @@ export class MarketsService {
         )
       : await this.loadActivityNetworkCandidates(query, candidateLimit);
     const selectedGroups = selectNetworkEventGroups(candidates, query, limit);
-    const total = await this.safeNetworkMarketCount(marketWhere, candidates.length);
-    const totalEvents = await this.safeNetworkEventGroupCount(marketWhere, selectedGroups.length);
+    const [countedTotal, countedTotalEvents] = await Promise.all([totalPromise, totalEventsPromise]);
+    const total = Math.max(countedTotal, candidates.length);
+    const totalEvents = Math.max(countedTotalEvents, selectedGroups.length);
 
     return {
       nodes: selectedGroups.map((group) => this.formatNetworkEventNode(group)),
@@ -717,7 +817,7 @@ export class MarketsService {
     const limit = query.limit ?? 100;
     const marketWhere = this.buildWhere(query);
     const candidateLimit = networkCandidateLimit(limit);
-    const nodes = await this.prisma.marketNetworkNode.findMany({
+    const nodesPromise = this.prisma.marketNetworkNode.findMany({
       where: this.buildNetworkNodeWhere(query),
       orderBy: { score: 'desc' },
       take: candidateLimit,
@@ -727,9 +827,13 @@ export class MarketsService {
         },
       },
     });
-    const total = await this.safeNetworkMarketCount(marketWhere, nodes.length);
+    const totalPromise = this.safeNetworkMarketCount(marketWhere, 0);
+    const nodes = await nodesPromise;
     if (!nodes.length) {
-      return this.buildDeterministicMarketLevelNetwork(query, limit, total, candidateLimit);
+      const activityCandidates = await this.loadActivityNetworkCandidates(query, candidateLimit);
+      const selectedMarkets = selectNetworkCandidates(activityCandidates, query, limit);
+      const total = Math.max(await totalPromise, activityCandidates.length);
+      return this.formatDeterministicMarketLevelNetwork(query, limit, total, selectedMarkets);
     }
     const graphCandidates = nodes.map((node, index) => ({
       market: node.market,
@@ -737,26 +841,17 @@ export class MarketsService {
       graphScore: toNullableNumber(node.score) ?? 0,
       rank: index,
     }));
+    const activityCandidates = await this.loadActivityNetworkCandidates(query, candidateLimit, nodes.length);
     const selectedNodes = selectNetworkCandidates(
-      mergeNetworkCandidates(
-        graphCandidates,
-        await this.loadActivityNetworkCandidates(query, candidateLimit, nodes.length),
-      ),
+      mergeNetworkCandidates(graphCandidates, activityCandidates),
       query,
       limit,
     );
-
-    const nodeMarketIds = selectedNodes.map((node) => node.market.id);
-    const edges = nodeMarketIds.length
-      ? await this.prisma.marketNetworkEdge.findMany({
-          where: {
-            sourceMarketId: { in: nodeMarketIds },
-            targetMarketId: { in: nodeMarketIds },
-          },
-          orderBy: { weight: 'desc' },
-          take: limit * 2,
-        })
-      : [];
+    const [edges, countedTotal] = await Promise.all([
+      this.loadNetworkEdges(selectedNodes.map((node) => node.market.id), limit),
+      totalPromise,
+    ]);
+    const total = Math.max(countedTotal, nodes.length, selectedNodes.length);
 
     return {
       nodes: selectedNodes.map((node) => this.formatNetworkNode(node.market, node.category)),
@@ -773,18 +868,12 @@ export class MarketsService {
     };
   }
 
-  private async buildDeterministicMarketLevelNetwork(
+  private formatDeterministicMarketLevelNetwork(
     query: MarketQueryDto,
     limit: number,
     total: number,
-    candidateLimit = networkCandidateLimit(limit),
-  ): Promise<MarketNetworkResponse> {
-    const selectedMarkets = selectNetworkCandidates(
-      await this.loadActivityNetworkCandidates(query, candidateLimit),
-      query,
-      limit,
-    );
-
+    selectedMarkets: NetworkMarketCandidate[],
+  ): MarketNetworkResponse {
     return {
       nodes: selectedMarkets.map((candidate) => this.formatNetworkNode(candidate.market, candidate.category)),
       edges: buildEventEdges(selectedMarkets.map((candidate) => candidate.market)),
@@ -792,28 +881,42 @@ export class MarketsService {
     };
   }
 
+  private async loadNetworkEdges(nodeMarketIds: string[], limit: number) {
+    if (!nodeMarketIds.length) return [];
+    return this.prisma.marketNetworkEdge.findMany({
+      where: {
+        sourceMarketId: { in: nodeMarketIds },
+        targetMarketId: { in: nodeMarketIds },
+      },
+      orderBy: { weight: 'desc' },
+      take: limit * 2,
+    });
+  }
+
   private baseOpenMarketWhere(): Prisma.PolymarketMarketWhereInput {
     return OPEN_MARKET_WHERE;
   }
 
   private async countNetworkEventGroups(marketWhere: Prisma.PolymarketMarketWhereInput): Promise<number> {
-    const eventGroups = await this.prisma.polymarketMarket.groupBy({
-      by: ['eventId'],
-      where: {
-        AND: [
-          marketWhere,
-          { eventId: { not: null } },
-        ],
-      },
-    });
-    const standaloneMarketCount = await this.prisma.polymarketMarket.count({
-      where: {
-        AND: [
-          marketWhere,
-          { eventId: null },
-        ],
-      },
-    });
+    const [eventGroups, standaloneMarketCount] = await Promise.all([
+      this.prisma.polymarketMarket.groupBy({
+        by: ['eventId'],
+        where: {
+          AND: [
+            marketWhere,
+            { eventId: { not: null } },
+          ],
+        },
+      }),
+      this.prisma.polymarketMarket.count({
+        where: {
+          AND: [
+            marketWhere,
+            { eventId: null },
+          ],
+        },
+      }),
+    ]);
     return eventGroups.length + standaloneMarketCount;
   }
 
@@ -1077,22 +1180,26 @@ export class MarketsService {
 
   private formatEventDetail(event: EventDetailRecord, selectedMarket: ExplorerMarketRecord | null = null) {
     const category = readMarketCategoryKey(event.tags, [event.title, event.slug]);
-    const markets = event.markets.map((market, index) => this.formatExplorerMarketNode(market, index));
+    const eventContext = eventDetailMarketEventContext(event);
+    const markets = event.markets.map((market, index) => this.formatExplorerMarketNode(market, index, eventContext));
     const selectedMarketIndex = selectedMarket
       ? event.markets.findIndex((market) => market.id === selectedMarket.id)
       : -1;
     const selectedMarketNode = selectedMarket
       ? selectedMarketIndex >= 0
         ? markets[selectedMarketIndex]
-        : this.formatExplorerMarketNode(selectedMarket, 0)
+        : this.formatExplorerMarketNode(selectedMarket, 0, eventContext)
       : null;
+    const responseMarkets = selectedMarketNode && selectedMarketIndex < 0
+      ? [selectedMarketNode, ...markets]
+      : markets;
     const eventDescription = firstNonBlankText(event.description);
     const eventRules = firstNonBlankText(
       selectedMarketNode?.rules,
-      markets.find((market) => market.rules)?.rules,
+      responseMarkets.find((market) => market.rules)?.rules,
       eventDescription,
     );
-    const marketsCount = event._count?.markets ?? event.markets.length;
+    const marketsCount = event._count?.markets ?? responseMarkets.length;
     return {
       event: {
         id: event.id,
@@ -1111,23 +1218,28 @@ export class MarketsService {
         description: eventDescription,
         rules: eventRules,
         marketsCount,
-        marketsReturned: event.markets.length,
-        hasMoreMarkets: marketsCount > event.markets.length,
+        marketsReturned: responseMarkets.length,
+        hasMoreMarkets: marketsCount > responseMarkets.length,
         syncedAt: event.syncedAt.toISOString(),
       },
       selectedMarket: selectedMarketNode,
-      markets,
+      markets: responseMarkets,
       source: 'database',
       generatedAt: new Date().toISOString(),
     };
   }
 
-  private formatExplorerMarketNode(market: ExplorerMarketRecord, index: number) {
-    const category = readMarketCategoryKey(market.event?.tags, [
+  private formatExplorerMarketNode(
+    market: ExplorerMarketFormatRecord,
+    index: number,
+    eventContext: ExplorerMarketEventRecord | null = null,
+  ) {
+    const event = market.event ?? eventContext;
+    const category = readMarketCategoryKey(event?.tags, [
       market.question,
       market.slug,
-      market.event?.title,
-      market.event?.slug,
+      event?.title,
+      event?.slug,
     ]);
     const description = firstNonBlankText(market.description);
     return {
@@ -1136,14 +1248,18 @@ export class MarketsService {
       title: market.question,
       groupItemTitle: null,
       eventId: market.eventId,
-      eventSlug: market.event?.slug ?? null,
-      eventTitle: market.event?.title ?? null,
+      eventSlug: event?.slug ?? null,
+      eventTitle: event?.title ?? null,
+      active: market.active,
+      closed: market.closed,
+      archived: market.archived,
+      staleDetectedAt: market.staleDetectedAt?.toISOString() ?? null,
       category,
       categoryKey: category,
       officialCategory: category,
-      tags: marketCategoryTagsForResponse(market.event?.tags, category),
-      icon: market.icon ?? market.image ?? market.event?.icon ?? market.event?.image,
-      image: market.image ?? market.icon ?? market.event?.image ?? market.event?.icon,
+      tags: marketCategoryTagsForResponse(event?.tags, category),
+      icon: market.icon ?? market.image ?? event?.icon ?? event?.image,
+      image: market.image ?? market.icon ?? event?.image ?? event?.icon,
       price: firstNumber(market.lastTradePrice, market.bestAsk, market.bestBid, market.outcomes[0]?.price),
       volume: toNullableNumber(market.volume),
       volume24hr: toNullableNumber(market.volume24hr),
@@ -1152,6 +1268,7 @@ export class MarketsService {
       description,
       rules: firstNonBlankText(market.rules, description),
       acceptingOrders: market.acceptingOrders,
+      enableOrderBook: market.enableOrderBook,
       outcomes: market.outcomes.map((outcome) => ({
         outcomeId: outcome.id,
         label: outcome.label,
@@ -1286,6 +1403,30 @@ function parseBoolean(value: string | undefined): boolean | undefined {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return undefined;
+}
+
+function eventDetailCacheKey(query: EventDetailQueryDto): string {
+  return JSON.stringify({
+    eventId: trimToUndefined(query.eventId) ?? null,
+    eventSlug: normalizeOptionalSlug(query.eventSlug) ?? null,
+    marketId: trimToUndefined(query.marketId) ?? null,
+  });
+}
+
+function eventDetailMarketEventContext(event: EventDetailRecord): ExplorerMarketEventRecord {
+  return {
+    id: event.id,
+    slug: event.slug,
+    title: event.title,
+    tags: event.tags,
+    icon: event.icon,
+    image: event.image,
+    volume: event.volume,
+    liquidity: event.liquidity,
+    endDate: event.endDate,
+    syncedAt: event.syncedAt,
+    description: event.description,
+  };
 }
 
 type MarketSort = 'volume' | 'volume24hr' | 'endDate' | 'syncedAt';

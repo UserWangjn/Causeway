@@ -29,6 +29,8 @@ import {
   Bot,
   BrainCircuit,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Copy,
   Cpu,
   Download,
@@ -91,7 +93,12 @@ type Market = {
   endDate?: string | null
   description?: string | null
   rules?: string | null
+  active?: boolean
+  closed?: boolean
+  archived?: boolean
+  staleDetectedAt?: string | null
   acceptingOrders?: boolean
+  enableOrderBook?: boolean
   syncedAt?: string | null
   outcomes?: { outcomeId?: string | null; label: string; price: number | null; tokenId: string | null }[]
   bestBid?: number | null
@@ -137,7 +144,12 @@ type ApiMarketNode = {
   endDate?: string | null
   description?: string | null
   rules?: string | null
+  active?: boolean
+  closed?: boolean
+  archived?: boolean
+  staleDetectedAt?: string | null
   acceptingOrders?: boolean
+  enableOrderBook?: boolean
   outcomes?: { outcomeId?: string | null; label: string; price: number | null; tokenId: string | null }[]
   bestBid?: number | null
   bestAsk?: number | null
@@ -204,6 +216,14 @@ type EventDetailResponse = {
 type PricePoint = {
   t: number
   p: number
+}
+
+type ChartRow = {
+  id: string
+  index: number
+  label: string
+  price: number | null
+  tokenId: string
 }
 
 type PriceHistoryResponse = {
@@ -2352,6 +2372,29 @@ function scriptMarketStatusLabel(market: Pick<BackendScript['markets'][number], 
   return null
 }
 
+function marketIsSettled(market: Pick<Market, 'active' | 'closed'>) {
+  return market.closed === true || market.active === false
+}
+
+function marketIsTradable(market: Pick<Market, 'active' | 'closed' | 'archived' | 'staleDetectedAt' | 'acceptingOrders' | 'enableOrderBook'>) {
+  return market.active !== false
+    && market.closed !== true
+    && market.archived !== true
+    && !market.staleDetectedAt
+    && market.acceptingOrders !== false
+    && market.enableOrderBook !== false
+}
+
+function marketTradingStatusLabel(market: Pick<Market, 'active' | 'closed' | 'archived' | 'staleDetectedAt' | 'acceptingOrders' | 'enableOrderBook'>) {
+  if (market.closed) return copy('Settled')
+  if (market.active === false) return copy('Inactive')
+  if (market.archived) return copy('Archived')
+  if (market.staleDetectedAt) return copy('Stale')
+  if (market.acceptingOrders === false) return copy('Orders paused')
+  if (market.enableOrderBook === false) return copy('Order book unavailable')
+  return copy('Tradable')
+}
+
 function orderDraftContextLabel(draft: Pick<ScriptOrderCandidate, 'marketTitle' | 'eventTitle'>) {
   return draft.eventTitle ? `${draft.eventTitle} / ${draft.marketTitle}` : draft.marketTitle
 }
@@ -3589,46 +3632,16 @@ function outcomeTone(index: number) {
   return ['blue', 'indigo', 'amber', 'orange', 'green', 'purple'][index % 6]
 }
 
-function outcomeTrend(index: number, price: number | null) {
-  if (price == null) return 0
-  const direction = index % 2 === 0 ? 1 : -1
-  return Math.round((price * 18 + index * 3) * direction)
-}
-
-function outcomePath(index: number, price: number | null) {
-  const base = price == null ? 0.5 : clamp(price, 0.03, 0.97)
-  const points = Array.from({ length: 18 }, (_, pointIndex) => {
-    const x = 24 + pointIndex * 42
-    const wave = Math.sin((pointIndex + 1) * (0.72 + index * 0.08)) * (18 + index * 2)
-    const drift = (pointIndex - 8) * (base - 0.5) * -7
-    const y = clamp(250 - base * 210 + wave + drift, 24, 268)
-    return `${pointIndex === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`
-  })
-  return points.join(' ')
-}
-
 const HISTORY_CHART_LEFT = 36
 const HISTORY_CHART_RIGHT = 724
 const HISTORY_CHART_TOP = 38
 const HISTORY_CHART_BOTTOM = 272
+const HISTORY_CHART_MAX_PRICE = 1
+const HISTORY_CHART_MAX_ROWS = 8
 
 function chartY(price: number, maxPrice: number) {
   const scale = Math.max(0.01, maxPrice)
   return HISTORY_CHART_BOTTOM - (clamp(price, 0, scale) / scale) * (HISTORY_CHART_BOTTOM - HISTORY_CHART_TOP)
-}
-
-function chartMaxPrice(points: PricePoint[], prices: Array<number | null | undefined>) {
-  const maxValue = Math.max(
-    0,
-    ...points.map((point) => clamp(point.p, 0, 1)),
-    ...prices.map((price) => (price == null ? 0 : clamp(price, 0, 1))),
-  )
-  if (maxValue <= 0.15) return 0.15
-  if (maxValue <= 0.3) return 0.3
-  if (maxValue <= 0.45) return 0.45
-  if (maxValue <= 0.6) return 0.6
-  if (maxValue <= 0.8) return 0.8
-  return 1
 }
 
 function chartTicks(maxPrice: number) {
@@ -3647,10 +3660,66 @@ function historyPath(points: PricePoint[], minT: number, maxT: number, maxPrice:
     .join(' ')
 }
 
+function chartPlaceholderPath(price: number | null, maxPrice: number) {
+  const y = chartY(price ?? 0.5, maxPrice)
+  return `M${HISTORY_CHART_LEFT} ${y.toFixed(1)}H${HISTORY_CHART_RIGHT}`
+}
+
 function compactHistory(points: PricePoint[]) {
   if (points.length <= 240) return points
   const step = Math.ceil(points.length / 240)
   return points.filter((_, index) => index % step === 0 || index === points.length - 1)
+}
+
+function normalizeHistoryPoints(points: PricePoint[]) {
+  const pointByTimestamp = new Map<number, PricePoint>()
+  points.forEach((point) => {
+    if (typeof point.t !== 'number' || typeof point.p !== 'number') return
+    if (!Number.isFinite(point.t) || !Number.isFinite(point.p)) return
+    pointByTimestamp.set(point.t, { t: point.t, p: clamp(point.p, 0, 1) })
+  })
+  return Array.from(pointByTimestamp.values()).sort((a, b) => a.t - b.t)
+}
+
+function compareHistoryChartMarkets(left: Market, right: Market, focusMarketId?: string | null) {
+  if (focusMarketId) {
+    if (left.id === focusMarketId && right.id !== focusMarketId) return -1
+    if (right.id === focusMarketId && left.id !== focusMarketId) return 1
+  }
+  const leftSettled = marketIsSettled(left) ? 1 : 0
+  const rightSettled = marketIsSettled(right) ? 1 : 0
+  if (leftSettled !== rightSettled) return leftSettled - rightSettled
+  const leftLabel = marketDisplayLabel(left).toLowerCase()
+  const rightLabel = marketDisplayLabel(right).toLowerCase()
+  return leftLabel.localeCompare(rightLabel) || left.id.localeCompare(right.id)
+}
+
+function buildHistoryChartCandidates(eventMarkets: Market[], market: Market, focusMarket?: Market): ChartRow[] {
+  if (eventMarkets.length > 1) {
+    const focusMarketId = focusMarket?.id ?? null
+    const selectedMarkets = [
+      ...eventMarkets.filter((item) => item.id === focusMarketId),
+      ...eventMarkets.filter((item) => item.id !== focusMarketId),
+    ].slice(0, HISTORY_CHART_MAX_ROWS)
+    return selectedMarkets
+      .sort((left, right) => compareHistoryChartMarkets(left, right, focusMarketId))
+      .slice(0, HISTORY_CHART_MAX_ROWS)
+      .map((item, index) => ({
+        id: item.id,
+        index,
+        label: marketDisplayLabel(item),
+        price: item.price / 100,
+        tokenId: item.outcomes?.[0]?.tokenId || '',
+      }))
+  }
+
+  return getOutcomeRows(market).slice(0, 5).map((outcome) => ({
+    id: `${outcome.outcomeId ?? outcome.label}-${outcome.index}`,
+    index: outcome.index,
+    label: outcome.label,
+    price: outcome.price,
+    tokenId: outcome.tokenId || '',
+  }))
 }
 
 function formatToken(tokenId: string | null | undefined) {
@@ -4175,7 +4244,12 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
     endDate: node.endDate,
     description: node.description,
     rules: node.rules,
+    active: node.active ?? true,
+    closed: node.closed ?? false,
+    archived: node.archived ?? false,
+    staleDetectedAt: node.staleDetectedAt ?? null,
     acceptingOrders: node.acceptingOrders ?? true,
+    enableOrderBook: node.enableOrderBook ?? true,
     syncedAt: node.syncedAt,
     outcomes: node.outcomes || [],
     bestBid: node.bestBid,
@@ -6396,10 +6470,12 @@ function MarketDetail({
     return params.toString()
   }, [market.eventId, market.id, market.marketId, market.nodeType, market.outcomes?.length])
 
-  const loadEventDetail = useCallback(async (signal?: AbortSignal, showRefreshing = false) => {
+  const loadEventDetail = useCallback(async (signal?: AbortSignal, showRefreshing = false, forceRefresh = false) => {
     if (showRefreshing) setEventDetailRefreshing(true)
     try {
-      const data = await fetch(`${API_PREFIX}/events/detail?${detailParams}`, { signal })
+      const params = new URLSearchParams(detailParams)
+      if (forceRefresh) params.set('refresh', 'true')
+      const data = await fetch(`${API_PREFIX}/events/detail?${params.toString()}`, { signal })
       .then((response) => {
         return readApiData<EventDetailResponse['data']>(response)
       })
@@ -6428,7 +6504,7 @@ function MarketDetail({
 
   const handleRefreshEventDetail = useCallback(() => {
     const controller = new AbortController()
-    void loadEventDetail(controller.signal, true)
+    void loadEventDetail(controller.signal, true, true)
     return () => controller.abort()
   }, [loadEventDetail])
 
@@ -6449,9 +6525,10 @@ function MarketDetail({
   const fallbackInferenceMarket = marketInferenceOutcome(displayMarket) ? displayMarket : primaryMarket
   const activeSelectedOutcome = selectedOutcome?.rootMarketId === market.id ? selectedOutcome : null
   const inferenceMarket = activeSelectedOutcome?.market ?? fallbackInferenceMarket
-  const inferenceReady = Boolean(activeSelectedOutcome?.outcomeId)
+  const inferenceReady = Boolean(activeSelectedOutcome?.outcomeId) && marketIsTradable(inferenceMarket)
   const handleSelectOutcome = useCallback((selectedMarket: Market, action: OrderbookOutcomeAction) => {
     if (!action.outcomeId) return
+    if (!marketIsTradable(selectedMarket)) return
     setSelectedOutcome({
       rootMarketId: market.id,
       market: selectedMarket,
@@ -6507,7 +6584,7 @@ function MarketDetail({
                 <strong>{formatDate(displayMarket.endDate)}</strong>
               </div>
             </div>
-            <MarketPriceChart eventMarkets={detailMarkets} market={displayMarket} />
+            <MarketPriceChart eventMarkets={detailMarkets} focusMarket={selectedEventMarket} market={displayMarket} />
             <MarketOrderBook
               eventMarkets={detailMarkets}
               hasMoreMarkets={Boolean(eventDetail?.event?.hasMoreMarkets)}
@@ -6542,16 +6619,12 @@ function MarketDetail({
                 [copy('Category'), displayMarket.category],
                 [copy('Source'), 'Polymarket'],
                 [copy('Contract Type'), detailMarkets.length > 1 ? copy('Event with multiple markets') : copy('Binary market')],
-                [copy('Trading Status'), detailMarkets.some((item) => item.acceptingOrders !== false) ? copy('Tradable') : copy('Orders paused')],
+                [copy('Trading Status'), detailMarkets.some(marketIsTradable) ? copy('Tradable') : marketTradingStatusLabel(displayMarket)],
                 [copy('Minimum Order'), market.orderMinSize ? `${market.orderMinSize}` : copy('Not provided')],
                 [copy('Minimum Tick'), market.tickSize ? `${market.tickSize}` : copy('Not provided')],
                 [copy('Synced At'), formatDate(displayMarket.syncedAt)],
               ]}
             />
-          </Card>
-          <Card className="market-side-card">
-            <SectionHeader title={copy('Related Markets')} />
-            <RelatedMarketList currentMarket={market} />
           </Card>
         </aside>
       </div>
@@ -7875,7 +7948,7 @@ function OrderConfirmDialog({
                 <span>{index + 1}</span>
                 <div>
                   <b>{order.outcomeLabel || copy('Outcome')}</b>
-                  <small>{order.orderMode === 'market' ? copy('Market order') : copy(`Limit ${formatLimitPrice(order.limitPrice)}`)} 路 {formatShares(order.size)} shares</small>
+                  <small>{order.orderMode === 'market' ? copy('Market order') : copy(`Limit ${formatLimitPrice(order.limitPrice)}`)} / {formatShares(order.size)} shares</small>
                 </div>
                 <strong>{formatUsd(order.amountUsd)}</strong>
               </div>
@@ -8735,6 +8808,7 @@ function MarketHoverCard({
     : market.eventTitle || market.category
   const topMarketLabel = topMarket?.groupItemTitle || topMarket?.title
   const rulesText = rules || description || copy('Polymarket has not provided detailed rules for this market.')
+  const tradingStatus = marketTradingStatusLabel(market)
   return (
     <aside
       className={`market-hover-card ${placement}`}
@@ -8770,7 +8844,7 @@ function MarketHoverCard({
         </section>
       </div>
       <div className="hover-card-footer">
-        <span className={market.acceptingOrders === false ? 'closed' : 'open'}>{market.acceptingOrders === false ? copy('Orders paused') : copy('Tradable')}</span>
+        <span className={marketIsTradable(market) ? 'open' : 'closed'}>{tradingStatus}</span>
         {topMarket ? <span>{topMarketLabel}: {formatUnitPercent(topMarket.price)}</span> : topOutcome ? <span>{topOutcome.label}: {formatUnitPercent(topOutcome.price)}</span> : null}
       </div>
     </aside>
@@ -8900,36 +8974,18 @@ function CategoryChips({
   )
 }
 
-function MarketPriceChart({ eventMarkets, market }: { eventMarkets: Market[]; market: Market }) {
-  return <HistoricalMarketPriceChart eventMarkets={eventMarkets} market={market} />
+function MarketPriceChart({ eventMarkets, focusMarket, market }: { eventMarkets: Market[]; focusMarket?: Market; market: Market }) {
+  return <HistoricalMarketPriceChart eventMarkets={eventMarkets} focusMarket={focusMarket} market={market} />
 }
 
-function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Market[]; market: Market }) {
-  const [historyState, setHistoryState] = useState<{ key: string; history: Record<string, PricePoint[]> }>({
-    key: '',
-    history: {},
-  })
-  const chartRows =
-    eventMarkets.length > 1
-      ? [...eventMarkets]
-          .sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))
-          .slice(0, 8)
-          .map((item, index) => ({
-            id: item.id,
-            index,
-            label: marketDisplayLabel(item),
-            price: item.price / 100,
-            tokenId: item.outcomes?.[0]?.tokenId || '',
-          }))
-      : getOutcomeRows(market).slice(0, 5).map((outcome) => ({
-          id: `${outcome.label}-${outcome.index}`,
-          index: outcome.index,
-          label: outcome.label,
-          price: outcome.price,
-          tokenId: outcome.tokenId || '',
-        }))
-  const tokenIds = chartRows.map((row) => row.tokenId).filter(Boolean)
-  const historyKey = tokenIds.join(',')
+function HistoricalMarketPriceChart({ eventMarkets, focusMarket, market }: { eventMarkets: Market[]; focusMarket?: Market; market: Market }) {
+  const [historyByToken, setHistoryByToken] = useState<Record<string, PricePoint[]>>({})
+  const chartRows = useMemo(
+    () => buildHistoryChartCandidates(eventMarkets, market, focusMarket),
+    [eventMarkets, focusMarket, market],
+  )
+  const tokenIds = Array.from(new Set(chartRows.map((row) => row.tokenId).filter(Boolean)))
+  const historyKey = [...tokenIds].sort().join(',')
 
   useEffect(() => {
     if (!historyKey) return
@@ -8943,23 +8999,23 @@ function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Ma
         const normalizedHistory = Object.fromEntries(
           Object.entries(data.history || {}).map(([tokenId, points]) => [
             tokenId,
-            compactHistory(points.filter((point) => typeof point.t === 'number' && typeof point.p === 'number')),
+            compactHistory(normalizeHistoryPoints(points)),
           ]),
         )
-        setHistoryState({ key: historyKey, history: normalizedHistory })
+        setHistoryByToken((current) => ({ ...current, ...normalizedHistory }))
       })
       .catch((error: Error) => {
-        if (error.name !== 'AbortError') setHistoryState({ key: historyKey, history: {} })
+        if (error.name !== 'AbortError') setHistoryByToken((current) => current)
       })
     return () => controller.abort()
   }, [historyKey])
 
-  const currentHistory = historyState.key === historyKey ? historyState.history : {}
+  const currentHistory = historyByToken
   const allPoints = tokenIds.flatMap((tokenId) => currentHistory[tokenId] || [])
   const minT = allPoints.length ? Math.min(...allPoints.map((point) => point.t)) : 0
   const maxT = allPoints.length ? Math.max(...allPoints.map((point) => point.t)) : 1
   const hasHistory = allPoints.length > 1
-  const maxPrice = chartMaxPrice(allPoints, chartRows.map((row) => row.price))
+  const maxPrice = HISTORY_CHART_MAX_PRICE
   const ticks = chartTicks(maxPrice)
 
   return (
@@ -9007,7 +9063,7 @@ function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Ma
             d={
               outcome.tokenId && currentHistory[outcome.tokenId]?.length > 1
                 ? historyPath(currentHistory[outcome.tokenId], minT, maxT, maxPrice)
-                : outcomePath(outcome.index, outcome.price)
+                : chartPlaceholderPath(outcome.price, maxPrice)
             }
             key={outcome.id}
           />
@@ -9066,7 +9122,6 @@ function marketOutcomeRows(market: Market) {
       percent: unitPriceToPercent(yesPrice),
       bid: market.bestBid ?? yesPrice,
       ask: market.bestAsk ?? yesPrice,
-      trend: outcomeTrend(0, yesPrice),
       actions,
     }]
   }
@@ -9080,7 +9135,6 @@ function marketOutcomeRows(market: Market) {
     percent: outcome.percent,
     bid: outcome.index === 0 ? market.bestBid ?? outcome.yesPrice : outcome.yesPrice,
     ask: outcome.index === 0 ? market.bestAsk ?? outcome.yesPrice : outcome.yesPrice,
-    trend: outcomeTrend(outcome.index, outcome.price),
     actions: [{
       label: outcome.label,
       outcomeId: outcome.outcomeId ?? null,
@@ -9099,6 +9153,12 @@ function firstValidUnitPrice(...values: Array<number | null | undefined>) {
     if (typeof value === 'number' && Number.isFinite(value)) return clamp(value, 0, 1)
   }
   return null
+}
+
+function marketQuoteMeta(market: Market) {
+  if (market.lastTradePrice != null) return `Last ${formatCents(market.lastTradePrice)}`
+  if (market.syncedAt) return `Synced ${formatRelativeTime(market.syncedAt)}`
+  return copy('Current quote')
 }
 
 function MarketOrderBook({
@@ -9120,6 +9180,7 @@ function MarketOrderBook({
 }) {
   const [orderError, setOrderError] = useState<string | null>(null)
   const [marketQuery, setMarketQuery] = useState('')
+  const [settledExpanded, setSettledExpanded] = useState(false)
   const normalizedMarketQuery = marketQuery.trim().toLowerCase()
   const sortedEventMarkets = eventMarkets.length > 1
     ? [...eventMarkets].sort((a, b) => b.price - a.price || (b.volumeValue || 0) - (a.volumeValue || 0))
@@ -9147,10 +9208,13 @@ function MarketOrderBook({
             percent: item.price,
             bid: item.bestBid ?? item.price / 100,
             ask: item.bestAsk ?? item.price / 100,
-            trend: outcomeTrend(index, item.price / 100),
             actions: marketOutcomeActions(item),
           }))
       : marketOutcomeRows(market)
+  const settledOutcomeRows = outcomeRows.filter((outcome) => marketIsSettled(outcome.market))
+  const activeOutcomeRows = outcomeRows.filter((outcome) => !marketIsSettled(outcome.market))
+  const showSettledRows = settledExpanded || Boolean(normalizedMarketQuery)
+  const renderedOutcomeRows = showSettledRows ? [...activeOutcomeRows, ...settledOutcomeRows] : activeOutcomeRows
   const loadedMarketCount = eventMarkets.length > 1 ? eventMarkets.length : outcomeRows.length
   const visibleMarketCountLabel = `${outcomeRows.length}${normalizedMarketQuery ? ` / ${loadedMarketCount}` : ''}`
   const orderbookCountText = eventMarkets.length > 1
@@ -9158,10 +9222,14 @@ function MarketOrderBook({
       `${visibleMarketCountLabel} market${outcomeRows.length === 1 ? '' : 's'}${hasMoreMarkets && totalMarkets ? ` (loaded ${loadedMarketCount} / ${formatCompactCount(totalMarkets)})` : ''}`,
     )
     : copy(`${outcomeRows.length} market${outcomeRows.length === 1 ? '' : 's'}`)
-  const orderbookStatusText = market.acceptingOrders === false ? copy('Orders paused') : copy('Tradable')
+  const orderbookStatusText = marketIsTradable(market) ? copy('Tradable') : marketTradingStatusLabel(market)
   const handleOutcomeSelect = useCallback((row: typeof outcomeRows[number], action: OrderbookOutcomeAction) => {
     if (!action.outcomeId) {
       setOrderError('Selected outcome is missing an outcomeId.')
+      return
+    }
+    if (!marketIsTradable(row.market)) {
+      setOrderError('This market is settled or not accepting orders, so it cannot be traded.')
       return
     }
     setOrderError(null)
@@ -9191,17 +9259,31 @@ function MarketOrderBook({
           />
         </label>
       ) : null}
+      {settledOutcomeRows.length && !normalizedMarketQuery ? (
+        <button
+          className="orderbook-settled-toggle"
+          type="button"
+          aria-expanded={settledExpanded}
+          onClick={() => setSettledExpanded((expanded) => !expanded)}
+        >
+          {settledExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          <span>{copy(`${settledOutcomeRows.length} settled market${settledOutcomeRows.length === 1 ? '' : 's'}`)}</span>
+          <b>{settledExpanded ? copy('Hide') : copy('Show')}</b>
+        </button>
+      ) : null}
       <div className="orderbook-list">
-        {outcomeRows.length ? outcomeRows.map((outcome) => {
+        {outcomeRows.length && renderedOutcomeRows.length ? renderedOutcomeRows.map((outcome) => {
+          const tradable = marketIsTradable(outcome.market)
+          const statusLabel = marketTradingStatusLabel(outcome.market)
           return (
-            <div className="orderbook-row" key={outcome.id}>
+            <div className={marketIsSettled(outcome.market) ? 'orderbook-row settled' : 'orderbook-row'} key={outcome.id}>
               <div className="orderbook-title">
                 <b>{outcome.label}</b>
-                <span>{outcome.subtitle}</span>
+                <span>{outcome.subtitle} / {statusLabel}</span>
               </div>
               <div className="orderbook-price">
                 <strong>{formatMarketPercent(outcome.percent)}</strong>
-                <span className={outcome.trend >= 0 ? 'green-text' : 'red-text'}>{outcome.trend >= 0 ? '▲' : '▼'} {Math.abs(outcome.trend)}%</span>
+                <span>{marketQuoteMeta(outcome.market)}</span>
               </div>
               <div className="orderbook-quotes">
                 <span>Bid {formatCents(outcome.bid)}</span>
@@ -9215,20 +9297,23 @@ function MarketOrderBook({
                       'orderbook-order-button',
                       selectedOutcomeId === action.outcomeId ? 'selected' : '',
                     ].filter(Boolean).join(' ')}
-                    disabled={loading || outcome.market.acceptingOrders === false || !action.outcomeId}
+                    disabled={loading || !tradable || !action.outcomeId}
                     key={action.label}
                     type="button"
                     aria-label={copy(`Analyze ${outcome.label} ${action.label} ${formatCents(action.price)}`)}
                     aria-pressed={selectedOutcomeId === action.outcomeId}
+                    title={tradable ? undefined : statusLabel}
                     onClick={() => handleOutcomeSelect(outcome, action)}
                   >
-                    {copy('Analyze')} {action.label} <span>{formatCents(action.price)}</span>
+                    {tradable ? copy('Analyze') : statusLabel} {action.label} <span>{formatCents(action.price)}</span>
                   </button>
                 ))}
               </div>
             </div>
           )
-        }) : (
+        }) : outcomeRows.length ? (
+          <div className="orderbook-empty">{copy('Settled markets are collapsed. Use Show to view them; they cannot be traded.')}</div>
+        ) : (
           <div className="orderbook-empty">{hasMoreMarkets ? copy('No matches in the loaded markets. Try another keyword or open the original Polymarket event to confirm.') : copy('No markets match this search.')}</div>
         )}
       </div>
@@ -9242,29 +9327,6 @@ function ChartMini() {
     <svg className="mini-chart" viewBox="0 0 220 64" aria-hidden="true">
       <path d="M6 48 L28 44 L42 46 L60 38 L83 34 L105 30 L125 36 L143 22 L165 29 L188 20 L213 13" />
     </svg>
-  )
-}
-
-function RelatedMarketList({ currentMarket }: { currentMarket: Market }) {
-  const relatedMarkets = markets
-    .filter((market) => market.id !== currentMarket.id && (market.category === currentMarket.category || market.tone === currentMarket.tone))
-    .slice(0, 3)
-  const items = relatedMarkets.length ? relatedMarkets : markets.filter((market) => market.id !== currentMarket.id).slice(0, 3)
-  return (
-    <div className="related-list">
-      {items.map((market) => (
-        <div className="related-item" key={market.id}>
-          <MarketIcon market={market} size="small" />
-          <div>
-            <b>{market.title}</b>
-            <span>{copy(`Volume ${market.volume} · Traders ${market.traders}`)}</span>
-          </div>
-          <strong>{market.price}%</strong>
-          <span className={market.change > 0 ? 'green-text' : 'red-text'}>{market.change > 0 ? '+' : ''}{market.change}%</span>
-          <Star size={17} />
-        </div>
-      ))}
-    </div>
   )
 }
 

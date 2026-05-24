@@ -291,6 +291,7 @@ model PolymarketMarket {
 
   @@index([active, closed, acceptingOrders, enableOrderBook])
   @@index([active, closed, archived, staleDetectedAt])
+  @@index([eventId, archived, staleDetectedAt, closed, active, acceptingOrders, enableOrderBook, volume24hr, volume, id], map: "PolymarketMarket_event_open_volume24hr_idx")
   @@index([volume24hr])
   @@index([endDate])
   @@index([discoveredAt])
@@ -350,6 +351,7 @@ model MarketNetworkNode {
   market     PolymarketMarket @relation(fields: [marketId], references: [id], onDelete: Cascade)
 
   @@unique([marketId])
+  @@index([category, score], map: "MarketNetworkNode_category_score_idx")
   @@index([score])
 }
 
