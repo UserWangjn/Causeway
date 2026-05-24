@@ -4195,7 +4195,7 @@ function App({ showIntro = false }: AppProps) {
   const [inferenceSettings, setInferenceSettings] = useState<InferenceSettingsState>(defaultInferenceSettings)
   const [introVisible, setIntroVisible] = useState(showIntro)
   const [tradingWalletActivityItems, setTradingWalletActivityItems] = useState<TradingWalletActivityItem[]>([])
-  const activeNav = view === 'scripts' ? 'scripts' : view === 'account' ? 'account' : view === 'progress' ? 'discover' : 'network'
+  const activeNav = view === 'scripts' ? 'scripts' : view === 'account' ? 'account' : 'network'
 
   const addTradingWalletActivity = useCallback((label: string, detail: string, status: TradingWalletActivityStatus = 'pending') => {
     const id = createIdempotencyKey()
@@ -4321,7 +4321,6 @@ function Header({
 }) {
   const navItems = [
     { id: 'network', label: copy('Market Network'), view: 'network' as View },
-    { id: 'discover', label: copy('Discover'), view: 'infer' as View },
     { id: 'account', label: copy('Account'), view: 'account' as View },
     { id: 'scripts', label: copy('My Scripts'), view: 'scripts' as View },
   ]
