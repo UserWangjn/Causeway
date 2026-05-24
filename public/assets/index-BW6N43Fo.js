@@ -130,6 +130,7 @@
       <a href="#roadmap">Roadmap</a>
       <a href="#compare">Compare</a>
       <a href="#faq">FAQ</a>
+      <a href="/whitepaper.pdf">Whitepaper</a>
     </nav>
     <a class="nav-cta" href="/app">Open app -></a>
   </header>
@@ -142,7 +143,7 @@
         <p class="lead">Causeway turns a selected Polymarket outcome into an auditable causal script: related markets, outcome tokens, order previews, and human-confirmed execution.</p>
         <div class="actions">
           <a class="button primary" href="#quickstart">Get started -></a>
-          <a class="button secondary" href="#quickstart">See workflow</a>
+          <a class="button secondary" href="/whitepaper.pdf">Read whitepaper</a>
         </div>
         <div class="proof-row">
           <div><b>&lt;40ms</b><span>POLICY DECISION</span></div>
@@ -284,13 +285,13 @@
       <div class="install-line"><span>$</span> causeway infer --root-outcome &lt;tokenId&gt;<button type="button">Copy</button></div>
       <div class="actions center">
         <a class="button inverted" href="/app">Open app -></a>
-        <a class="button dark-outline" href="#quickstart">See all steps</a>
+        <a class="button dark-outline" href="/whitepaper.pdf">Read whitepaper</a>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
     <span>(c) 2026 Causeway</span>
-    <nav><a href="#roadmap">Roadmap</a><a href="#compare">Compare</a><a href="#faq">FAQ</a></nav>
+    <nav><a href="#roadmap">Roadmap</a><a href="#compare">Compare</a><a href="#faq">FAQ</a><a href="/whitepaper.pdf">Whitepaper</a></nav>
   </footer>
 `;document.querySelectorAll(".code-line button, .install-line button").forEach(e=>{e.addEventListener("click",async()=>{const a=e.parentElement.textContent.replace("Copy","").trim();try{await navigator.clipboard.writeText(a),e.textContent="Copied",setTimeout(()=>{e.textContent="Copy"},1200)}catch{e.textContent="Copy"}})});const A=[".hero-copy > *",".hero-graphic",".section-copy > *",".split-copy > *",".terminal-window",".recipe-card",".control-card",".image-point-copy > *",".logo-constellation",".roadmap-top > *",".roadmap-track",".roadmap-card",".roadmap-detail",".feature-card",".compare-top > *",".compare-table",".faq-intro > *",".faq-list",".final-cta > *"].join(",");document.querySelectorAll(A).forEach((e,a)=>{e.classList.add("reveal-item"),e.style.setProperty("--reveal-delay",`${Math.min(a%6,5)*70}ms`)});const c=()=>{document.body.classList.remove("intro-playing"),document.body.classList.add("intro-complete")};window.matchMedia("(prefers-reduced-motion: reduce)").matches?c():window.setTimeout(c,2250);const l=new IntersectionObserver(e=>{e.forEach(a=>{a.isIntersecting&&(a.target.classList.add("is-visible"),l.unobserve(a.target))})},{rootMargin:"0px 0px -12% 0px",threshold:.12});document.querySelectorAll(".reveal-item").forEach(e=>l.observe(e));

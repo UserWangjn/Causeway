@@ -24,7 +24,6 @@ import {
   Activity,
   ArrowLeft,
   ArrowRight,
-  Bell,
   Bitcoin,
   Bot,
   BrainCircuit,
@@ -3903,7 +3902,6 @@ function App({ showIntro = false }: AppProps) {
   const [inferenceSettings, setInferenceSettings] = useState<InferenceSettingsState>(defaultInferenceSettings)
   const [introVisible, setIntroVisible] = useState(showIntro)
   const [tradingWalletActivityItems, setTradingWalletActivityItems] = useState<TradingWalletActivityItem[]>([])
-  const [searchFocusRequest, setSearchFocusRequest] = useState(0)
   const activeNav = view === 'scripts' ? 'scripts' : view === 'account' ? 'account' : 'network'
 
   const addTradingWalletActivity = useCallback((label: string, detail: string, status: TradingWalletActivityStatus = 'pending') => {
@@ -3966,18 +3964,13 @@ function App({ showIntro = false }: AppProps) {
     setInferenceResult(result)
     setView('script')
   }, [])
-  const openNetworkSearch = useCallback(() => {
-    setView('network')
-    setSearchFocusRequest((request) => request + 1)
-  }, [])
-
   return (
     <TradingWalletActivityContext.Provider value={tradingWalletActivity}>
       <div className={introVisible ? 'app-shell app-intro-active' : 'app-shell'}>
         {introVisible ? <IntroLoader /> : null}
-        <Header activeNav={activeNav} auth={auth} membershipState={membershipState} onNavigate={setView} onSearch={openNetworkSearch} />
+        <Header activeNav={activeNav} auth={auth} membershipState={membershipState} onNavigate={setView} />
         <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
-          {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} searchFocusRequest={searchFocusRequest} />}
+          {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
           {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={openInferenceSettings} />}
           {view === 'infer' && <InferenceSettings auth={auth} initialSettings={inferenceSettings} market={selectedMarket} membershipState={membershipState} onBack={() => setView('detail')} onStart={startInference} />}
           {view === 'account' && <AccountPage auth={auth} />}
@@ -4026,13 +4019,11 @@ function Header({
   auth,
   membershipState,
   onNavigate,
-  onSearch,
 }: {
   activeNav: string
   auth: CausewayAuth
   membershipState: MembershipState
   onNavigate: (view: View) => void
-  onSearch: () => void
 }) {
   const navItems = [
     { id: 'network', label: copy('Market Network'), view: 'network' as View },
@@ -4064,12 +4055,6 @@ function Header({
         </div>
         <BridgeWalletControl auth={auth} />
         <div className="header-icon-group">
-          <button className="icon-button" aria-label={copy('Search')} type="button" onClick={onSearch}>
-            <Search size={19} />
-          </button>
-          <button className="icon-button has-dot" aria-label={copy('Notifications')} type="button">
-            <Bell size={19} />
-          </button>
           <AccountControls auth={auth} />
         </div>
       </div>
@@ -5920,7 +5905,7 @@ function parsePolymarketSearchUrl(value: string): ParsedMarketSearchInput | null
   }
 }
 
-function MarketNetwork({ onConfirmMarket, searchFocusRequest }: { onConfirmMarket: (market: Market) => void; searchFocusRequest: number }) {
+function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) => void }) {
   const searchAreaRef = useRef<HTMLDivElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const [activeCategory, setActiveCategory] = useState('hot')
@@ -5953,16 +5938,6 @@ function MarketNetwork({ onConfirmMarket, searchFocusRequest }: { onConfirmMarke
     [activeCategory, categories],
   )
   const searchTarget = useMemo(() => parseMarketSearchInput(searchQuery), [searchQuery])
-
-  useEffect(() => {
-    if (!searchFocusRequest) return undefined
-    const timer = window.setTimeout(() => {
-      searchInputRef.current?.focus()
-      searchInputRef.current?.select()
-      if (searchResults.length || searchTarget.query.length >= 2) setSearchOpen(true)
-    }, 0)
-    return () => window.clearTimeout(timer)
-  }, [searchFocusRequest, searchResults.length, searchTarget.query.length])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -8239,8 +8214,6 @@ function NetworkMap({
         <span><i className="dot blue" />{copy('Politics')}</span>
         <span><i className="dot green" />{copy('Macro')}</span>
         <span><i className="dot orange" />{copy('Crypto')}</span>
-        <span><i className="line solid" />{copy('Strong relation')}</span>
-        <span><i className="line dashed" />{copy('Medium relation')}</span>
       </div>
     </div>
   )
