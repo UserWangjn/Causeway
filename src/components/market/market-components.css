@@ -1,0 +1,413 @@
+.market-price-chart {
+  min-height: 380px;
+  padding: 18px 22px 12px;
+  background: #fff;
+}
+
+.market-chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 8px;
+}
+
+.market-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.chart-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #52637c;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.chart-key i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--blue);
+}
+
+.chart-key.indigo i {
+  background: #5d7cff;
+}
+
+.chart-key.amber i {
+  background: #f3b008;
+}
+
+.chart-key.orange i {
+  background: #f97316;
+}
+
+.chart-key.green i {
+  background: var(--green);
+}
+
+.chart-key.purple i {
+  background: var(--purple);
+}
+
+.chart-key b {
+  color: #06111f;
+}
+
+.chart-range-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-range-tabs button {
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  color: #637087;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.chart-range-tabs button.active {
+  color: #06111f;
+  background: #f0f3f8;
+}
+
+.market-price-chart svg {
+  width: 100%;
+  height: 390px;
+  display: block;
+}
+
+.market-chart-line {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.market-chart-line.indigo {
+  stroke: #5d7cff;
+}
+
+.market-chart-line.amber {
+  stroke: #f3b008;
+}
+
+.market-chart-line.orange {
+  stroke: #f97316;
+}
+
+.market-chart-line.green {
+  stroke: var(--green);
+}
+
+.market-chart-line.purple {
+  stroke: var(--purple);
+}
+
+.chart-last-point {
+  fill: var(--blue);
+  stroke: rgba(22, 119, 255, 0.18);
+  stroke-width: 8;
+  paint-order: stroke;
+}
+
+.chart-last-point.indigo {
+  fill: #5d7cff;
+  stroke: rgba(93, 124, 255, 0.18);
+}
+
+.chart-last-point.amber {
+  fill: #f3b008;
+  stroke: rgba(243, 176, 8, 0.18);
+}
+
+.chart-last-point.orange {
+  fill: #f97316;
+  stroke: rgba(249, 115, 22, 0.18);
+}
+
+.chart-last-point.green {
+  fill: var(--green);
+  stroke: rgba(20, 184, 122, 0.18);
+}
+
+.chart-last-point.purple {
+  fill: var(--purple);
+  stroke: rgba(124, 87, 255, 0.18);
+}
+
+.chart-watermark {
+  fill: #c6cdd8;
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.chart-axis text,
+.chart-axis {
+  fill: #7b8798;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.grid-lines path {
+  stroke: #e5edf7;
+  stroke-dasharray: 4 4;
+}
+
+.market-orderbook {
+  padding: 0 22px 22px;
+}
+
+.orderbook-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 0 10px;
+  border-top: 1px solid var(--border);
+}
+
+.orderbook-head b {
+  display: block;
+  color: #06111f;
+  font-size: 18px;
+}
+
+.orderbook-head span,
+.orderbook-meta {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.orderbook-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.orderbook-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  margin-bottom: 10px;
+  padding: 0 12px;
+  border: 1px solid #e2eaf5;
+  border-radius: 8px;
+  color: #64748b;
+  background: #fff;
+}
+
+.orderbook-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #0f172a;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.orderbook-empty {
+  padding: 22px 16px;
+  color: #64748b;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.orderbook-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #edf2f8;
+  border-radius: 8px;
+}
+
+.orderbook-settled-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  margin-bottom: 10px;
+  padding: 0 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  color: #475569;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.orderbook-settled-toggle span {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.orderbook-settled-toggle b {
+  color: #0f172a;
+}
+
+.orderbook-row {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) 130px 150px 220px;
+  align-items: center;
+  gap: 14px;
+  min-height: 76px;
+  padding: 14px 16px;
+  background: #fff;
+}
+
+.orderbook-row.settled {
+  background: #f8fafc;
+}
+
+.orderbook-row.settled .orderbook-title b,
+.orderbook-row.settled .orderbook-price strong {
+  color: #64748b;
+}
+
+.orderbook-row.settled .orderbook-actions button {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.orderbook-row + .orderbook-row {
+  border-top: 1px solid #edf2f8;
+}
+
+.orderbook-title {
+  display: grid;
+  gap: 4px;
+}
+
+.orderbook-title b {
+  color: #071327;
+  font-size: 16px;
+}
+
+.orderbook-title span,
+.orderbook-quotes {
+  color: #637087;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.orderbook-price {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.orderbook-price strong {
+  color: #06111f;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.orderbook-price span {
+  font-size: 12px;
+}
+
+.orderbook-quotes {
+  display: grid;
+  gap: 5px;
+}
+
+.orderbook-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.buy-yes,
+.buy-no {
+  min-height: 46px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 820;
+  line-height: 1.15;
+}
+
+.buy-yes span,
+.buy-no span {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.buy-yes {
+  color: #159057;
+  background: #ddf6e8;
+}
+
+.buy-no {
+  color: #ef4444;
+  background: #fde9e9;
+}
+
+.orderbook-order-button {
+  border: 1px solid transparent;
+}
+
+.orderbook-order-button.selected {
+  border-color: currentColor;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.orderbook-order-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 1080px) {
+  .orderbook-row {
+    grid-template-columns: minmax(220px, 1fr) 110px 120px 190px;
+  }
+
+  .orderbook-row .buy-yes,
+  .orderbook-row .buy-no {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .market-chart-toolbar,
+  .orderbook-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .chart-range-tabs,
+  .orderbook-meta {
+    justify-content: flex-start;
+  }
+
+  .orderbook-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .orderbook-price {
+    justify-content: flex-start;
+  }
+}
