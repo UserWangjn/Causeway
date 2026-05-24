@@ -28,6 +28,4 @@ export const arcTestnet = defineChain({
   testnet: true,
 })
 
-export const arcChain = arcTestnet
-
 export const walletChains = [supportedChain, arcTestnet] as const

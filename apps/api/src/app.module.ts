@@ -8,7 +8,6 @@ import { AiIntegrationModule } from './integrations/ai/ai-integration.module';
 import { PolymarketIntegrationModule } from './integrations/polymarket/polymarket-integration.module';
 import { RateLimitModule } from './common/rate-limit/rate-limit.module';
 import { AuditModule } from './modules/audit/audit.module';
-import { ArcProofsModule } from './modules/arc-proofs/arc-proofs.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BridgeModule } from './modules/bridge/bridge.module';
 import { HealthModule } from './modules/health/health.module';
@@ -51,7 +50,6 @@ import { WalletModule } from './modules/wallet/wallet.module';
     PortfolioModule,
     MonitorModule,
     AuditModule,
-    ArcProofsModule,
   ],
 })
 export class AppModule {}

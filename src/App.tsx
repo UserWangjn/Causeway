@@ -52,7 +52,7 @@ import {
 } from 'lucide-react'
 import { ConnectButton, useConnectModal } from '@rainbow-me/rainbowkit'
 import { useAccount, useDisconnect, useSignMessage, useSignTypedData, useSwitchChain, useWalletClient, useWriteContract } from 'wagmi'
-import { createPublicClient, erc20Abi, http } from 'viem'
+import { erc20Abi } from 'viem'
 import { MarketOrderBook, type OrderbookOutcomeAction } from './components/market/MarketOrderBook'
 import { MarketPriceChart } from './components/market/MarketPriceChart'
 import { copy } from './lib/copy'
@@ -70,7 +70,7 @@ import {
   unitPriceToPercent,
 } from './lib/market'
 import type { ApiMarketEdge, ApiMarketNode, EventDetail, EventDetailResponse, Market, MarketNetworkResponse, PriceHistoryResponse } from './types/market'
-import { arcChain, arcTestnet, supportedChain } from './wallet-config'
+import { arcTestnet, supportedChain } from './wallet-config'
 
 const CJK_TEXT_PATTERN = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/u
 
@@ -844,26 +844,6 @@ type BackendScriptListResponse = {
   hasMore: boolean
 }
 
-type ArcProofAnchor = {
-  chainId: number
-  fromAddress: string
-  txHash: string
-  traceHash: string
-  calldata: string
-  arcscanUrl: string
-  anchoredAt: string
-}
-
-type ArcProofResult = {
-  chainId: number
-  chainName: string
-  explorerBaseUrl: string
-  traceHash: string
-  calldata: string
-  capsule: Record<string, unknown>
-  anchor: ArcProofAnchor | null
-}
-
 type ScriptStatusFilter = 'all' | 'draft' | 'active' | 'archived'
 
 type InferenceDepth = 1 | 2 | 3
@@ -1011,7 +991,6 @@ type MembershipStatus = {
   capabilities: {
     premiumSignals: boolean
     fullReasoningTrace: boolean
-    arcProof: boolean
   }
   payment: MembershipPayment
   generatedAt: string
@@ -1089,7 +1068,6 @@ type EthereumProvider = {
 
 const ORDER_SUBMIT_CLIENT_VERSION = 'order-submit-v4-wallet-fallback'
 const ORDER_DEBUG_STORAGE_KEY = 'causeway.orderDebug'
-const ARC_RPC_URL = import.meta.env.VITE_ARC_RPC_URL || 'https://rpc.testnet.arc.network'
 
 type BackendMarketNetwork = {
   nodes: Array<{
@@ -3018,40 +2996,6 @@ async function fetchSavedScript(token: string, scriptId: string, signal: AbortSi
   }).then((response) => readApiData<BackendScript>(response))
 }
 
-function arcTxUrl(txHash?: string | null) {
-  return txHash ? `${arcChain.blockExplorers.default.url}/tx/${txHash}` : null
-}
-
-async function verifyArcProofTransaction(anchor: ArcProofAnchor, calldata: string) {
-  const client = createPublicClient({
-    chain: arcChain,
-    transport: http(ARC_RPC_URL),
-  })
-  const transaction = await client.getTransaction({ hash: anchor.txHash as HexString })
-  return transaction.input?.toLowerCase() === calldata.toLowerCase()
-}
-
-async function fetchArcProof(token: string, scriptId: string, signal?: AbortSignal): Promise<ArcProofResult> {
-  return fetch(`${API_PREFIX}/arc-proofs/scripts/${encodeURIComponent(scriptId)}`, {
-    signal,
-    headers: authHeaders(token),
-  }).then((response) => readApiData<ArcProofResult>(response))
-}
-
-async function completeArcProof(token: string, scriptId: string, input: {
-  txHash: string
-  chainId: number
-  fromAddress: string
-  traceHash: string
-  calldata: string
-}): Promise<ArcProofResult> {
-  return fetch(`${API_PREFIX}/arc-proofs/scripts/${encodeURIComponent(scriptId)}/complete`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    body: JSON.stringify(input),
-  }).then((response) => readApiData<ArcProofResult>(response))
-}
-
 async function loadMarketForInference(market: Market, signal: AbortSignal): Promise<Market> {
   if (marketInferenceOutcome(market)) return market
 
@@ -4116,9 +4060,6 @@ function Header({
       </nav>
       <div className="header-actions">
         <div className="header-status-group">
-          <button className="arc-audit-button" type="button" onClick={() => onNavigate('scripts')}>
-            <ShieldCheck size={16} /> Arc Proof
-          </button>
           <MembershipControl auth={auth} membershipState={membershipState} />
         </div>
         <BridgeWalletControl auth={auth} />
@@ -6244,7 +6185,6 @@ function MarketNetwork({ onConfirmMarket, searchFocusRequest }: { onConfirmMarke
           <span>{formatCompactCount(networkSummary.returned)} / {formatCompactCount(networkSummary.total)} markets</span>
         )}
         {networkSummary.hasMore ? <span>limit {formatCompactCount(networkSummary.limit)}</span> : null}
-        <span className="arc-summary-pill"><ShieldCheck size={14} /> Arc audit enabled</span>
       </div>
       <div className="network-stage">
         <NetworkMap edges={networkEdges} loading={loading} markets={networkMarkets} onConfirmMarket={onConfirmMarket} />
@@ -7169,7 +7109,6 @@ function CausalScript({
           <div className="soft-note">{copy('This is AI-generated scenario analysis based on current data and models. It is not financial advice. Markets involve risk.')}</div>
         </Card>
       </div>
-      <ArcProofPanel auth={auth} scriptId={result?.scriptId ?? null} />
       <ScriptOrderPanel auth={auth} result={result} selectedSelectionIds={selectedOrderSelectionIds} />
       <Card className="script-footer-card">
         <div className="footer-meta">
@@ -7185,158 +7124,6 @@ function CausalScript({
         </div>
       </Card>
     </section>
-  )
-}
-
-function ArcProofPanel({ auth, scriptId }: { auth: CausewayAuth; scriptId: string | null }) {
-  const { address, chainId } = useAccount()
-  const { switchChainAsync } = useSwitchChain()
-  const { data: walletClient } = useWalletClient()
-  const [proof, setProof] = useState<ArcProofResult | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [anchoring, setAnchoring] = useState(false)
-  const [verifying, setVerifying] = useState(false)
-  const [message, setMessage] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const loadProof = useCallback(async (signal?: AbortSignal) => {
-    if (!auth.accessToken || !scriptId) {
-      setProof(null)
-      return null
-    }
-    setLoading(true)
-    setError(null)
-    try {
-      const nextProof = await fetchArcProof(auth.accessToken, scriptId, signal)
-      setProof(nextProof)
-      return nextProof
-    } catch (loadError) {
-      if (!signal?.aborted) setError(errorMessage(loadError))
-      return null
-    } finally {
-      if (!signal?.aborted) setLoading(false)
-    }
-  }, [auth.accessToken, scriptId])
-
-  useEffect(() => {
-    const controller = new AbortController()
-    const timer = window.setTimeout(() => {
-      void loadProof(controller.signal)
-    }, 0)
-    return () => {
-      window.clearTimeout(timer)
-      controller.abort()
-    }
-  }, [loadProof])
-
-  const anchorProof = useCallback(async () => {
-    if (!auth.accessToken || !scriptId) {
-      setError('Sign in before anchoring a reasoning trace.')
-      return
-    }
-    if (!address || !sameAddress(address, auth.walletAddress)) {
-      setError('Connected wallet must match the signed-in wallet.')
-      return
-    }
-    setAnchoring(true)
-    setMessage(null)
-    setError(null)
-    try {
-      const currentProof = proof ?? await loadProof()
-      if (!currentProof) throw new Error('Reasoning trace proof is not ready.')
-      if (chainId !== arcChain.id) await switchChainAsync({ chainId: arcChain.id })
-      const sender = address as HexAddress
-      const client = walletClient as TypedDataWalletClient | null | undefined
-      if (!client?.sendTransaction) throw new Error('Wallet client is not ready for Arc transactions. Switch to Arc Testnet and retry.')
-      const txHash = await client.sendTransaction({
-        account: sender,
-        to: sender,
-        value: 0n,
-        data: currentProof.calldata as HexString,
-      })
-      const completed = await completeArcProof(auth.accessToken, scriptId, {
-        txHash: String(txHash),
-        chainId: arcChain.id,
-        fromAddress: sender,
-        traceHash: currentProof.traceHash,
-        calldata: currentProof.calldata,
-      })
-      setProof(completed)
-      setMessage('Reasoning trace anchored to Arc Testnet.')
-      if (chainId === supportedChain.id) switchChainAsync({ chainId: supportedChain.id }).catch(() => undefined)
-    } catch (anchorError) {
-      setError(errorMessage(anchorError))
-    } finally {
-      setAnchoring(false)
-    }
-  }, [address, auth.accessToken, auth.walletAddress, chainId, loadProof, proof, scriptId, switchChainAsync, walletClient])
-
-  const verifyProof = useCallback(async () => {
-    if (!proof?.anchor) {
-      setError('Anchor this reasoning trace before verification.')
-      return
-    }
-    setVerifying(true)
-    setError(null)
-    setMessage(null)
-    try {
-      const latestProof = auth.accessToken && scriptId ? await fetchArcProof(auth.accessToken, scriptId) : proof
-      setProof(latestProof)
-      if (!latestProof.anchor) throw new Error('No Arc anchor found for this reasoning trace.')
-      if (latestProof.anchor.traceHash.toLowerCase() !== latestProof.traceHash.toLowerCase()) {
-        throw new Error('Local reasoning trace hash does not match the anchored hash.')
-      }
-      const verified = await verifyArcProofTransaction(latestProof.anchor, latestProof.calldata)
-      if (!verified) throw new Error('Arc transaction calldata does not match this reasoning trace hash.')
-      setMessage('Verified: this reasoning trace matches the Arc transaction calldata.')
-    } catch (verifyError) {
-      setError(errorMessage(verifyError))
-    } finally {
-      setVerifying(false)
-    }
-  }, [auth.accessToken, proof, scriptId])
-
-  const txUrl = proof?.anchor?.arcscanUrl || arcTxUrl(proof?.anchor?.txHash)
-
-  return (
-    <Card className="arc-proof-card">
-      <SectionHeader title="Arc Proof" note={proof?.anchor ? 'Reasoning trace anchored' : 'Optional audit record'} />
-      <p className="body-copy">
-        Anchor the original AI reasoning trace to Arc Testnet. Polymarket trading stays on Polygon; Arc only records an audit hash.
-      </p>
-      <div className="arc-proof-grid">
-        <div>
-          <span>Trace hash</span>
-          <b>{proof?.traceHash ? shortAddress(proof.traceHash) : loading ? 'Loading...' : 'Not ready'}</b>
-        </div>
-        <div>
-          <span>Chain</span>
-          <b>{arcChain.name}</b>
-        </div>
-        <div>
-          <span>Anchor</span>
-          <b>{proof?.anchor ? shortAddress(proof.anchor.txHash) : 'Not anchored'}</b>
-        </div>
-      </div>
-      {proof?.anchor ? (
-        <div className="soft-note">Anchored at {formatDateTime(proof.anchor.anchoredAt)} by {shortAddress(proof.anchor.fromAddress)}.</div>
-      ) : null}
-      {message ? <div className="soft-note success">{message}</div> : null}
-      {error ? <div className="script-list-message error">{error}</div> : null}
-      <div className="footer-actions">
-        <button className="primary-button" type="button" disabled={!scriptId || loading || anchoring} onClick={() => void anchorProof()}>
-          <ShieldCheck size={17} /> {anchoring ? 'Anchoring...' : proof?.anchor ? 'Anchor again' : 'Anchor to Arc'}
-        </button>
-        <button className="outline-button" type="button" disabled={!proof?.anchor || verifying} onClick={() => void verifyProof()}>
-          <CheckCircle2 size={17} /> {verifying ? 'Verifying...' : 'Verify'}
-        </button>
-        {txUrl ? (
-          <a className="outline-button" href={txUrl} target="_blank" rel="noreferrer">
-            <ExternalLink size={17} /> ArcScan
-          </a>
-        ) : null}
-      </div>
-    </Card>
   )
 }
 
@@ -8227,7 +8014,6 @@ function MyScripts({
               <span>24h <b>{formatCompactMoney(item.rootVolume24hr)}</b></span>
               <span>{copy('Markets')} <b>{item.marketCount}</b></span>
             </div>
-            <span className="script-row-proof"><ShieldCheck size={15} /> Arc proof</span>
             <div className="row-actions">
               {openingScriptId === item.id ? <RotateCw size={18} /> : <ExternalLink size={18} />}
             </div>

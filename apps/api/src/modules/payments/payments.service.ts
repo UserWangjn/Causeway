@@ -12,7 +12,7 @@ import { VerifyArcPaymentIntentDto } from './dto/verify-arc-payment-intent.dto';
 
 const USDC_DECIMALS = 6;
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-const PREMIUM_FEATURE_CODES = ['premium_signal', 'full_reasoning_trace', 'arc_proof'] as const;
+const PREMIUM_FEATURE_CODES = ['premium_signal', 'full_reasoning_trace'] as const;
 const PAYMENT_BLOCK_TIME_SKEW_MS = 2 * 60 * 1000;
 const PAYMENT_EXPIRY_GRACE_MS = 30 * 60 * 1000;
 
@@ -65,7 +65,6 @@ export class PaymentsService {
       capabilities: {
         premiumSignals: Boolean(active),
         fullReasoningTrace: Boolean(active),
-        arcProof: Boolean(active),
       },
       payment: this.paymentCatalog(),
       generatedAt: new Date().toISOString(),
