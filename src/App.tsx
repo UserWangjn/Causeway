@@ -1523,12 +1523,11 @@ function useCausewayAuth(): CausewayAuth {
 
   useEffect(() => {
     if (!session) return
-    const allowedCurrentChain = chainId === session.chainId || chainId === arcChain.id
-    if (!isConnected || !sameAddress(session.walletAddress, address) || !allowedCurrentChain) {
+    if (!isConnected || !sameAddress(session.walletAddress, address)) {
       const timer = window.setTimeout(clearSession, 0)
       return () => window.clearTimeout(timer)
     }
-  }, [address, chainId, clearSession, isConnected, session])
+  }, [address, clearSession, isConnected, session])
 
   useEffect(() => {
     if (!session) return
@@ -1610,7 +1609,6 @@ function useCausewayAuth(): CausewayAuth {
     session?.accessToken
     && isConnected
     && sameAddress(session.walletAddress, address)
-    && (session.chainId === chainId || chainId === arcChain.id)
     && !isAuthSessionExpired(session),
   )
 
@@ -4078,6 +4076,7 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
 function App() {
   const auth = useCausewayAuth()
   const membershipState = useMembershipState(auth)
+  const autoSignInAttemptedRef = useRef(false)
   const [view, setView] = useState<View>('network')
   const [selectedMarket, setSelectedMarket] = useState<Market>(rootMarket)
   const [inferenceResult, setInferenceResult] = useState<InferenceResult | null>(null)
@@ -4109,6 +4108,18 @@ function App() {
     const timer = window.setTimeout(() => setIntroVisible(false), 2600)
     return () => window.clearTimeout(timer)
   }, [])
+
+  useEffect(() => {
+    if (!auth.isConnected || auth.isAuthenticated) {
+      autoSignInAttemptedRef.current = false
+      return
+    }
+    if (auth.isSigningIn || autoSignInAttemptedRef.current) return
+    autoSignInAttemptedRef.current = true
+    void auth.signIn().catch(() => {
+      // The auth hook exposes the error state; avoid repeating wallet popups after rejection.
+    })
+  }, [auth])
 
   const openMarketDetail = useCallback((market: Market) => {
     setSelectedMarket(market)
@@ -4295,6 +4306,7 @@ function MembershipControl({ auth, membershipState }: { auth: CausewayAuth; memb
     setPaymentStatus(null)
     setPaymentTxHash(null)
     setLoading(true)
+    const shouldReturnToPolygon = chainId === supportedChain.id
     try {
       if (!auth.isConnected) {
         openConnectModal?.()
@@ -4342,6 +4354,9 @@ function MembershipControl({ auth, membershipState }: { auth: CausewayAuth; memb
       setError(errorMessage(paymentError))
     } finally {
       setLoading(false)
+      if (shouldReturnToPolygon) {
+        switchChainAsync({ chainId: supportedChain.id }).catch(() => undefined)
+      }
     }
   }, [auth, chainId, completePaymentVerification, openConnectModal, switchChainAsync, writeContractAsync])
 
@@ -6102,6 +6117,8 @@ function InferenceProgress({
   result: InferenceResult | null
   settings: InferenceSettingsState
 }) {
+  const { chainId } = useAccount()
+  const { switchChainAsync } = useSwitchChain()
   const steps = [
     copy('Root selected', '已选择根节点'),
     copy('Candidate retrieval', '候选市场召回'),
@@ -6121,7 +6138,7 @@ function InferenceProgress({
     if (result?.rootMarket?.id === market.id) {
       return
     }
-    if (!auth.isAuthenticated) {
+    if (!auth.isAuthenticated && !auth.isConnected) {
       const timer = window.setTimeout(() => {
         setError(copy('Connect and sign in with your wallet before starting AI inference.', '请先连接钱包并签名登录，然后再启动 AI 推演。'))
         setLoading(false)
@@ -6132,9 +6149,20 @@ function InferenceProgress({
     const timer = window.setTimeout(() => {
       setError(null)
       setLoading(true)
-      runBackendInference(market, settings, controller.signal)
+      const run = async () => {
+        if (!auth.isAuthenticated) {
+          await auth.signIn()
+        }
+        if (controller.signal.aborted) return null
+        if (chainId !== supportedChain.id) {
+          await switchChainAsync({ chainId: supportedChain.id })
+        }
+        if (controller.signal.aborted) return null
+        return runBackendInference(market, settings, controller.signal)
+      }
+      run()
         .then((payload) => {
-          onResult(payload)
+          if (payload) onResult(payload)
         })
         .catch((fetchError: Error) => {
           if (fetchError.name !== 'AbortError') setError(fetchError.message)
@@ -6147,7 +6175,7 @@ function InferenceProgress({
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [auth.isAuthenticated, market, market.id, onResult, result?.rootMarket?.id, settings])
+  }, [auth.isAuthenticated, auth.isConnected, auth.signIn, chainId, market, market.id, onResult, result?.rootMarket?.id, settings, switchChainAsync])
 
   return (
     <section className="page">
