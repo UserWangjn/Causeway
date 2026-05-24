@@ -82,10 +82,10 @@ describe('inference engine helpers', () => {
     expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output schema is invalid');
   });
 
-  it('rejects Chinese user-visible text from provider output', () => {
+  it('rejects CJK or fullwidth user-visible text from provider output', () => {
     const promptInput = inferencePromptInput();
     const output = validInferenceOutput(promptInput);
-    output.summary = '这是中文摘要';
+    output.summary = 'Fullwidth\uff1a invalid provider output';
 
     expect(() => validateAiInferenceOutput(output, promptInput)).toThrow('AI output user-visible text must be English');
   });

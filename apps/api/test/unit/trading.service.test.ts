@@ -219,7 +219,7 @@ describe('TradingService', () => {
     });
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      const url = new URL(rawUrl);
+      new URL(rawUrl);
       const body = { nonce: '23' };
       return Promise.resolve({
         ok: true,

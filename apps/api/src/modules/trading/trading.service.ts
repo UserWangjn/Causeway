@@ -898,8 +898,8 @@ export class TradingService {
       throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Safe funding payload is stale; prepare the transfer again.');
     }
     const valid = await verifyMessage({
-      address: prepared.walletAddress as `0x${string}`,
-      message: { raw: prepared.messageHash as `0x${string}` },
+      address: prepared.walletAddress,
+      message: { raw: prepared.messageHash },
       signature: dto.signature as `0x${string}`,
     });
     if (!valid) {

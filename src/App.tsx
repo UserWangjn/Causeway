@@ -55,42 +55,8 @@ import { useAccount, useDisconnect, useSignMessage, useSignTypedData, useSwitchC
 import { createPublicClient, erc20Abi, http } from 'viem'
 import { arcChain, arcTestnet, supportedChain } from './wallet-config'
 
-type UiLocale = 'en' | 'zh'
-
-const HIDDEN_LOCALE_STORAGE_KEY = 'causeway:hidden-ui-locale'
-
-function readHiddenUiLocale(): UiLocale {
-  if (typeof window === 'undefined') return 'en'
-  if (!isHiddenLocalePreviewAllowed()) {
-    window.localStorage.removeItem(HIDDEN_LOCALE_STORAGE_KEY)
-    return 'en'
-  }
-  const params = new URLSearchParams(window.location.search)
-  const requestedLocale = params.get('__cw_locale') ?? params.get('__locale')
-  if (requestedLocale === 'zh' || requestedLocale === 'zh-CN') {
-    window.localStorage.setItem(HIDDEN_LOCALE_STORAGE_KEY, 'zh')
-    return 'zh'
-  }
-  if (requestedLocale === 'en') {
-    window.localStorage.removeItem(HIDDEN_LOCALE_STORAGE_KEY)
-    return 'en'
-  }
-  return window.localStorage.getItem(HIDDEN_LOCALE_STORAGE_KEY) === 'zh' ? 'zh' : 'en'
-}
-
-function isHiddenLocalePreviewAllowed() {
-  if (import.meta.env.DEV || import.meta.env.VITE_ENABLE_ZH_PREVIEW === 'true') return true
-  return new Set(['localhost', '127.0.0.1', '::1']).has(window.location.hostname)
-}
-
-const uiLocale = readHiddenUiLocale()
-
-function isChinesePreviewEnabled() {
-  return uiLocale === 'zh'
-}
-
-function copy(en: string, zh: string) {
-  return isChinesePreviewEnabled() ? zh : en
+function copy(en: string) {
+  return en
 }
 
 const CJK_TEXT_PATTERN = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/u
@@ -958,30 +924,6 @@ const defaultInferenceSettings: InferenceSettingsState = {
   rootOutcomeId: null,
 }
 
-type ExternalResource = {
-  id: string
-  label: string
-  description: string
-  href: string | null
-  locale?: UiLocale
-}
-
-const externalResources: ExternalResource[] = [
-  {
-    id: 'whitepaper-zh',
-    label: copy('Chinese Whitepaper', '白皮书 中文'),
-    description: copy('Chinese PDF', 'Causeway Whitepaper v1.0'),
-    href: '/Causeway_Whitepaper_v1.0_ZH.pdf',
-    locale: 'zh',
-  },
-  {
-    id: 'whitepaper-en',
-    label: 'Whitepaper EN',
-    description: 'English PDF',
-    href: '/Causeway_Whitepaper_v1.0_EN.pdf',
-  },
-]
-
 type ApiMarketCategory = {
   key: string
   label: string
@@ -1468,69 +1410,61 @@ function orderPreviewErrorText(order: OrderPreviewOrder, draft?: OrderDraftSelec
     : order.outcomeLabel || order.marketId
   const rawError = order.error || ''
   if (rawError.includes('BELOW_MIN_ORDER_SIZE')) {
-    const minimum = order.minOrderSize != null ? `${formatShares(order.minOrderSize)} shares` : copy('the market minimum', '市场最小订单数量')
+    const minimum = order.minOrderSize != null ? `${formatShares(order.minOrderSize)} shares` : copy('the market minimum')
     return copy(
       `${label} is below the minimum order size ${minimum} (current ${formatShares(order.size)} shares).`,
-      `${label} 低于最小订单数量 ${minimum}（当前 ${formatShares(order.size)} shares）。`,
     )
   }
   if (rawError.includes('INVALID_TICK_SIZE')) {
     const currentPrice = order.limitPrice != null
-      ? copy(` (current limit ${formatLimitPrice(order.limitPrice)})`, `（当前限价 ${formatLimitPrice(order.limitPrice)}）`)
+      ? copy(` (current limit ${formatLimitPrice(order.limitPrice)})`)
       : ''
     return copy(
       `${label} limit price does not match the market tick size. Minimum tick: ${formatTickSize(order.tickSize)}${currentPrice}`,
-      `${label} 限价不符合报价精度，最小变动单位 ${formatTickSize(order.tickSize)}${currentPrice}`,
     )
   }
   if (rawError.includes('ORDERBOOK_DEPTH_UNAVAILABLE')) {
     return copy(
       `${label} has insufficient order book depth for this amount. Reduce size or use a limit order.`,
-      `${label} 盘口深度不足，当前金额无法完全成交，请降低金额或改用限价`,
     )
   }
   if (rawError.includes('ORDERBOOK_UNAVAILABLE')) {
     return copy(
       `${label} order book is temporarily unavailable. Refresh market data and try again.`,
-      `${label} 盘口暂不可用，请等待市场数据刷新后重试`,
     )
   }
   if (rawError.includes('MARKET_NOT_TRADABLE')) {
     if (order.orderBookStatusCode === 404 || order.orderBookError === 'not_found') {
       return copy(
         `${label} official order book is closed or delisted, so orders cannot be placed.`,
-        `${label} 官方盘口已关闭或已下架，不能下单`,
       )
     }
     return copy(
       `${label} is not tradable right now. It may be closed, paused, or not accepting orders.`,
-      `${label} 市场暂不可交易，可能已关闭、暂停接单或盘口未开放`,
     )
   }
   if (rawError.includes('REQUEST_VALIDATION_FAILED')) {
     if (order.orderMode === 'limit' && order.limitPrice == null) {
-      return copy(`${label} limit order is missing a limit price.`, `${label} 限价单缺少限价`)
+      return copy(`${label} limit order is missing a limit price.`)
     }
     return copy(
       `${label} has an invalid amount, size, or limit price. Please correct it and try again.`,
-      `${label} 金额、数量或限价不合法，请修正后重试`,
     )
   }
   return rawError
-    ? copy(`${label} has invalid order parameters: ${rawError}`, `${label} 下单参数无效：${rawError}`)
+    ? copy(`${label} has invalid order parameters: ${rawError}`)
     : copy(
       `${label} has invalid order parameters. Please correct amount, size, limit price, or market status.`,
-      `${label} 下单参数无效，请修正金额、数量、限价或盘口状态`,
     )
 }
 
 function orderPreviewWarningText(warnings: string[]) {
-  if (warnings.length === 0) return copy('Ready to submit', '可提交')
+  if (warnings.length === 0) return copy('Ready to submit')
   return warnings.map((warning) => {
-    if (warning.includes('MARKET_ORDER_ESTIMATE_CAN_CHANGE')) return copy('Market order execution price may change with the book.', '市价单成交价格会随盘口变化')
-    if (warning.includes('ORDERBOOK_REFRESH_UNAVAILABLE_USING_LOCAL_CACHE')) return copy('Order book refresh failed; using local cached estimate.', '盘口刷新失败，使用本地缓存估算')
+    if (warning.includes('MARKET_ORDER_ESTIMATE_CAN_CHANGE')) return copy('Market order execution price may change with the book.')
+    if (warning.includes('ORDERBOOK_REFRESH_UNAVAILABLE_USING_LOCAL_CACHE')) return copy('Order book refresh failed; using local cached estimate.')
     return warning
-  }).join(copy(', ', '、'))
+  }).join(copy(', '))
 }
 
 function realOrderConfirmationText(preview: OrderPreview) {
@@ -1553,7 +1487,7 @@ function realOrderConfirmationText(preview: OrderPreview) {
 }
 
 function formatTickSize(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return copy('market requirement', '市场要求')
+  if (value == null || !Number.isFinite(value)) return copy('market requirement')
   return `$${value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`
 }
 
@@ -2085,7 +2019,7 @@ async function signRawHashWithFallback(input: {
   walletClient?: TypedDataWalletClient | null
 }) {
   if (!isHexString(input.messageHash)) {
-    throw new Error(copy('Relayer signature message is not valid hex.', 'Relayer 签名消息不是有效 hex。'))
+    throw new Error(copy('Relayer signature message is not valid hex.'))
   }
   const attempts: string[] = []
   const message = { raw: input.messageHash } as { raw: HexString }
@@ -2144,10 +2078,10 @@ function assertSignedOrderPayloads(value: Array<{ orderId: string; signature: un
     const orderId = item.orderId.trim()
     const signature = normalizeSignatureValue(item.signature)
     if (!orderId) {
-      throw new Error(copy(`Order ${index + 1} is missing orderId, so the signature cannot be submitted.`, `第 ${index + 1} 笔订单缺少 orderId，无法提交签名。`))
+      throw new Error(copy(`Order ${index + 1} is missing orderId, so the signature cannot be submitted.`))
     }
     if (!isHexSignature(signature)) {
-      throw new Error(copy(`Order ${index + 1} has an invalid signature. Please sign again before submitting.`, `第 ${index + 1} 笔订单签名无效，请重新签名后提交。`))
+      throw new Error(copy(`Order ${index + 1} has an invalid signature. Please sign again before submitting.`))
     }
     return { orderId, signature }
   })
@@ -2161,7 +2095,6 @@ function validatedSignedOrdersForSubmit(
   if (value.length !== preview.orders.length) {
     throw new Error(copy(
       `Order signature count mismatch: expected ${preview.orders.length}, received ${value.length}. Please preview and sign again.`,
-      `订单签名数量不一致：需要 ${preview.orders.length} 笔，实际 ${value.length} 笔。请重新预览并签名。`,
     ))
   }
   return assertSignedOrderPayloads(value)
@@ -2179,7 +2112,7 @@ function orderSubmitPayload(
 
   const invalidSignedOrder = normalizedSignedOrders.find((order) => !order.orderId || !isHexSignature(order.signature))
   if (invalidSignedOrder) {
-    throw new Error(copy('The order signature payload is invalid. Please preview, sign, and submit again.', '订单签名提交体无效，请重新预览并签名后再提交。'))
+    throw new Error(copy('The order signature payload is invalid. Please preview, sign, and submit again.'))
   }
 
   const body = {
@@ -2190,7 +2123,7 @@ function orderSubmitPayload(
   }
   const bodyText = JSON.stringify(body)
   if (bodyText.includes('"signedOrders":[[]]') || bodyText.includes('"signedOrders":[[')) {
-    throw new Error(copy('The order signature payload was serialized incorrectly. Refresh the page and sign again.', '订单签名提交体被异常序列化为空数组，请刷新页面后重新签名。'))
+    throw new Error(copy('The order signature payload was serialized incorrectly. Refresh the page and sign again.'))
   }
   const signedOrdersShape = normalizedSignedOrders.map((order) => `object:${order.orderId}:${order.signature.length}`).join('|')
   orderDebugLog('order_submit_payload_built', {
@@ -2314,12 +2247,12 @@ function scriptMarketTradable(market: Pick<BackendScript['markets'][number], 'ac
 }
 
 function scriptMarketStatusLabel(market: Pick<BackendScript['markets'][number], 'active' | 'closed' | 'archived' | 'staleDetectedAt' | 'acceptingOrders' | 'enableOrderBook'>) {
-  if (market.closed) return copy('Market closed', '市场已关闭')
-  if (market.archived) return copy('Market archived', '市场已归档')
-  if (market.staleDetectedAt) return copy('Market data is stale', '市场数据已过期')
-  if (market.active === false) return copy('Market inactive', '市场未激活')
-  if (market.acceptingOrders === false) return copy('Orders paused', '暂停接单')
-  if (market.enableOrderBook === false) return copy('Order book unavailable', '盘口未开放')
+  if (market.closed) return copy('Market closed')
+  if (market.archived) return copy('Market archived')
+  if (market.staleDetectedAt) return copy('Market data is stale')
+  if (market.active === false) return copy('Market inactive')
+  if (market.acceptingOrders === false) return copy('Orders paused')
+  if (market.enableOrderBook === false) return copy('Order book unavailable')
   return null
 }
 
@@ -2348,12 +2281,12 @@ function parseDraftNumber(value: string): number | null {
 }
 
 function formatUsd(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return copy('Pending', '待计算')
+  if (value == null || Number.isNaN(value)) return copy('Pending')
   return `$${value.toFixed(value >= 100 ? 0 : 2)}`
 }
 
 function formatShares(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return copy('Pending', '待计算')
+  if (value == null || Number.isNaN(value)) return copy('Pending')
   if (value >= 100) return value.toFixed(0)
   if (value >= 1) return value.toFixed(2)
   return value.toFixed(4)
@@ -2435,15 +2368,13 @@ function scriptOrderChains(script: BackendScript, rootMarketId: string): Inferen
       const direction = normalizeInferenceDirection(scriptMarket.impactDirection)
       return {
         id: scriptMarket.scriptMarketId || `script_market_${scriptMarket.marketId}_${index}`,
-        title: copy(`${inferenceLayerLabel(scriptMarket.layer)}: ${trimNodeTitle(scriptMarket.title, 30)}`, `${inferenceLayerLabel(scriptMarket.layer)}：${trimNodeTitle(scriptMarket.title, 30)}`),
+        title: copy(`${inferenceLayerLabel(scriptMarket.layer)}: ${trimNodeTitle(scriptMarket.title, 30)}`),
         summary: scriptMarket.reason || buyOutcomes[0]?.reason || copy(
           'AI included this market in a tradable causal path. Review the live order book before submitting.',
-          'AI 将该市场纳入可交易因果链，提交前仍需要复核实时盘口。',
         ),
         confidence: scriptMarket.confidence ?? 0.5,
         expectedReturnHint: copy(
           'Executable selections are ready. Confirm amount, size, and limit price in the order draft below.',
-          '已生成可执行 selection，可在下方订单草稿中确认金额、数量和限价。',
         ),
         legs: buyOutcomes.map((outcome) => {
           return {
@@ -2455,7 +2386,7 @@ function scriptOrderChains(script: BackendScript, rootMarketId: string): Inferen
             direction,
             impact: inferenceImpactSummary(scriptMarket.impactDirection),
             confidence: outcome.confidence ?? scriptMarket.confidence ?? 0.5,
-            rationale: outcome.reason || scriptMarket.reason || copy('AI recommends buying this outcome.', 'AI 推荐买入该 outcome。'),
+            rationale: outcome.reason || scriptMarket.reason || copy('AI recommends buying this outcome.'),
             orderHint: `Buy ${outcome.label}`,
           }
         }),
@@ -2944,7 +2875,7 @@ async function sleepWithAbort(ms: number, signal: AbortSignal) {
 async function runBackendInference(market: Market, settings: InferenceSettingsState, signal: AbortSignal): Promise<InferenceResult> {
   const token = getAccessToken()
   if (!token) {
-    throw new Error(copy('Sign in with your wallet before starting AI inference.', '需要先完成钱包登录，前端拿到 Bearer Token 后才能启动正式 AI 推演。'))
+    throw new Error(copy('Sign in with your wallet before starting AI inference.'))
   }
   const inferenceMarket = await loadMarketForInference(market, signal)
   const rootOutcome =
@@ -2952,7 +2883,7 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
     ?? marketInferenceOutcome(inferenceMarket)
   const rootOutcomeId = rootOutcome?.outcomeId
   if (!rootOutcomeId) {
-    throw new Error(copy('This market is missing outcomeId data. Wait for market details to finish loading before starting inference.', '当前市场缺少 outcomeId，请等待市场详情加载完成后再启动推演。'))
+    throw new Error(copy('This market is missing outcomeId data. Wait for market details to finish loading before starting inference.'))
   }
 
   const createRun = await fetch(`${API_PREFIX}/inference-runs`, {
@@ -2994,7 +2925,7 @@ async function runBackendInference(market: Market, settings: InferenceSettingsSt
   }
 
   if (!status.scriptId) {
-    throw new Error(copy('AI inference was created, but the script is not ready yet. Refresh again shortly.', 'AI 推演已创建，但脚本尚未生成，请稍后刷新。'))
+    throw new Error(copy('AI inference was created, but the script is not ready yet. Refresh again shortly.'))
   }
 
   const script = await fetch(`${API_PREFIX}/scripts/${status.scriptId}`, {
@@ -3151,7 +3082,7 @@ function scriptListItemMarket(item: BackendScriptListItem, index = 0): Market {
     volume: formatCompactMoney(item.rootVolume),
     volumeValue: item.rootVolume,
     liquidity: item.rootLiquidity,
-    traders: item.rootVolume24hr == null ? copy('24h no data', '24h 暂无数据') : `24h ${formatCompactMoney(item.rootVolume24hr)}`,
+    traders: item.rootVolume24hr == null ? copy('24h no data') : `24h ${formatCompactMoney(item.rootVolume24hr)}`,
     outcomes: item.rootOutcomeLabel
       ? [{ outcomeId: item.rootOutcomeId, label: item.rootOutcomeLabel, price: item.rootPrice, tokenId: null }]
       : [],
@@ -3191,7 +3122,7 @@ function scriptRootMarket(script: BackendScript, fallback?: BackendScriptListIte
     volume: formatCompactMoney(volume),
     volumeValue: volume,
     liquidity,
-    traders: volume24hr == null ? copy('24h no data', '24h 暂无数据') : `24h ${formatCompactMoney(volume24hr)}`,
+    traders: volume24hr == null ? copy('24h no data') : `24h ${formatCompactMoney(volume24hr)}`,
     bestAsk: rootScriptMarket?.bestAsk ?? null,
     lastTradePrice: rootScriptMarket?.lastTradePrice ?? null,
     orderMinSize: rootScriptMarket?.orderMinSize ?? null,
@@ -3209,9 +3140,9 @@ function scriptRootMarket(script: BackendScript, fallback?: BackendScriptListIte
 }
 
 function scriptStatusLabel(status: string) {
-  if (status === 'active') return copy('Submitted', '已提交')
-  if (status === 'archived') return copy('Archived', '已归档')
-  if (status === 'draft') return copy('Draft', '草稿')
+  if (status === 'active') return copy('Submitted')
+  if (status === 'archived') return copy('Archived')
+  if (status === 'draft') return copy('Draft')
   return status
 }
 
@@ -3277,9 +3208,9 @@ function scriptToInferenceResult(script: BackendScript, run: BackendInferenceSta
     relatedMarkets,
     orderCandidates,
     logs: [
-      copy('Backend inference run created.', '已创建后端 inference-runs 任务。'),
-      copy(`Run status: ${run.status}, progress: ${run.progress}%.`, `任务状态：${run.status}，进度：${run.progress}%。`),
-      copy('Generated causal script loaded.', '已读取生成的 causal script。'),
+      copy('Backend inference run created.'),
+      copy(`Run status: ${run.status}, progress: ${run.progress}%.`),
+      copy('Generated causal script loaded.'),
     ],
     generatedAt: run.completedAt || script.updatedAt,
   }
@@ -3311,13 +3242,13 @@ type HoverPlacement = 'right' | 'left' | 'bottom' | 'top'
 
 const rootMarket: Market = {
   id: 'empty-market-selection',
-  title: copy('Select a Polymarket market', '请选择一个真实 Polymarket 市场'),
+  title: copy('Select a Polymarket market'),
   category: 'Polymarket',
   icon: 'globe',
   price: 0,
   change: 0,
-  volume: copy('No data', '暂无数据'),
-  traders: copy('No data', '暂无数据'),
+  volume: copy('No data'),
+  traders: copy('No data'),
   x: 48,
   y: 46,
   tone: 'purple',
@@ -3326,22 +3257,12 @@ const rootMarket: Market = {
 const markets: Market[] = []
 
 const categoryTones: Record<string, Market['tone']> = {
-  政治: 'blue',
   politics: 'blue',
-  宏观: 'green',
-  宏观经济: 'green',
   macro: 'green',
-  加密: 'orange',
-  加密货币: 'orange',
   crypto: 'orange',
-  科技: 'cyan',
   tech: 'cyan',
-  体育: 'purple',
   sports: 'purple',
-  文化: 'purple',
-  娱乐: 'purple',
   entertainment: 'purple',
-  其他: 'purple',
   other: 'purple',
 }
 
@@ -3358,7 +3279,7 @@ function orderVisibleMarketCategories(categories: ApiMarketCategory[]) {
 }
 
 function formatCompactMoney(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return copy('No data', '暂无数据')
+  if (value == null || Number.isNaN(value)) return copy('No data')
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(1)}B`
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`
@@ -3373,17 +3294,17 @@ function formatCompactCount(value: number | null | undefined) {
 }
 
 function formatDate(value: string | null | undefined) {
-  if (!value) return copy('Not provided', '未提供')
+  if (!value) return copy('Not provided')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString(isChinesePreviewEnabled() ? 'zh-CN' : 'en-US', { year: 'numeric', month: '2-digit', day: '2-digit' })
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
 function formatDateTime(value: string | null | undefined) {
-  if (!value) return copy('Not provided', '未提供')
+  if (!value) return copy('Not provided')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString(isChinesePreviewEnabled() ? 'zh-CN' : 'en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function formatProbability(value: number | null | undefined) {
@@ -3391,14 +3312,14 @@ function formatProbability(value: number | null | undefined) {
 }
 
 function formatMarketPercent(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return copy('No price', '暂无价格')
+  if (value == null || Number.isNaN(value)) return copy('No price')
   if (value > 0 && value < 1) return '<1%'
   if (value % 1 === 0) return `${value}%`
   return `${value.toFixed(1)}%`
 }
 
 function formatConfidence(value: number | null | undefined) {
-  if (value == null || Number.isNaN(value)) return copy('N/A', '暂无')
+  if (value == null || Number.isNaN(value)) return copy('N/A')
   return `${Math.round(value * 100)}%`
 }
 
@@ -3412,34 +3333,34 @@ function normalizeInferenceDirection(value: string | null | undefined) {
 
 function directionLabel(value: string | null | undefined) {
   const normalized = (value || '').toLowerCase()
-  if (['supports', 'support'].includes(normalized)) return copy('Supports', '正向支持')
-  if (['causes', 'cause'].includes(normalized)) return copy('Causal impact', '因果影响')
-  if (['opposes', 'oppose', 'contradicts', 'contradict'].includes(normalized)) return copy('Opposes', '反向影响')
-  if (['hedges', 'hedge'].includes(normalized)) return copy('Hedge', '对冲影响')
-  if (['correlates', 'correlate'].includes(normalized)) return copy('Correlated', '相关影响')
-  if (['unclear', 'unknown'].includes(normalized)) return copy('Unclear impact', '影响不明确')
-  if (normalized === 'positive') return copy('Positive', '正向')
-  if (normalized === 'negative') return copy('Negative', '反向')
-  if (normalized === 'conditional') return copy('Conditional', '条件影响')
-  return copy('Unclear impact', '影响不明确')
+  if (['supports', 'support'].includes(normalized)) return copy('Supports')
+  if (['causes', 'cause'].includes(normalized)) return copy('Causal impact')
+  if (['opposes', 'oppose', 'contradicts', 'contradict'].includes(normalized)) return copy('Opposes')
+  if (['hedges', 'hedge'].includes(normalized)) return copy('Hedge')
+  if (['correlates', 'correlate'].includes(normalized)) return copy('Correlated')
+  if (['unclear', 'unknown'].includes(normalized)) return copy('Unclear impact')
+  if (normalized === 'positive') return copy('Positive')
+  if (normalized === 'negative') return copy('Negative')
+  if (normalized === 'conditional') return copy('Conditional')
+  return copy('Unclear impact')
 }
 
 function inferenceLayerLabel(layer: number | null | undefined) {
-  if (layer == null || !Number.isFinite(layer)) return copy('Related market', '关联市场')
-  if (layer <= 0) return copy('Root market', '核心市场')
-  if (layer === 1) return copy('Layer 1 link', '一级联动')
-  if (layer === 2) return copy('Layer 2 link', '二级联动')
-  if (layer === 3) return copy('Layer 3 link', '三级联动')
-  return copy(`Layer ${layer} link`, `第 ${layer} 层联动`)
+  if (layer == null || !Number.isFinite(layer)) return copy('Related market')
+  if (layer <= 0) return copy('Root market')
+  if (layer === 1) return copy('Layer 1 link')
+  if (layer === 2) return copy('Layer 2 link')
+  if (layer === 3) return copy('Layer 3 link')
+  return copy(`Layer ${layer} link`)
 }
 
 function inferenceImpactSummary(direction: string | null | undefined) {
   const normalized = (direction || '').toLowerCase()
-  if (['supports', 'support', 'positive', 'causes', 'cause'].includes(normalized)) return copy('Raises the target outcome probability', '提高目标结果概率')
-  if (['opposes', 'oppose', 'negative', 'contradicts', 'contradict'].includes(normalized)) return copy('Lowers the target outcome probability', '压低目标结果概率')
-  if (['hedges', 'hedge'].includes(normalized)) return copy('Hedges root-market risk', '用于对冲根市场风险')
-  if (['correlates', 'correlate', 'conditional'].includes(normalized)) return copy('Correlation requires condition review', '相关性需结合条件复核')
-  return copy('Impact direction is unclear', '影响方向不明确')
+  if (['supports', 'support', 'positive', 'causes', 'cause'].includes(normalized)) return copy('Raises the target outcome probability')
+  if (['opposes', 'oppose', 'negative', 'contradicts', 'contradict'].includes(normalized)) return copy('Lowers the target outcome probability')
+  if (['hedges', 'hedge'].includes(normalized)) return copy('Hedges root-market risk')
+  if (['correlates', 'correlate', 'conditional'].includes(normalized)) return copy('Correlation requires condition review')
+  return copy('Impact direction is unclear')
 }
 
 function defaultOrderHintForDirection(direction: string | null | undefined) {
@@ -3457,22 +3378,22 @@ function scriptMarketPricePercent(scriptMarket: BackendScript['markets'][number]
 
 function scriptMarketVolumeLabel(scriptMarket: BackendScript['markets'][number]) {
   const volume = scriptMarket.volume24hr ?? scriptMarket.volume
-  return volume == null || Number.isNaN(volume) ? copy('No volume', '暂无成交量') : formatCompactMoney(volume)
+  return volume == null || Number.isNaN(volume) ? copy('No volume') : formatCompactMoney(volume)
 }
 
 function marketSubtitle(market: Market) {
   return [market.category, market.eventTitle, market.officialCategory || market.tags?.[0]]
     .filter(Boolean)
     .slice(0, 3)
-    .join(' · ') || copy('Polymarket market', 'Polymarket 市场')
+    .join(' · ') || copy('Polymarket market')
 }
 
 function marketRuleCopy(market: Market) {
-  return market.rules?.trim() || market.description?.trim() || copy('Polymarket has not provided detailed rules for this market.', 'Polymarket 未提供详细规则说明。')
+  return market.rules?.trim() || market.description?.trim() || copy('Polymarket has not provided detailed rules for this market.')
 }
 
 function marketDescriptionCopy(market: Market) {
-  return market.description?.trim() || market.rules?.trim() || copy('This market comes from Polymarket. No additional description is currently available.', '该市场来自 Polymarket，当前没有额外描述。')
+  return market.description?.trim() || market.rules?.trim() || copy('This market comes from Polymarket. No additional description is currently available.')
 }
 
 function marketInferenceOutcome(market: Market): MarketOutcome | null {
@@ -3491,11 +3412,11 @@ function unitPriceToPercent(price: number | null | undefined) {
 
 function formatUnitPercent(price: number | null | undefined) {
   const percent = unitPriceToPercent(price)
-  return percent == null ? copy('No price', '暂无价格') : `${percent}%`
+  return percent == null ? copy('No price') : `${percent}%`
 }
 
 function formatCents(price: number | null | undefined) {
-  if (price == null || Number.isNaN(price)) return copy('No quote', '暂无报价')
+  if (price == null || Number.isNaN(price)) return copy('No quote')
   const cents = clamp(price, 0, 1) * 100
   const precision = cents < 1 || cents > 99 || cents % 1 ? 1 : 0
   return `${cents.toFixed(precision)}¢`
@@ -3596,7 +3517,7 @@ function compactHistory(points: PricePoint[]) {
 }
 
 function formatToken(tokenId: string | null | undefined) {
-  if (!tokenId) return copy('Not provided', '未提供')
+  if (!tokenId) return copy('Not provided')
   return `${tokenId.slice(0, 6)}...${tokenId.slice(-6)}`
 }
 
@@ -4089,7 +4010,7 @@ function buildMarketFlowGraph(
 }
 
 function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
-  const category = node.category || copy('Other', '其他')
+  const category = node.category || copy('Other')
   const categoryKey = node.categoryKey || category
   const price = node.price == null ? 0 : Math.round(node.price <= 1 ? node.price * 100 : node.price)
   return {
@@ -4103,11 +4024,11 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
     categoryKey,
     officialCategory: node.officialCategory,
     tags: node.tags || [],
-    icon: categoryKey === 'crypto' || category === '加密' || category === '加密货币'
+    icon: categoryKey === 'crypto'
       ? 'bitcoin'
-      : categoryKey === 'tech' || category === '科技'
+      : categoryKey === 'tech'
         ? 'cpu'
-        : categoryKey === 'macro' || category === '宏观'
+        : categoryKey === 'macro'
           ? 'bank'
           : 'landmark',
     iconUrl: node.icon || node.image,
@@ -4132,7 +4053,7 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
     volume: formatCompactMoney(node.volume),
     volumeValue: node.volume,
     liquidity: node.liquidity,
-    traders: node.volume24hr ? formatCompactMoney(node.volume24hr) : copy('24h no data', '24h 暂无数据'),
+    traders: node.volume24hr ? formatCompactMoney(node.volume24hr) : copy('24h no data'),
     x: node.x ?? 50,
     y: node.y ?? 50,
     tone: categoryTones[categoryKey] || categoryTones[category] || (index % 5 === 0 ? 'purple' : index % 3 === 0 ? 'orange' : index % 2 === 0 ? 'green' : 'blue'),
@@ -4176,7 +4097,6 @@ function App({ showIntro = false }: AppProps) {
 
   useEffect(() => {
     if (!showIntro) {
-      setIntroVisible(false)
       return undefined
     }
     const timer = window.setTimeout(() => setIntroVisible(false), 2600)
@@ -4278,10 +4198,10 @@ function Header({
   onNavigate: (view: View) => void
 }) {
   const navItems = [
-    { id: 'network', label: copy('Market Network', '市场网络'), view: 'network' as View },
-    { id: 'discover', label: copy('Discover', '发现'), view: 'infer' as View },
-    { id: 'monitor', label: copy('Monitor', '监控'), view: 'progress' as View },
-    { id: 'scripts', label: copy('My Scripts', '我的脚本'), view: 'scripts' as View },
+    { id: 'network', label: copy('Market Network'), view: 'network' as View },
+    { id: 'discover', label: copy('Discover'), view: 'infer' as View },
+    { id: 'monitor', label: copy('Monitor'), view: 'progress' as View },
+    { id: 'scripts', label: copy('My Scripts'), view: 'scripts' as View },
   ]
 
   return (
@@ -4303,16 +4223,15 @@ function Header({
         ))}
       </nav>
       <div className="header-actions">
-        <ResourceMenu />
         <button className="arc-audit-button" type="button" onClick={() => onNavigate('scripts')}>
           <ShieldCheck size={16} /> Arc Proof
         </button>
         <MembershipControl auth={auth} membershipState={membershipState} />
         <BridgeWalletControl auth={auth} />
-        <button className="icon-button" aria-label={copy('Search', '搜索')} type="button">
+        <button className="icon-button" aria-label={copy('Search')} type="button">
           <Search size={20} />
         </button>
-        <button className="icon-button has-dot" aria-label={copy('Notifications', '通知')} type="button">
+        <button className="icon-button has-dot" aria-label={copy('Notifications')} type="button">
           <Bell size={20} />
         </button>
         <AccountControls auth={auth} />
@@ -4723,11 +4642,11 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   const [quickSetupLogs, setQuickSetupLogs] = useState<string[]>([])
 
   const ensureTradingToken = useCallback(async () => {
-    if (!auth.isConnected) throw new Error(copy('Connect your wallet first.', '请先连接钱包。'))
+    if (!auth.isConnected) throw new Error(copy('Connect your wallet first.'))
     if (!auth.isAuthenticated) await auth.signIn()
     const session = readStoredAuthSession()
     const token = session?.accessToken ?? auth.accessToken
-    if (!token) throw new Error(copy('Wallet authentication is not complete. Sign in with your wallet first.', '钱包认证尚未完成，请先签名登录。'))
+    if (!token) throw new Error(copy('Wallet authentication is not complete. Sign in with your wallet first.'))
     return token
   }, [auth])
 
@@ -4864,15 +4783,15 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     const walletAddress = readStoredAuthSession()?.walletAddress ?? auth.walletAddress
     const asset = supportedAssets.find((item) => assetOptionKey(item) === withdrawAssetKey)
     if (!amountUsd) {
-      setBridgeError(copy('Enter a valid withdrawal amount.', '请输入有效的提现金额。'))
+      setBridgeError(copy('Enter a valid withdrawal amount.'))
       return
     }
     if (!asset) {
-      setBridgeError(copy('Select the receiving chain and token.', '请选择接收链和接收代币。'))
+      setBridgeError(copy('Select the receiving chain and token.'))
       return
     }
     if (!withdrawRecipient.trim()) {
-      setBridgeError(copy('Enter a recipient address.', '请输入收款地址。'))
+      setBridgeError(copy('Enter a recipient address.'))
       return
     }
     if (withdrawAvailable != null && amountUsd > withdrawAvailable + Number.EPSILON) {
@@ -4880,7 +4799,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       return
     }
     if (!walletAddress) {
-      setBridgeError(copy('Connected wallet address is missing. Sign in again.', '缺少已连接的钱包地址，请重新登录。'))
+      setBridgeError(copy('Connected wallet address is missing. Sign in again.'))
       return
     }
     setIsLoadingBridge(true)
@@ -5119,8 +5038,8 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
             <div className="wallet-modal bridge-wallet-modal" role="dialog" aria-modal="true" aria-label="Wallet funds" onMouseDown={(event) => event.stopPropagation()}>
               <div className="wallet-modal-head">
                 <div>
-                  <span><WalletCards size={18} /> {copy('Wallet Funds', '钱包资金')}</span>
-                  <small>{copy('Manage deposit, withdrawal, and trading wallet setup for Polymarket orders.', '管理 Polymarket 下单所需的充值、提现和交易钱包准备。')}</small>
+                  <span><WalletCards size={18} /> {copy('Wallet Funds')}</span>
+                  <small>{copy('Manage deposit, withdrawal, and trading wallet setup for Polymarket orders.')}</small>
                 </div>
                 <button className="modal-close-button" type="button" onClick={() => setWalletOpen(false)}>×</button>
               </div>
@@ -5134,9 +5053,9 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               {bridgeError ? <div className="status-note error wallet-status-note">{bridgeError}</div> : null}
 
               <div className="bridge-wallet-tabs">
-                <button className={walletTab === 'deposit' ? 'active' : ''} type="button" onClick={() => setWalletTab('deposit')}>{copy('Deposit', '充值')}</button>
-                <button className={walletTab === 'withdraw' ? 'active' : ''} type="button" onClick={() => setWalletTab('withdraw')}>{copy('Withdraw', '提现')}</button>
-                <button className={walletTab === 'trade' ? 'active' : ''} type="button" onClick={() => setWalletTab('trade')}>{copy('Trading Setup', '交易准备')}</button>
+                <button className={walletTab === 'deposit' ? 'active' : ''} type="button" onClick={() => setWalletTab('deposit')}>{copy('Deposit')}</button>
+                <button className={walletTab === 'withdraw' ? 'active' : ''} type="button" onClick={() => setWalletTab('withdraw')}>{copy('Withdraw')}</button>
+                <button className={walletTab === 'trade' ? 'active' : ''} type="button" onClick={() => setWalletTab('trade')}>{copy('Trading Setup')}</button>
               </div>
 
               {walletTab === 'deposit' ? (
@@ -5179,14 +5098,14 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                     </div>
                   ) : null}
                   <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected} type="button" onClick={() => void handleCreateDeposit()}>
-                    {isLoadingBridge ? copy('Loading...', '加载中...') : bridgeDeposit ? copy('Refresh Deposit Address', '刷新充值地址') : copy('Load Official Deposit Address', '加载官方充值地址')}
+                    {isLoadingBridge ? copy('Loading...') : bridgeDeposit ? copy('Refresh Deposit Address') : copy('Load Official Deposit Address')}
                   </button>
                   <div className="bridge-single-address">
                     <span>Your Deposit Address</span>
-                    <b>{selectedDepositAddress ?? copy('No address generated yet.', '还没有生成地址。')}</b>
+                    <b>{selectedDepositAddress ?? copy('No address generated yet.')}</b>
                     <button className="outline-button" disabled={!selectedDepositAddress} type="button" onClick={() => void handleCopy(selectedDepositAddress)}>
                       <Copy size={15} />
-                      {copiedAddress === selectedDepositAddress ? copy('Copied', '已复制') : 'Copy Address'}
+                      {copiedAddress === selectedDepositAddress ? copy('Copied') : 'Copy Address'}
                     </button>
                     <button className="outline-button" disabled={!selectedDepositAddress} type="button" onClick={() => void handleCheckStatus(selectedDepositAddress)}>
                       <Activity size={15} />
@@ -5234,24 +5153,24 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                     </label>
                   </div>
                   <label className="bridge-field">
-                    <span>{copy('Transfer Amount (USD)', '转账金额（美元）')}</span>
+                    <span>{copy('Transfer Amount (USD)')}</span>
                     <div className="bridge-input-action">
                       <input className="bridge-input" inputMode="decimal" value={withdrawAmount} onChange={(event) => setWithdrawAmount(event.target.value)} placeholder="0.00" />
                       <button disabled={withdrawAvailable == null} type="button" onClick={() => setWithdrawAmount(withdrawAvailable != null ? withdrawAvailable.toFixed(2) : '')}>Max</button>
                     </div>
                   </label>
                   <label className="bridge-field">
-                    <span>{copy('Recipient Address', '目标地址')}</span>
+                    <span>{copy('Recipient Address')}</span>
                     <div className="bridge-input-action">
                       <input className="bridge-input" value={withdrawRecipient} onChange={(event) => setWithdrawRecipient(event.target.value)} placeholder="0x..." />
-                      <button type="button" onClick={() => setWithdrawRecipient(auth.walletAddress ?? '')}>{copy('Use Connected Wallet', '使用关联钱包')}</button>
+                      <button type="button" onClick={() => setWithdrawRecipient(auth.walletAddress ?? '')}>{copy('Use Connected Wallet')}</button>
                     </div>
                   </label>
                   <button className="outline-button" disabled={isLoadingBridge || !auth.isConnected || depositWalletBalanceMicroUsd(readiness) == null} type="button" onClick={() => void handleReturnDepositWalletToSafe()}>
                     Return Deposit Wallet to Polymarket Safe
                   </button>
                   <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected || withdrawAvailable == null} type="button" onClick={() => void handleSubmitWithdrawTransfer()}>
-                    {isLoadingBridge ? copy('Submitting...', '提交中...') : copy('Submit Transfer', '提交转账')}
+                    {isLoadingBridge ? copy('Submitting...') : copy('Submit Transfer')}
                   </button>
                 </div>
               ) : null}
@@ -5277,8 +5196,8 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               {bridgeStatus ? (
                 <div className="deposit-path-card">
                   <div className="deposit-path-head">
-                    <span><Activity size={16} /> {copy('Bridge Status', 'Bridge 状态')}</span>
-                    <small>{statusAddress ? shortAddress(statusAddress) : copy('Recent query', '最近查询')}</small>
+                    <span><Activity size={16} /> {copy('Bridge Status')}</span>
+                    <small>{statusAddress ? shortAddress(statusAddress) : copy('Recent query')}</small>
                   </div>
                   <div className="bridge-status-list">
                     {bridgeStatus.transactions.length ? bridgeStatus.transactions.map((transaction, index) => (
@@ -5286,7 +5205,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                         <b>{transaction.status ?? 'UNKNOWN'}</b>
                         <small>{transaction.fromAmountBaseUnit ?? '-'} · {transaction.fromChainId ?? '?'} → {transaction.toChainId ?? '?'}</small>
                       </div>
-                    )) : <small>{copy('No transactions yet.', '暂无交易记录。')}</small>}
+                    )) : <small>{copy('No transactions yet.')}</small>}
                   </div>
                 </div>
               ) : null}
@@ -5460,7 +5379,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               <div className="wallet-modal-head">
                 <div>
                   <span><Activity size={18} /> Activity</span>
-                  <small>{copy('Wallet setup, Bridge, and order activity in this browser session.', '当前浏览器会话内的钱包准备、Bridge 和订单操作。')}</small>
+                  <small>{copy('Wallet setup, Bridge, and order activity in this browser session.')}</small>
                 </div>
                 <button className="modal-close-button" type="button" onClick={() => setActivityOpen(false)}>×</button>
               </div>
@@ -5520,31 +5439,6 @@ function uniqueBridgeChains(assets: BridgeSupportedAsset[]) {
     chains.push({ chainId: asset.chainId, chainName: asset.chainName })
   }
   return chains
-}
-
-function ResourceMenu() {
-  const visibleResources = externalResources.filter(
-    (resource): resource is ExternalResource & { href: string } => Boolean(resource.href) && (!resource.locale || resource.locale === uiLocale),
-  )
-
-  return (
-    <div className="resource-menu">
-      <button className="resource-trigger" type="button">
-        <ExternalLink size={16} />
-        {copy('Whitepaper', '白皮书')}
-      </button>
-      <div className="resource-popover">
-        {visibleResources.map((resource) => {
-          return (
-            <a className="resource-item" href={resource.href} key={resource.id} rel="noreferrer" target="_blank">
-              <b>{resource.label}</b>
-              <small>{resource.description}</small>
-            </a>
-          )
-        })}
-      </div>
-    </div>
-  )
 }
 
 function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) => void }) {
@@ -5687,7 +5581,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       .catch((fetchError: Error) => {
         if (cancelled) return
         if (fetchError.name === 'AbortError' && !timedOut) return
-        setError(timedOut ? copy('Market network timed out. Please try again later.', '市场网络加载超时，请稍后重试。') : fetchError.message)
+        setError(timedOut ? copy('Market network timed out. Please try again later.') : fetchError.message)
         setNetworkMarkets([])
         setNetworkEdges([])
       })
@@ -5726,7 +5620,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
           <div className="searchbox">
             <Search size={18} />
             <input
-              aria-label={copy('Search markets, events, or topics', '搜索市场、事件或主题')}
+              aria-label={copy('Search markets, events, or topics')}
               onChange={(event) => {
                 const nextValue = event.target.value
                 setSelectedSearch(null)
@@ -5745,12 +5639,12 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
                 if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0])
                 if (event.key === 'Escape') setSearchOpen(false)
               }}
-              placeholder={copy('Search markets, events, topics, or paste a Polymarket link...', '搜索市场、事件、主题或粘贴 Polymarket 链接...')}
+              placeholder={copy('Search markets, events, topics, or paste a Polymarket link...')}
               type="text"
               value={searchQuery}
             />
             {searchQuery ? (
-              <button className="search-clear" type="button" aria-label={copy('Clear search', '清空搜索')} onClick={clearSearch}>
+              <button className="search-clear" type="button" aria-label={copy('Clear search')} onClick={clearSearch}>
                 ×
               </button>
             ) : null}
@@ -5790,7 +5684,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       </div>
       <div className="network-stage">
         <NetworkMap edges={networkEdges} loading={loading} markets={networkMarkets} onConfirmMarket={onConfirmMarket} />
-        {error ? <div className="network-error">{copy(`Backend data is temporarily unavailable: ${error}`, `后端数据暂不可用：${error}`)}</div> : null}
+        {error ? <div className="network-error">{copy(`Backend data is temporarily unavailable: ${error}`)}</div> : null}
       </div>
     </section>
   )
@@ -5879,16 +5773,16 @@ function MarketDetail({
               <div className="market-page-meta">
                 <span>{displayMarket.officialCategory || displayMarket.category}</span>
                 {eventMarkets.length > 1 ? <span>{displayMarket.eventTitle || eventSummaryMarket.title}</span> : displayMarket.eventTitle ? <span>{displayMarket.eventTitle}</span> : null}
-                {eventMarkets.length > 1 ? <span>{copy(`${detailMarkets.length} market${detailMarkets.length === 1 ? '' : 's'}`, `${detailMarkets.length} 个盘口`)}</span> : null}
+                {eventMarkets.length > 1 ? <span>{copy(`${detailMarkets.length} market${detailMarkets.length === 1 ? '' : 's'}`)}</span> : null}
               </div>
               <h1>{displayMarket.title}</h1>
             </div>
             <div className="market-head-actions">
-              <button className="outline-button square" type="button" aria-label={copy('Save market', '收藏')}>
+              <button className="outline-button square" type="button" aria-label={copy('Save market')}>
                 <Star size={18} />
               </button>
               <button className="outline-button" type="button">
-                <Share2 size={17} /> {copy('Share', '分享')}
+                <Share2 size={17} /> {copy('Share')}
               </button>
             </div>
           </div>
@@ -5896,20 +5790,20 @@ function MarketDetail({
           <Card className="market-live-card">
             <div className="market-live-strip">
               <div>
-                <span>{eventMarkets.length > 1 ? copy('Leading Market', '领先盘口') : copy('Current Probability', '当前概率')}</span>
+                <span>{eventMarkets.length > 1 ? copy('Leading Market') : copy('Current Probability')}</span>
                 <strong>{primaryMarket.price}%</strong>
                 <em className={primaryMarket.change >= 0 ? 'green-text' : 'red-text'}>{eventMarkets.length > 1 ? marketDisplayLabel(primaryMarket) : marketChangeText(primaryMarket)}</em>
               </div>
               <div>
-                <span>{copy('Volume', '成交量')}</span>
+                <span>{copy('Volume')}</span>
                 <strong>{displayMarket.volume}</strong>
               </div>
               <div>
-                <span>{copy('Liquidity', '流动性')}</span>
+                <span>{copy('Liquidity')}</span>
                 <strong>{formatCompactMoney(displayMarket.liquidity)}</strong>
               </div>
               <div>
-                <span>{copy('End Date', '结束时间')}</span>
+                <span>{copy('End Date')}</span>
                 <strong>{formatDate(displayMarket.endDate)}</strong>
               </div>
             </div>
@@ -5928,39 +5822,39 @@ function MarketDetail({
 
         <aside className="market-detail-side">
           <Card className="market-side-card">
-            <SectionHeader title={copy('Rules', '规则说明')} />
+            <SectionHeader title={copy('Rules')} />
             <div className="market-rule-copy">
               <p>{descriptionCopy}</p>
               {ruleCopy !== descriptionCopy ? <p>{ruleCopy}</p> : null}
             </div>
           </Card>
           <Card className="market-side-card">
-            <SectionHeader title={copy('Market Info', '市场信息')} />
+            <SectionHeader title={copy('Market Info')} />
             <InfoTable
               rows={[
-                [copy('Market ID', '市场 ID'), market.id],
-                [copy('Event', '事件'), displayMarket.eventTitle || copy('Not provided', '未提供')],
-                [copy('End Date', '到期时间'), formatDate(displayMarket.endDate)],
-                [copy('Category', '类别'), displayMarket.category],
-                [copy('Source', '来源'), 'Polymarket'],
-                [copy('Contract Type', '合约类型'), detailMarkets.length > 1 ? copy('Event with multiple markets', 'Event 多盘口') : copy('Binary market', '二元事件')],
-                [copy('Trading Status', '交易状态'), detailMarkets.some((item) => item.acceptingOrders !== false) ? copy('Tradable', '可交易') : copy('Orders paused', '暂停接单')],
-                [copy('Minimum Order', '最小下单'), market.orderMinSize ? `${market.orderMinSize}` : copy('Not provided', '未提供')],
-                [copy('Minimum Tick', '最小报价单位'), market.tickSize ? `${market.tickSize}` : copy('Not provided', '未提供')],
-                [copy('Synced At', '同步时间'), formatDate(displayMarket.syncedAt)],
+                [copy('Market ID'), market.id],
+                [copy('Event'), displayMarket.eventTitle || copy('Not provided')],
+                [copy('End Date'), formatDate(displayMarket.endDate)],
+                [copy('Category'), displayMarket.category],
+                [copy('Source'), 'Polymarket'],
+                [copy('Contract Type'), detailMarkets.length > 1 ? copy('Event with multiple markets') : copy('Binary market')],
+                [copy('Trading Status'), detailMarkets.some((item) => item.acceptingOrders !== false) ? copy('Tradable') : copy('Orders paused')],
+                [copy('Minimum Order'), market.orderMinSize ? `${market.orderMinSize}` : copy('Not provided')],
+                [copy('Minimum Tick'), market.tickSize ? `${market.tickSize}` : copy('Not provided')],
+                [copy('Synced At'), formatDate(displayMarket.syncedAt)],
               ]}
             />
           </Card>
           <Card className="market-side-card">
-            <SectionHeader title={copy('Related Markets', '相关市场')} />
+            <SectionHeader title={copy('Related Markets')} />
             <RelatedMarketList currentMarket={market} />
           </Card>
         </aside>
       </div>
       <button className="primary-action" type="button" onClick={() => onInfer(inferenceMarket, activeSelectedOutcome?.outcomeId ?? null)} disabled={!inferenceReady}>
         <BrainCircuit size={20} /> {activeSelectedOutcome
-          ? copy(`Use ${activeSelectedOutcome.label} as inference root`, `设定 ${activeSelectedOutcome.label} 作为推演节点`)
-          : copy('Select an outcome to start inference', '先选择 Yes / No 推演方向')}
+          ? copy(`Use ${activeSelectedOutcome.label} as inference root`)
+          : copy('Select an outcome to start inference')}
       </button>
     </section>
   )
@@ -5968,17 +5862,17 @@ function MarketDetail({
 
 function scopeLabel(scope: InferenceScope) {
   return {
-    markets: copy('Related Markets', '相关市场'),
-    all: copy('Polymarket Context', 'Polymarket 上下文'),
+    markets: copy('Related Markets'),
+    all: copy('Polymarket Context'),
   }[scope]
 }
 
 function timeRangeLabel(range: InferenceSettingsState['timeRange'], market: Market) {
   return {
-    until_close: copy(`Until market close: ${formatDate(market.endDate)}`, `至市场结束：${formatDate(market.endDate)}`),
-    '24h': copy('Last 24 hours', '最近 24 小时'),
-    '7d': copy('Last 7 days', '最近 7 天'),
-    '30d': copy('Last 30 days', '最近 30 天'),
+    until_close: copy(`Until market close: ${formatDate(market.endDate)}`),
+    '24h': copy('Last 24 hours'),
+    '7d': copy('Last 7 days'),
+    '30d': copy('Last 30 days'),
   }[range]
 }
 
@@ -6017,9 +5911,9 @@ function inferenceModelRequiresPremium(model: InferenceModelPreference) {
 
 function confidenceModeLabel(mode: ConfidenceMode) {
   return {
-    broad: copy('Broad coverage', '更广覆盖'),
-    balanced: copy('Balanced (Recommended)', '平衡（推荐）'),
-    strict: copy('High confidence', '高置信'),
+    broad: copy('Broad coverage'),
+    balanced: copy('Balanced (Recommended)'),
+    strict: copy('High confidence'),
   }[mode]
 }
 
@@ -6098,43 +5992,43 @@ function InferenceSettings({
     onStart(settings)
   }, [advancedSettingsLocked, auth, canStartInference, onStart, openConnectModal, settings])
   const scopeOptions: Array<[InferenceScope, string, string]> = [
-    ['markets', copy('Related Markets', '相关市场'), copy('Related Polymarket markets only', '仅相关 Polymarket 市场')],
-    ['all', copy('Polymarket Context', 'Polymarket 上下文'), copy('Root market, same-event markets, and related markets', '根市场、同事件市场和相关市场')],
+    ['markets', copy('Related Markets'), copy('Related Polymarket markets only')],
+    ['all', copy('Polymarket Context'), copy('Root market, same-event markets, and related markets')],
   ]
   const modelOptions = inferenceModelOptions(capability)
   const capabilityHint = capabilityError
-    ? copy(`Model capability check failed: ${capabilityError}`, `模型能力读取失败：${capabilityError}`)
+    ? copy(`Model capability check failed: ${capabilityError}`)
     : capability?.status === 'available'
-      ? copy(`Default ${capability.defaultModel ?? 'Not configured'}`, `默认 ${capability.defaultModel ?? '未配置'}`)
+      ? copy(`Default ${capability.defaultModel ?? 'Not configured'}`)
       : capability?.reason ?? modelPreferenceHint(settings.modelPreference)
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId) ?? market.outcomes?.find((outcome) => outcome.outcomeId)
   return (
     <section className="page">
       <BackButton onClick={onBack} />
-      <PageTitle title={copy('AI Inference Settings', 'AI 推演设置')} subtitle={copy('Configure the inference parameters before AI analyzes potential market impacts.', '配置推演参数，AI 将为您分析事件的潜在影响。')} />
+      <PageTitle title={copy('AI Inference Settings')} subtitle={copy('Configure the inference parameters before AI analyzes potential market impacts.')} />
       <div className="content-grid settings-grid">
         <Card className="span-8 settings-panel">
-          <SectionHeader title={copy('Root Market', '根节点市场')} />
+          <SectionHeader title={copy('Root Market')} />
           <div className="root-market-card">
             <MarketIcon market={market} size="medium" />
             <div>
               <h3>{market.title}</h3>
               <p>{marketSubtitle(market)}</p>
-              {selectedOutcome ? <span className="root-outcome-pill">{copy(`Inference direction: ${selectedOutcome.label}`, `推演方向：${selectedOutcome.label}`)}</span> : null}
+              {selectedOutcome ? <span className="root-outcome-pill">{copy(`Inference direction: ${selectedOutcome.label}`)}</span> : null}
             </div>
             <strong>{market.price}%</strong>
             <span className={market.change >= 0 ? 'green-text' : 'red-text'}>{marketChangeText(market)}</span>
             <div className="mini-stat">
               <b>{market.volume}</b>
-              <span>{copy('Volume', '成交量')}</span>
+              <span>{copy('Volume')}</span>
             </div>
             <div className="mini-stat">
               <b>{formatCompactMoney(market.liquidity)}</b>
-              <span>{copy('Liquidity', '流动性')}</span>
+              <span>{copy('Liquidity')}</span>
             </div>
           </div>
           <Divider />
-          <SectionHeader title={copy('Inference Scope', '推演范围')} note={copy('Choose the data context to include in the analysis.', '选择要纳入分析的数据源范围。')} />
+          <SectionHeader title={copy('Inference Scope')} note={copy('Choose the data context to include in the analysis.')} />
           <div className="option-grid two">
             {scopeOptions.map(([scope, title, subtitle], index) => (
               <button
@@ -6152,17 +6046,17 @@ function InferenceSettings({
           <Divider />
           <div className="form-grid">
             <label className="field">
-              <span>{copy('Time Range', '时间周期')}</span>
+              <span>{copy('Time Range')}</span>
               <select value={settings.timeRange} onChange={(event) => updateSettings({ timeRange: event.target.value as InferenceSettingsState['timeRange'] })}>
-                <option value="until_close">{copy('Until market close', '至市场结束')}</option>
-                <option value="24h">{copy('Last 24 hours', '最近 24 小时')}</option>
-                <option value="7d">{copy('Last 7 days', '最近 7 天')}</option>
-                <option value="30d">{copy('Last 30 days', '最近 30 天')}</option>
+                <option value="until_close">{copy('Until market close')}</option>
+                <option value="24h">{copy('Last 24 hours')}</option>
+                <option value="7d">{copy('Last 7 days')}</option>
+                <option value="30d">{copy('Last 30 days')}</option>
               </select>
               <small>{timeRangeLabel(settings.timeRange, market)}</small>
             </label>
             <label className="field">
-              <span>{copy('AI Model', 'AI 模型')}</span>
+              <span>{copy('AI Model')}</span>
               <select value={settings.modelPreference} onChange={(event) => updateSettings({ modelPreference: event.target.value as InferenceModelPreference })}>
                 {modelOptions.map((model) => (
                   <option disabled={inferenceModelRequiresPremium(model) && !isPremium} key={model} value={model}>
@@ -6173,16 +6067,16 @@ function InferenceSettings({
               <small>{modelPreferenceHint(settings.modelPreference)} · {capabilityHint}</small>
             </label>
             <label className="field">
-              <span>{copy('Confidence Preference', '置信度偏好')}</span>
+              <span>{copy('Confidence Preference')}</span>
               <select value={settings.confidenceMode} onChange={(event) => selectConfidenceMode(event.target.value as ConfidenceMode)}>
-                <option value="broad">{copy('Broad coverage', '更广覆盖')}</option>
-                <option value="balanced">{copy('Balanced (Recommended)', '平衡（推荐）')}</option>
-                <option value="strict">{copy('High confidence', '高置信')}</option>
+                <option value="broad">{copy('Broad coverage')}</option>
+                <option value="balanced">{copy('Balanced (Recommended)')}</option>
+                <option value="strict">{copy('High confidence')}</option>
               </select>
-              <small>{confidenceModeLabel(settings.confidenceMode)} · {copy('Threshold', '阈值')} {settings.confidenceThreshold.toFixed(2)}</small>
+              <small>{confidenceModeLabel(settings.confidenceMode)} · {copy('Threshold')} {settings.confidenceThreshold.toFixed(2)}</small>
             </label>
           </div>
-          <SectionHeader title={copy('Inference Depth', '推演层数')} note={copy('Control how much explanation and downstream reasoning AI generates.', '控制 AI 生成的解释和洞察的详细程度。')} />
+          <SectionHeader title={copy('Inference Depth')} note={copy('Control how much explanation and downstream reasoning AI generates.')} />
           <div className="segmented">
             {[1, 2, 3].map((depth) => (
               <button
@@ -6198,11 +6092,11 @@ function InferenceSettings({
           </div>
           <div className="range-block">
             <div className="range-label">
-              <span>{copy('Confidence Threshold', '置信度阈值')}</span>
+              <span>{copy('Confidence Threshold')}</span>
               <b>{settings.confidenceThreshold.toFixed(2)}</b>
             </div>
             <input
-              aria-label={copy('Confidence threshold', '置信度阈值')}
+              aria-label={copy('Confidence threshold')}
               className="confidence-slider"
               max="0.85"
               min="0.1"
@@ -6215,29 +6109,29 @@ function InferenceSettings({
               <span style={{ width: `${(settings.confidenceThreshold / 0.85) * 100}%` }} />
             </div>
             <div className="range-scale">
-              <span>{copy('Broad', '更广覆盖')}</span>
-              <span>{copy('Balanced', '平衡')}</span>
-              <span>{copy('Strict', '高置信')}</span>
+              <span>{copy('Broad')}</span>
+              <span>{copy('Balanced')}</span>
+              <span>{copy('Strict')}</span>
             </div>
           </div>
           <div className="estimate-strip">
             <span>
-              <Bot size={18} /> {copy(`Estimated time: ${estimate.minutes}`, `预计处理时间：${estimate.minutes}`)}
+              <Bot size={18} /> {copy(`Estimated time: ${estimate.minutes}`)}
             </span>
             <span>
-              <ShieldCheck size={18} /> {copy(`Estimated points: ${estimate.points}`, `预计消耗积分：${estimate.points} 积分`)}
+              <ShieldCheck size={18} /> {copy(`Estimated points: ${estimate.points}`)}
             </span>
           </div>
           {!auth.isAuthenticated ? (
             <div className="soft-note auth-note">
               <ShieldCheck size={18} />
-              {copy('AI inference requires wallet sign-in. The backend protects your scripts, orders, and portfolio data with a bearer token.', 'AI 推演需要先用钱包签名登录，后端会用 Bearer Token 保护你的脚本、订单和组合数据。')}
+              {copy('AI inference requires wallet sign-in. The backend protects your scripts, orders, and portfolio data with a bearer token.')}
             </div>
           ) : null}
           {!canStartInference ? (
             <div className="soft-note auth-note">
               <Info size={18} />
-              {copy('Market outcome data is still loading. Return to details and wait until inference is available.', '市场详情还在加载 outcome 数据，请返回详情页等待按钮变为可用后再启动推演。')}
+              {copy('Market outcome data is still loading. Return to details and wait until inference is available.')}
             </div>
           ) : null}
           {advancedSettingsLocked ? (
@@ -6258,31 +6152,31 @@ function InferenceSettings({
             onClick={handleStartInference}
             disabled={auth.isSigningIn || !canStartInference || advancedSettingsLocked}
           >
-            <Play size={18} /> {copy('Start AI Inference', '启动 AI 推演')}
+            <Play size={18} /> {copy('Start AI Inference')}
           </button>
         </Card>
         <div className="side-stack">
           <Card>
-            <SectionHeader title={copy('Settings Preview', '推演设置预览')} note={copy('Summary of the inference run you are about to start.', '以下是您将要运行的推演配置摘要。')} />
+            <SectionHeader title={copy('Settings Preview')} note={copy('Summary of the inference run you are about to start.')} />
             <PreviewList market={market} settings={settings} />
           </Card>
           <Card>
-            <SectionHeader title={copy('Expected Analysis', '预期分析内容')} />
+            <SectionHeader title={copy('Expected Analysis')} />
             <Checklist
               items={[
-                copy('Directly affected related markets', '直接影响的相关市场变化'),
-                copy('Medium and long-term causal pathways', '中长期因果链路与传导路径'),
-                copy('Key event triggers and timeline', '关键事件节点与时间线'),
-                copy('Risk factors and uncertainty analysis', '风险因素与不确定性分析'),
+                copy('Directly affected related markets'),
+                copy('Medium and long-term causal pathways'),
+                copy('Key event triggers and timeline'),
+                copy('Risk factors and uncertainty analysis'),
               ]}
             />
           </Card>
           <Card className="tip-card">
-            <SectionHeader title={copy('Tips', '使用小贴士')} />
+            <SectionHeader title={copy('Tips')} />
             <ul>
-              <li>{copy('Broader scope can discover more potential impacts, but takes longer.', '范围越广，发现的潜在影响越多，但耗时越长。')}</li>
-              <li>{copy('Use balanced confidence for the first exploration.', '建议使用 30%-50% 强度进行首次探索。')}</li>
-              <li>{copy('Inference results are generated from market data and AI reasoning.', '推演结果将基于历史数据和 AI 推理生成。')}</li>
+              <li>{copy('Broader scope can discover more potential impacts, but takes longer.')}</li>
+              <li>{copy('Use balanced confidence for the first exploration.')}</li>
+              <li>{copy('Inference results are generated from market data and AI reasoning.')}</li>
             </ul>
           </Card>
         </div>
@@ -6311,14 +6205,15 @@ function InferenceProgress({
   const { chainId } = useAccount()
   const { switchChainAsync } = useSwitchChain()
   const steps = [
-    copy('Root selected', '已选择根节点'),
-    copy('Candidate retrieval', '候选市场召回'),
-    copy('Evidence verification', '逐市场证据核实'),
-    copy('AI relevance scoring', 'AI 关联度打分'),
-    copy('Causal script generation', '生成因果脚本'),
+    copy('Root selected'),
+    copy('Candidate retrieval'),
+    copy('Evidence verification'),
+    copy('AI relevance scoring'),
+    copy('Causal script generation'),
   ]
   const [loading, setLoading] = useState(!result)
   const [error, setError] = useState<string | null>(null)
+  const { isAuthenticated, isConnected, signIn } = auth
   const hasCurrentResult = result?.rootMarket?.id === market.id
   const isComplete = hasCurrentResult && !error
   const progress = hasCurrentResult ? 100 : error ? 100 : loading ? 62 : 35
@@ -6329,9 +6224,9 @@ function InferenceProgress({
     if (result?.rootMarket?.id === market.id) {
       return
     }
-    if (!auth.isAuthenticated && !auth.isConnected) {
+    if (!isAuthenticated && !isConnected) {
       const timer = window.setTimeout(() => {
-        setError(copy('Connect and sign in with your wallet before starting AI inference.', '请先连接钱包并签名登录，然后再启动 AI 推演。'))
+        setError(copy('Connect and sign in with your wallet before starting AI inference.'))
         setLoading(false)
       }, 0)
       return () => window.clearTimeout(timer)
@@ -6341,8 +6236,8 @@ function InferenceProgress({
       setError(null)
       setLoading(true)
       const run = async () => {
-        if (!auth.isAuthenticated) {
-          await auth.signIn()
+        if (!isAuthenticated) {
+          await signIn()
         }
         if (controller.signal.aborted) return null
         if (chainId !== supportedChain.id) {
@@ -6366,14 +6261,14 @@ function InferenceProgress({
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [auth.isAuthenticated, auth.isConnected, auth.signIn, chainId, market, market.id, onResult, result?.rootMarket?.id, settings, switchChainAsync])
+  }, [chainId, isAuthenticated, isConnected, market, market.id, onResult, result?.rootMarket?.id, settings, signIn, switchChainAsync])
 
   return (
     <section className="page">
       <BackButton onClick={onBack} />
       <PageTitle
-        title={hasCurrentResult ? copy('AI Inference Complete', 'AI 推演已完成') : copy('AI Inference Running...', 'AI 推演进行中...')}
-        subtitle={copy(`Verifying related markets and building causal paths from "${market.title}".`, `正在基于「${market.title}」核实相关市场并构建因果链条。`)}
+        title={hasCurrentResult ? copy('AI Inference Complete') : copy('AI Inference Running...')}
+        subtitle={copy(`Verifying related markets and building causal paths from "${market.title}".`)}
       />
       <div className="progress-steps">
         {steps.map((step, index) => {
@@ -6383,7 +6278,7 @@ function InferenceProgress({
           <div className={done ? 'step done' : current ? 'step current' : 'step'} key={step}>
             <div className="step-circle">{done ? <CheckCircle2 size={26} /> : index + 1}</div>
             <strong>{step}</strong>
-            <span>{done ? copy('Complete', '已完成') : current ? copy('Processing', '处理中') : copy('Waiting', '等待中')}</span>
+            <span>{done ? copy('Complete') : current ? copy('Processing') : copy('Waiting')}</span>
           </div>
         )})}
       </div>
@@ -6391,35 +6286,35 @@ function InferenceProgress({
         <span style={{ width: `${progress}%` }} />
       </div>
       <div className="progress-caption">
-        <span>{hasCurrentResult ? copy('Inference complete', '推演完成') : error ? copy('Inference error', '推演异常') : copy('Inference running...', '推演中...')} <b>{progress}%</b></span>
-        <span>{result?.model ? copy(`Model: ${result.model}`, `模型：${result.model}`) : copy('DeepSeek is verifying Polymarket candidate markets', 'DeepSeek 正在核实 Polymarket 候选市场')}</span>
+        <span>{hasCurrentResult ? copy('Inference complete') : error ? copy('Inference error') : copy('Inference running...')} <b>{progress}%</b></span>
+        <span>{result?.model ? copy(`Model: ${result.model}`) : copy('DeepSeek is verifying Polymarket candidate markets')}</span>
       </div>
-      {error ? <div className="status-note error">{copy(`Inference request failed: ${error}`, `推演请求失败：${error}`)}</div> : null}
+      {error ? <div className="status-note error">{copy(`Inference request failed: ${error}`)}</div> : null}
       <div className="content-grid progress-grid">
         <Card>
           <SectionHeader
-            title={copy('AI-Verified Related Markets', 'AI 核实后的相关市场')}
-            note={result?.verification ? copy(`Candidates ${result.verification.candidateCount || 0} · Kept ${result.verification.verifiedCount || result.relatedMarkets.length} · Excluded ${result.verification.excludedCount || 0}`, `候选 ${result.verification.candidateCount || 0} · 保留 ${result.verification.verifiedCount || result.relatedMarkets.length} · 排除 ${result.verification.excludedCount || 0}`) : undefined}
+            title={copy('AI-Verified Related Markets')}
+            note={result?.verification ? copy(`Candidates ${result.verification.candidateCount || 0} · Kept ${result.verification.verifiedCount || result.relatedMarkets.length} · Excluded ${result.verification.excludedCount || 0}`) : undefined}
           />
           <DiscoveryTable market={market} relatedMarkets={displayedRelatedMarkets} />
           <button className="link-button" type="button">
-            {displayedRelatedMarkets ? copy(`${displayedRelatedMarkets.length} verified markets`, `共 ${displayedRelatedMarkets.length} 个已核实市场`) : copy('Verifying live markets', '正在核实真实市场')} <ArrowRight size={15} />
+            {displayedRelatedMarkets ? copy(`${displayedRelatedMarkets.length} verified markets`) : copy('Verifying live markets')} <ArrowRight size={15} />
           </button>
         </Card>
         <Card>
-          <SectionHeader title={copy('Live Inference Log', '实时推演日志')} />
+          <SectionHeader title={copy('Live Inference Log')} />
           <LogList logs={result?.logs} loading={loading && !hasCurrentResult} />
         </Card>
       </div>
       <Card>
-        <SectionHeader title={copy('Current Inference Info', '当前推演信息')} />
+        <SectionHeader title={copy('Current Inference Info')} />
         <div className="info-strip-grid">
           {[ 
-            [copy('Root Market', '根节点市场'), market.title],
-            [copy('Inference Depth', '推演深度'), copy(`${settings.depth} layer${settings.depth > 1 ? 's' : ''}`, `${settings.depth} 阶关联`)],
-            [copy('Time Range', '时间范围'), timeRangeLabel(settings.timeRange, market)],
-            [copy('Analysis Scope', '分析维度'), scopeLabel(settings.scope)],
-            [copy('AI Model', 'AI 模型'), result?.model || 'DeepSeek v4 Pro'],
+            [copy('Root Market'), market.title],
+            [copy('Inference Depth'), copy(`${settings.depth} layer${settings.depth > 1 ? 's' : ''}`)],
+            [copy('Time Range'), timeRangeLabel(settings.timeRange, market)],
+            [copy('Analysis Scope'), scopeLabel(settings.scope)],
+            [copy('AI Model'), result?.model || 'DeepSeek v4 Pro'],
           ].map(([label, value]) => (
             <div className="info-item" key={label}>
               <div className="info-icon">
@@ -6432,11 +6327,11 @@ function InferenceProgress({
         </div>
         <div className="soft-note">{englishTextOrFallback(
           result?.verification?.summary || result?.summary,
-          copy('AI combines Polymarket order books, same-event markets, and related market context to generate causal inference.', '提示：AI 会综合 Polymarket 盘口、同事件市场和相关市场生成因果推演。'),
+          copy('AI combines Polymarket order books, same-event markets, and related market context to generate causal inference.'),
         )}</div>
       </Card>
       <button className="floating-next" type="button" onClick={onDone} disabled={!hasCurrentResult}>
-        {copy('View Generated Script', '查看已生成脚本')} <ArrowRight size={18} />
+        {copy('View Generated Script')} <ArrowRight size={18} />
       </button>
     </section>
   )
@@ -6460,12 +6355,10 @@ function CausalScript({
   }, [])
   const scriptSubtitleFallback = copy(
     `AI-generated causal script showing which tradable Polymarket books may react if "${market.title}" occurs.`,
-    `基于 AI 分析的因果剧本链，展示「${market.title}」发生后可能影响的真实市场盘口。`,
   )
   const scriptSubtitle = englishTextOrFallback(result?.thesis, scriptSubtitleFallback)
   const causalPathSummaryFallback = copy(
     'Based on current market prices, volume, and structured causal modeling, AI identified the main impact paths and logic below.',
-    '基于当前市场价格、成交量和结构化因果模型，AI 识别出以下主要影响路径及逻辑关系。',
   )
   const causalPathSummary = englishTextOrFallback(result?.summary, causalPathSummaryFallback)
 
@@ -6474,46 +6367,46 @@ function CausalScript({
       <BackButton onClick={onBack} />
       <div className="script-header">
         <PageTitle
-          title={copy('Causal Script', '因果脚本')}
+          title={copy('Causal Script')}
           subtitle={scriptSubtitle}
         />
         <div className="script-actions">
           <button className="outline-button" type="button">
-            <Download size={17} /> {copy('Export Map', '导出图谱')}
+            <Download size={17} /> {copy('Export Map')}
           </button>
           <button className="outline-button" type="button">
-            <Share2 size={17} /> {copy('Share', '分享')}
+            <Share2 size={17} /> {copy('Share')}
           </button>
         </div>
       </div>
       <div className="tabbar">
-        <button className="active" type="button">{copy('Graph View', '图谱视图')}</button>
-        <button type="button">{copy('Script Detail', '脚本详情')}</button>
+        <button className="active" type="button">{copy('Graph View')}</button>
+        <button type="button">{copy('Script Detail')}</button>
       </div>
       <div className="content-grid script-grid">
         <Card className="script-map-card">
           <CausalMap market={market} onOpenOrderPanel={openOrderPanel} result={result} />
         </Card>
         <Card>
-          <SectionHeader title={copy('Causal Path Summary', '因果链路摘要')} />
+          <SectionHeader title={copy('Causal Path Summary')} />
           <p className="body-copy">{causalPathSummary}</p>
           <SummaryList market={market} result={result} />
-          <div className="soft-note">{copy('This is AI-generated scenario analysis based on current data and models. It is not financial advice. Markets involve risk.', '以上为 AI 基于当前数据与模型的推演结果，不构成任何投资建议，市场有风险，决策需谨慎。')}</div>
+          <div className="soft-note">{copy('This is AI-generated scenario analysis based on current data and models. It is not financial advice. Markets involve risk.')}</div>
         </Card>
       </div>
       <ArcProofPanel auth={auth} scriptId={result?.scriptId ?? null} />
       <ScriptOrderPanel auth={auth} result={result} />
       <Card className="script-footer-card">
         <div className="footer-meta">
-          <span><BrainCircuit size={16} /> {copy(`Inference model: ${result?.model || 'DeepSeek'}`, `推演模型：${result?.model || 'DeepSeek'}`)}</span>
-          <span><Globe2 size={16} /> {copy('Data source: Polymarket markets and order books', '数据来源：Polymarket 市场和订单簿')}</span>
-          <span><Activity size={16} /> {copy(`Inference time: ${formatDateTime(result?.generatedAt)}`, `推演时间：${formatDateTime(result?.generatedAt)}`)}</span>
-          <span><Bot size={16} /> {copy(`Confidence: ${formatConfidence(result?.confidence)}`, `置信度：${formatConfidence(result?.confidence)}`)}</span>
+          <span><BrainCircuit size={16} /> {copy(`Inference model: ${result?.model || 'DeepSeek'}`)}</span>
+          <span><Globe2 size={16} /> {copy('Data source: Polymarket markets and order books')}</span>
+          <span><Activity size={16} /> {copy(`Inference time: ${formatDateTime(result?.generatedAt)}`)}</span>
+          <span><Bot size={16} /> {copy(`Confidence: ${formatConfidence(result?.confidence)}`)}</span>
         </div>
         <div className="footer-actions">
-          <span className="script-saved-pill"><CheckCircle2 size={16} /> {copy('Auto-saved', '已自动保存')}</span>
-          <button className="outline-button" type="button" onClick={onScripts}>{copy('View My Scripts', '查看我的脚本')}</button>
-          <button className="primary-button" type="button"><RotateCw size={17} /> {copy('Run Again', '重新推演')}</button>
+          <span className="script-saved-pill"><CheckCircle2 size={16} /> {copy('Auto-saved')}</span>
+          <button className="outline-button" type="button" onClick={onScripts}>{copy('View My Scripts')}</button>
+          <button className="primary-button" type="button"><RotateCw size={17} /> {copy('Run Again')}</button>
         </div>
       </Card>
     </section>
@@ -6760,30 +6653,27 @@ function ScriptOrderPanelState({
   }, [updateDraft])
 
   const validateDrafts = useCallback(() => {
-    if (!scriptId) return copy('Current script is missing scriptId. Complete an AI inference run first.', '当前脚本缺少 scriptId，请先完成一次后端 AI 推演。')
-    if (!activeDrafts.length) return copy('Select at least one outcome to buy.', '至少选择一个要买入的 outcome。')
+    if (!scriptId) return copy('Current script is missing scriptId. Complete an AI inference run first.')
+    if (!activeDrafts.length) return copy('Select at least one outcome to buy.')
     for (const draft of activeDrafts) {
       if (!draft.isTradable) {
         return copy(
           `${orderDraftContextLabel(draft)} ${draft.marketStatus || 'Market is temporarily not tradable'}. Remove it from the script or wait for data refresh.`,
-          `${orderDraftContextLabel(draft)} ${draft.marketStatus || '市场暂不可交易'}，请从脚本中移除或等待数据刷新。`,
         )
       }
       const sizingValue = draft.sizingMode === 'size' ? positiveNumberOrNull(draft.size) : positiveNumberOrNull(draft.amountUsd)
       if (sizingValue == null) return copy(
         `${draft.outcomeLabel} is missing a valid ${draft.sizingMode === 'size' ? 'size' : 'amount'}.`,
-        `${draft.outcomeLabel} 缺少有效的${draft.sizingMode === 'size' ? '数量' : '金额'}。`,
       )
       const minOrderSize = positiveNumberOrNull(draft.minOrderSize)
       const estimatedSize = estimateDraftSize(draft)
       if (minOrderSize != null && estimatedSize != null && estimatedSize + 1e-9 < minOrderSize) {
         return copy(
           `${draft.outcomeLabel} is below the minimum order size ${formatShares(minOrderSize)} shares (current ${formatShares(estimatedSize)} shares).`,
-          `${draft.outcomeLabel} 低于最小订单数量 ${formatShares(minOrderSize)} shares（当前 ${formatShares(estimatedSize)} shares）。`,
         )
       }
       if (draft.orderMode === 'limit' && positiveNumberOrNull(draft.limitPrice) == null) {
-        return copy(`${draft.outcomeLabel} is missing a valid limit price.`, `${draft.outcomeLabel} 缺少有效限价。`)
+        return copy(`${draft.outcomeLabel} is missing a valid limit price.`)
       }
     }
     return null
@@ -6796,7 +6686,7 @@ function ScriptOrderPanelState({
     const session = readStoredAuthSession()
     const token = session?.accessToken ?? auth.accessToken
     if (!token) {
-      throw new Error(copy('Wallet authentication is not complete. Connect and sign in with your wallet first.', '钱包认证尚未完成，请先连接钱包并签名登录。'))
+      throw new Error(copy('Wallet authentication is not complete. Connect and sign in with your wallet first.'))
     }
     return { token, session }
   }, [auth])
@@ -6879,7 +6769,7 @@ function ScriptOrderPanelState({
     let nextPreview = executionMode === 'real' ? await buildPreview() : preview ?? await buildPreview()
     if (!nextPreview) return
     if (!nextPreview.orders.every((order) => order.valid)) {
-      setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.', '预览中存在无效订单，请修正金额、数量、限价或盘口状态。'))
+      setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.'))
       return
     }
 
@@ -6897,11 +6787,11 @@ function ScriptOrderPanelState({
         return
       }
       if (!nextPreview.orders.every((order) => order.valid)) {
-        setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.', '预览中存在无效订单，请修正金额、数量、限价或盘口状态。'))
+        setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.'))
         return
       }
       if (nextPreview.submitMode !== 'signed_clob_order' || !nextPreview.requiresSignature) {
-        setError(nextPreview.tradingCapabilityReason || copy('Polymarket order submission is currently unavailable.', '当前 Polymarket 下单服务不可用。'))
+        setError(nextPreview.tradingCapabilityReason || copy('Polymarket order submission is currently unavailable.'))
         return
       }
       if (!window.confirm(realOrderConfirmationText(nextPreview))) {
@@ -6916,8 +6806,8 @@ function ScriptOrderPanelState({
       if (nextPreview.executionMode === 'real') {
         const walletAddress = session?.walletAddress ?? auth.walletAddress
         const chainId = session?.chainId ?? auth.chainId ?? supportedChain.id
-        if (!walletAddress) throw new Error(copy('Order submission is missing an authenticated wallet address.', '下单缺少已认证的钱包地址。'))
-        orderActivityId = addActivity(copy('Submit order', '提交订单'), copy(`Waiting for wallet signature for ${nextPreview.orders.length} Polymarket order(s).`, `等待钱包签名 ${nextPreview.orders.length} 笔 Polymarket 订单。`), 'pending')
+        if (!walletAddress) throw new Error(copy('Order submission is missing an authenticated wallet address.'))
+        orderActivityId = addActivity(copy('Submit order'), copy(`Waiting for wallet signature for ${nextPreview.orders.length} Polymarket order(s).`), 'pending')
         setStatus('signing')
         const prepared = await prepareOrderSignatures(nextPreview, walletAddress, chainId, token)
         orderDebugLog('prepare_order_signatures_result', {
@@ -6934,7 +6824,7 @@ function ScriptOrderPanelState({
           })),
         })
         if (prepared.signingStatus !== 'ready') {
-          throw new Error(prepared.error || copy('Order signing payload is not available yet.', '订单签名 payload 尚不可用。'))
+          throw new Error(prepared.error || copy('Order signing payload is not available yet.'))
         }
         const rawSignedOrders = await Promise.all(prepared.payloads.map(async (payload) => ({
           orderId: payload.orderId,
@@ -6955,7 +6845,7 @@ function ScriptOrderPanelState({
           })),
         })
         signedOrders = validatedSignedOrdersForSubmit(nextPreview, rawSignedOrders)
-        updateActivity(orderActivityId, 'pending', copy('Order signature complete. Submitting to Polymarket.', '订单签名完成，正在提交 Polymarket。'))
+        updateActivity(orderActivityId, 'pending', copy('Order signature complete. Submitting to Polymarket.'))
       }
       setStatus('submitting')
       const submitted = await submitOrderIntent(nextPreview, signedOrders, token)
@@ -6964,7 +6854,7 @@ function ScriptOrderPanelState({
         window.dispatchEvent(new CustomEvent('causeway:orders-changed'))
       }
       if (nextPreview.executionMode === 'real' && orderActivityId) {
-        updateActivity(orderActivityId, 'done', copy(`${submitted.orders.length} order(s) submitted.`, `已提交 ${submitted.orders.length} 笔订单。`))
+        updateActivity(orderActivityId, 'done', copy(`${submitted.orders.length} order(s) submitted.`))
       }
     } catch (submitError) {
       if (orderActivityId) {
@@ -6997,43 +6887,43 @@ function ScriptOrderPanelState({
 
   const statusLabel = {
     idle: '',
-    saving: copy('Saving script selections...', '正在保存脚本选择...'),
-    previewing: copy('Generating order preview...', '正在生成订单预览...'),
-    signing: copy('Waiting for wallet confirmation...', '等待钱包确认...'),
-    submitting: copy('Submitting orders...', '正在提交订单...'),
+    saving: copy('Saving script selections...'),
+    previewing: copy('Generating order preview...'),
+    signing: copy('Waiting for wallet confirmation...'),
+    submitting: copy('Submitting orders...'),
   }[status]
 
   return (
     <Card className="script-order-panel" id="script-order-panel">
       <div className="order-panel-head">
         <SectionHeader
-          title={copy('Order Draft', '订单草稿')}
-          note={scriptId ? copy(`${activeDrafts.length} outcome(s) selected`, `${activeDrafts.length} 个 outcome 已选择`) : copy('Backend script selectionId required', '需要后端脚本 selectionId')}
+          title={copy('Order Draft')}
+          note={scriptId ? copy(`${activeDrafts.length} outcome(s) selected`) : copy('Backend script selectionId required')}
         />
       </div>
 
       {!candidates.length ? (
-        <div className="soft-note">{copy('This page has no tradable selections yet. Generate a backend AI script first, then return here to preview and submit orders.', '当前页面还没有可下单 selection。请先从后端 AI 推演生成脚本，再回到这里预览和提交订单。')}</div>
+        <div className="soft-note">{copy('This page has no tradable selections yet. Generate a backend AI script first, then return here to preview and submit orders.')}</div>
       ) : (
         <>
           <div className="order-panel-summary">
-            <span><WalletCards size={16} /> {copy(`Wallet: ${auth.walletAddress ? shortAddress(auth.walletAddress) : 'Not signed in'}`, `钱包：${auth.walletAddress ? shortAddress(auth.walletAddress) : '未登录'}`)}</span>
-            <span><ShieldCheck size={16} /> {copy('Wallet confirmation required before submission', '提交前需要钱包确认')}</span>
-            <span><Activity size={16} /> {copy(`Draft amount: ${totalDraftAmount > 0 ? formatUsd(totalDraftAmount) : 'estimated from size'}`, `金额草稿：${totalDraftAmount > 0 ? formatUsd(totalDraftAmount) : '按数量估算'}`)}</span>
+            <span><WalletCards size={16} /> {copy(`Wallet: ${auth.walletAddress ? shortAddress(auth.walletAddress) : 'Not signed in'}`)}</span>
+            <span><ShieldCheck size={16} /> {copy('Wallet confirmation required before submission')}</span>
+            <span><Activity size={16} /> {copy(`Draft amount: ${totalDraftAmount > 0 ? formatUsd(totalDraftAmount) : 'estimated from size'}`)}</span>
           </div>
 
           <div className="trading-wallet-card">
             <div className="trading-wallet-card-title">
               <WalletCards size={18} />
               <div>
-                <span>{copy('Trading Wallet', '交易钱包')}</span>
-                <small>{copy('Orders use your Polymarket trading wallet. Existing Polymarket balance can be used as a funding source.', '订单使用你的 Polymarket 交易钱包；已有 Polymarket 余额可作为资金来源。')}</small>
+                <span>{copy('Trading Wallet')}</span>
+                <small>{copy('Orders use your Polymarket trading wallet. Existing Polymarket balance can be used as a funding source.')}</small>
               </div>
             </div>
             <div className="trading-wallet-card-metrics">
-              <div><span>{copy('Estimated Required', '本次预估需要')}</span><b>{formatUsd(Math.max(estimatedRequiredUsd, TRADING_WALLET_MIN_READY_USD))}</b></div>
-              <div><span>{copy('Minimum Ready', '最低交易准备')}</span><b>{formatUsd(TRADING_WALLET_MIN_READY_USD)}</b></div>
-              <div><span>{copy('Setup Entry', '准备入口')}</span><b>{copy('Top + Deposit', '顶部 + Deposit')}</b></div>
+              <div><span>{copy('Estimated Required')}</span><b>{formatUsd(Math.max(estimatedRequiredUsd, TRADING_WALLET_MIN_READY_USD))}</b></div>
+              <div><span>{copy('Minimum Ready')}</span><b>{formatUsd(TRADING_WALLET_MIN_READY_USD)}</b></div>
+              <div><span>{copy('Setup Entry')}</span><b>{copy('Top + Deposit')}</b></div>
             </div>
           </div>
 
@@ -7047,31 +6937,31 @@ function ScriptOrderPanelState({
                     onChange={(event) => updateDraft(draft.selectionId, { enabled: event.target.checked })}
                     type="checkbox"
                   />
-                  <span>{!draft.isTradable ? copy('Not tradable', '不可交易') : draft.enabled ? copy('Buy', '买入') : copy('Skip', '跳过')}</span>
+                  <span>{!draft.isTradable ? copy('Not tradable') : draft.enabled ? copy('Buy') : copy('Skip')}</span>
                 </label>
                 <div className="order-draft-main">
                   <b>{draft.marketTitle}</b>
-                  <small>{[draft.eventTitle, draft.outcomeLabel, draft.aiAction === 'buy' ? copy('AI recommends', 'AI 推荐') : copy('AI avoids', 'AI 避免'), formatConfidence(draft.confidence), draft.marketStatus].filter(Boolean).join(' · ')}</small>
-                  <p>{draft.reason || copy('No recommendation reason available.', '暂无推荐原因。')}</p>
+                  <small>{[draft.eventTitle, draft.outcomeLabel, draft.aiAction === 'buy' ? copy('AI recommends') : copy('AI avoids'), formatConfidence(draft.confidence), draft.marketStatus].filter(Boolean).join(' · ')}</small>
+                  <p>{draft.reason || copy('No recommendation reason available.')}</p>
                 </div>
                 <div className="order-draft-controls">
                   <div className="order-toggle-group">
                     <button className={draft.orderMode === 'market' ? 'active' : ''} disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => setDraftOrderMode(draft, 'market')}>
-                      {copy('Market', '市价')}
+                      {copy('Market')}
                     </button>
                     <button className={draft.orderMode === 'limit' ? 'active' : ''} disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => setDraftOrderMode(draft, 'limit')}>
-                      {copy('Limit', '限价')}
+                      {copy('Limit')}
                     </button>
                   </div>
                   <label>
-                    <span>{copy('Sizing Type', '数量类型')}</span>
+                    <span>{copy('Sizing Type')}</span>
                     <select disabled={!draft.enabled || !draft.isTradable} value={draft.sizingMode} onChange={(event) => setDraftSizingMode(draft, event.target.value as OrderSizingMode)}>
-                      <option value="amountUsd">{copy('Amount USD', '金额 USD')}</option>
-                      <option value="size">{copy('Size Shares', '数量 Shares')}</option>
+                      <option value="amountUsd">{copy('Amount USD')}</option>
+                      <option value="size">{copy('Size Shares')}</option>
                     </select>
                   </label>
                   <label>
-                    <span>{draft.sizingMode === 'size' ? copy('Size', '数量') : copy('Amount', '金额')}</span>
+                    <span>{draft.sizingMode === 'size' ? copy('Size') : copy('Amount')}</span>
                     <input
                       disabled={!draft.enabled || !draft.isTradable}
                       min={draft.sizingMode === 'size' ? '0.000001' : '0.01'}
@@ -7084,7 +6974,7 @@ function ScriptOrderPanelState({
                       }}
                     />
                   </label>
-                  <div className="order-step-row" aria-label={copy('Adjust amount or size', '调整金额或数量')}>
+                  <div className="order-step-row" aria-label={copy('Adjust amount or size')}>
                     {[-100, -10, 10, 100].map((delta) => (
                         <button disabled={!draft.enabled || !draft.isTradable} key={delta} type="button" onClick={() => adjustDraftSizing(draft, delta)}>
                         {delta > 0 ? `+${delta}` : delta}
@@ -7093,7 +6983,7 @@ function ScriptOrderPanelState({
                   </div>
                   {draft.orderMode === 'limit' ? (
                     <label>
-                      <span>{copy('Limit Price', '限价')}</span>
+                      <span>{copy('Limit Price')}</span>
                       <div className="order-price-input">
                         <button disabled={!draft.enabled || !draft.isTradable} type="button" onClick={() => adjustLimitPrice(draft, -1)}>-</button>
                         <input
@@ -7114,7 +7004,7 @@ function ScriptOrderPanelState({
                   ) : null}
                   {draft.orderMode === 'limit' ? (
                     <label>
-                      <span>{copy('Order Type', '订单类型')}</span>
+                      <span>{copy('Order Type')}</span>
                       <select disabled={!draft.enabled || !draft.isTradable} value={draft.orderType} onChange={(event) => updateDraft(draft.selectionId, { orderType: event.target.value as LimitOrderType })}>
                         <option value="GTC">GTC</option>
                         <option value="GTD">GTD</option>
@@ -7130,10 +7020,10 @@ function ScriptOrderPanelState({
 
           <div className="order-panel-actions">
             <button className="outline-button" disabled={busy || !activeDrafts.length} type="button" onClick={handlePreview}>
-              {copy('Generate Preview', '生成预览')}
+              {copy('Generate Preview')}
             </button>
             <button className="primary-button" disabled={busy || !activeDrafts.length} type="button" onClick={handleSubmit}>
-              {copy('Sign and Submit', '签名并提交')}
+              {copy('Sign and Submit')}
             </button>
             {currentIntentId ? (
               <button className="outline-button" disabled={busy} type="button" onClick={() => void refreshIntent()}>
@@ -7156,10 +7046,10 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
   return (
     <div className="order-preview-block">
       <div className="order-preview-metrics">
-        <div><span>{copy('Total Amount', '总金额')}</span><b>{formatUsd(preview.totalAmountUsd)}</b></div>
-        <div><span>{copy('Max Payout Shares', '最大收益份额')}</span><b>{formatShares(preview.estimatedMaxPayout)}</b></div>
-        <div><span>{copy('Max Loss', '最大亏损')}</span><b>{formatUsd(preview.estimatedMaxLoss)}</b></div>
-        <div><span>{copy('Signature', '签名')}</span><b>{preview.requiresSignature ? copy('Required', '需要') : copy('Not required', '不需要')}</b></div>
+        <div><span>{copy('Total Amount')}</span><b>{formatUsd(preview.totalAmountUsd)}</b></div>
+        <div><span>{copy('Max Payout Shares')}</span><b>{formatShares(preview.estimatedMaxPayout)}</b></div>
+        <div><span>{copy('Max Loss')}</span><b>{formatUsd(preview.estimatedMaxLoss)}</b></div>
+        <div><span>{copy('Signature')}</span><b>{preview.requiresSignature ? copy('Required') : copy('Not required')}</b></div>
       </div>
       <div className={preview.submitMode === 'unavailable' ? 'status-note warning' : 'status-note'}>
         {orderPreviewStatusText(preview)}
@@ -7173,7 +7063,7 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
               <div>
                 <b>{draft?.marketTitle || order.marketId}</b>
                 {draft?.eventTitle ? <small>{draft.eventTitle}</small> : null}
-                <span>{order.outcomeLabel} · {order.orderMode === 'market' ? copy('Market', '市价') : copy(`Limit ${formatLimitPrice(order.limitPrice)}`, `限价 ${formatLimitPrice(order.limitPrice)}`)}</span>
+                <span>{order.outcomeLabel} · {order.orderMode === 'market' ? copy('Market') : copy(`Limit ${formatLimitPrice(order.limitPrice)}`)}</span>
               </div>
               <strong>{formatUsd(order.amountUsd)}</strong>
               <span>{formatShares(order.size)} shares</span>
@@ -7188,10 +7078,10 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
 
 function orderPreviewStatusText(preview: OrderPreview) {
   if (preview.submitMode === 'unavailable') {
-    return preview.tradingCapabilityReason || copy('This order cannot be submitted right now. Refresh market data and try again.', '当前订单暂不可提交，请刷新市场数据后重试。')
+    return preview.tradingCapabilityReason || copy('This order cannot be submitted right now. Refresh market data and try again.')
   }
-  const signatureText = preview.requiresSignature ? copy('Wallet signature required before submission', '提交前需要钱包签名') : copy('No wallet signature required before submission', '提交前无需钱包签名')
-  return copy(`${signatureText}. Preview valid until ${formatDateTime(preview.expiresAt)}`, `${signatureText}。预览有效期至 ${formatDateTime(preview.expiresAt)}`)
+  const signatureText = preview.requiresSignature ? copy('Wallet signature required before submission') : copy('No wallet signature required before submission')
+  return copy(`${signatureText}. Preview valid until ${formatDateTime(preview.expiresAt)}`)
 }
 
 function OrderSubmitBlock({ result }: { result: OrderSubmitResult }) {
@@ -7288,7 +7178,7 @@ function MyScripts({
       })
       .catch((loadError: unknown) => {
         if (loadError instanceof DOMException && loadError.name === 'AbortError') return
-        setError(loadError instanceof Error ? loadError.message : copy('Script list failed to load.', '脚本列表加载失败'))
+        setError(loadError instanceof Error ? loadError.message : copy('Script list failed to load.'))
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
@@ -7318,10 +7208,10 @@ function MyScripts({
     const archived = visibleItems.filter((item) => item.status === 'archived').length
     const orderIntents = visibleItems.reduce((total, item) => total + item.orderIntentCount, 0)
     return [
-      [copy('Scripts', '当前页脚本'), String(visibleItems.length), copy('Real backend records', '来自后端真实记录'), 'blue', <Star size={19} />],
-      [copy('Drafts', '草稿'), String(drafts), copy('Orders can still be adjusted', '可继续调整订单'), 'orange', <Play size={19} />],
-      [copy('Submitted', '已提交'), String(active), copy('Order flow completed', '已完成订单流程'), 'green', <CheckCircle2 size={19} />],
-      [statusFilter === 'archived' ? copy('Archived', '已归档') : copy('Order Intents', '订单意向'), String(statusFilter === 'archived' ? archived : orderIntents), statusFilter === 'archived' ? copy('Historical scripts', '历史脚本') : copy('Generated by scripts', '由脚本生成'), 'purple', <ExternalLink size={19} />],
+      [copy('Scripts'), String(visibleItems.length), copy('Real backend records'), 'blue', <Star size={19} />],
+      [copy('Drafts'), String(drafts), copy('Orders can still be adjusted'), 'orange', <Play size={19} />],
+      [copy('Submitted'), String(active), copy('Order flow completed'), 'green', <CheckCircle2 size={19} />],
+      [statusFilter === 'archived' ? copy('Archived') : copy('Order Intents'), String(statusFilter === 'archived' ? archived : orderIntents), statusFilter === 'archived' ? copy('Historical scripts') : copy('Generated by scripts'), 'purple', <ExternalLink size={19} />],
     ] as const
   }, [auth.accessToken, auth.isAuthenticated, debouncedQuery, items, itemsAccessToken, itemsQuery, itemsStatusFilter, statusFilter])
 
@@ -7338,7 +7228,7 @@ function MyScripts({
       })
       setNextCursor(data.nextCursor)
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : copy('More scripts failed to load.', '更多脚本加载失败'))
+      setError(loadError instanceof Error ? loadError.message : copy('More scripts failed to load.'))
     } finally {
       setLoadingMore(false)
     }
@@ -7358,7 +7248,7 @@ function MyScripts({
       const market = scriptRootMarket(script, item)
       onOpen(market, scriptToInferenceResult(script, scriptCompletedRun(script), market, settings))
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : copy('Script detail failed to load.', '脚本详情加载失败'))
+      setError(loadError instanceof Error ? loadError.message : copy('Script detail failed to load.'))
     } finally {
       setOpeningScriptId(null)
     }
@@ -7367,9 +7257,9 @@ function MyScripts({
   return (
     <section className="page">
       <div className="scripts-headline">
-        <PageTitle title={copy('My Scripts', '我的脚本')} subtitle={copy('Manage and review your event inference scripts and analysis history.', '管理和回顾您的事件推演脚本与分析历史。')} />
+        <PageTitle title={copy('My Scripts')} subtitle={copy('Manage and review your event inference scripts and analysis history.')} />
         <button className="primary-button" type="button" onClick={onNew}>
-          <Plus size={17} /> {copy('New Inference', '新建推演')}
+          <Plus size={17} /> {copy('New Inference')}
         </button>
       </div>
       <div className="stats-row">
@@ -7387,10 +7277,10 @@ function MyScripts({
       <div className="scripts-toolbar">
         <div className="tabbar inline">
           {[
-            ['all', copy('All', '全部')],
-            ['draft', copy('Drafts', '草稿')],
-            ['active', copy('Submitted', '已提交')],
-            ['archived', copy('Archived', '归档')],
+            ['all', copy('All')],
+            ['draft', copy('Drafts')],
+            ['active', copy('Submitted')],
+            ['archived', copy('Archived')],
           ].map(([value, label]) => (
             <button
               className={statusFilter === value ? 'active' : ''}
@@ -7405,30 +7295,30 @@ function MyScripts({
         <div className="searchbox narrow">
           <Search size={17} />
           <input
-            aria-label={copy('Search scripts', '搜索脚本')}
+            aria-label={copy('Search scripts')}
             value={query}
-            placeholder={copy('Search script names or keywords...', '搜索脚本名称、关键词...')}
+            placeholder={copy('Search script names or keywords...')}
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
-        <span className="scripts-sort-label">{copy('Newest first', '最新创建')}</span>
+        <span className="scripts-sort-label">{copy('Newest first')}</span>
       </div>
       {auth.isAuthenticated && error ? <div className="script-list-message error">{error}</div> : null}
       {!auth.isAuthenticated ? (
         <div className="script-list-message">
-          <b>{copy('Sign in to view your scripts', '登录钱包后查看真实脚本')}</b>
-          <span>{copy('No demo data is shown here. After wallet sign-in, the app loads saved backend scripts for the current user.', '这里不会展示演示数据；完成钱包签名后会读取当前用户已保存的后端脚本。')}</span>
+          <b>{copy('Sign in to view your scripts')}</b>
+          <span>{copy('No demo data is shown here. After wallet sign-in, the app loads saved backend scripts for the current user.')}</span>
           <button className="primary-button" type="button" onClick={() => void auth.signIn()} disabled={auth.isSigningIn}>
-            <WalletCards size={17} /> {auth.isSigningIn ? copy('Waiting for signature', '等待签名') : copy('Sign in with wallet', '登录钱包')}
+            <WalletCards size={17} /> {auth.isSigningIn ? copy('Waiting for signature') : copy('Sign in with wallet')}
           </button>
         </div>
       ) : null}
       <div className="script-list">
-        {auth.isAuthenticated && loading ? <div className="script-list-message">{copy('Loading scripts from the backend...', '正在从后端加载真实脚本...')}</div> : null}
+        {auth.isAuthenticated && loading ? <div className="script-list-message">{copy('Loading scripts from the backend...')}</div> : null}
         {auth.isAuthenticated && !loading && !filteredItems.length ? (
           <div className="script-list-message">
-            <b>{query.trim() ? copy('No matching scripts', '没有匹配的脚本') : copy('No scripts yet', '暂无真实脚本')}</b>
-            <span>{query.trim() ? copy('Adjust your search keywords.', '请调整搜索关键词。') : copy('Generated scripts will appear here after you complete an AI inference.', '完成一次 AI 推演后，生成的脚本会出现在这里。')}</span>
+            <b>{query.trim() ? copy('No matching scripts') : copy('No scripts yet')}</b>
+            <span>{query.trim() ? copy('Adjust your search keywords.') : copy('Generated scripts will appear here after you complete an AI inference.')}</span>
           </div>
         ) : null}
         {auth.isAuthenticated && !loading && filteredItems.map((item, index) => (
@@ -7444,15 +7334,15 @@ function MyScripts({
               <b>{item.title}</b>
               {item.rootEventTitle ? <small>{item.rootEventTitle}</small> : null}
               <span>
-                {copy(`Created: ${formatDateTime(item.createdAt)}`, `创建时间：${formatDateTime(item.createdAt)}`)}
-                {item.rootOutcomeLabel ? copy(` · Root outcome: ${item.rootOutcomeLabel}`, ` · 根结果：${item.rootOutcomeLabel}`) : ''}
+                {copy(`Created: ${formatDateTime(item.createdAt)}`)}
+                {item.rootOutcomeLabel ? copy(` · Root outcome: ${item.rootOutcomeLabel}`) : ''}
               </span>
             </div>
             <span className={`status-badge ${scriptStatusClass(item.status)}`}>{scriptStatusLabel(item.status)}</span>
             <div className="script-row-metrics">
-              <span>{copy('Price', '价格')} <b>{formatUnitPercent(item.rootPrice)}</b></span>
+              <span>{copy('Price')} <b>{formatUnitPercent(item.rootPrice)}</b></span>
               <span>24h <b>{formatCompactMoney(item.rootVolume24hr)}</b></span>
-              <span>{copy('Markets', '市场')} <b>{item.marketCount}</b></span>
+              <span>{copy('Markets')} <b>{item.marketCount}</b></span>
             </div>
             <span className="script-row-proof"><ShieldCheck size={15} /> Arc proof</span>
             <div className="row-actions">
@@ -7463,10 +7353,10 @@ function MyScripts({
       </div>
       {auth.isAuthenticated ? (
         <div className="pagination">
-          <span>{copy(`${filteredItems.length} shown`, `当前 ${filteredItems.length} 条`)}</span>
+          <span>{copy(`${filteredItems.length} shown`)}</span>
           {itemsAccessToken === auth.accessToken && itemsStatusFilter === statusFilter && itemsQuery === debouncedQuery && nextCursor ? (
             <button type="button" onClick={() => void handleLoadMore()} disabled={loadingMore}>
-              {loadingMore ? copy('Loading', '加载中') : copy('More', '更多')}
+              {loadingMore ? copy('Loading') : copy('More')}
             </button>
           ) : null}
         </div>
@@ -7674,14 +7564,14 @@ function NetworkMap({
           onMouseLeave={handleIconMouseLeave}
         />
       ) : null}
-      {loading ? <div className="network-loading">{copy('Syncing market network from Polymarket...', '正在从 SQLite / Polymarket 同步市场网络...')}</div> : null}
-      {!loading && !visibleMarkets.length ? <div className="network-empty">{copy('No market network data yet', '暂无市场网络数据')}</div> : null}
+      {loading ? <div className="network-loading">{copy('Syncing market network from Polymarket...')}</div> : null}
+      {!loading && !visibleMarkets.length ? <div className="network-empty">{copy('No market network data yet')}</div> : null}
       <div className="legend">
-        <span><i className="dot blue" />{copy('Politics', '政治')}</span>
-        <span><i className="dot green" />{copy('Macro', '宏观经济')}</span>
-        <span><i className="dot orange" />{copy('Crypto', '加密货币')}</span>
-        <span><i className="line solid" />{copy('Strong relation', '强相关')}</span>
-        <span><i className="line dashed" />{copy('Medium relation', '中等相关')}</span>
+        <span><i className="dot blue" />{copy('Politics')}</span>
+        <span><i className="dot green" />{copy('Macro')}</span>
+        <span><i className="dot orange" />{copy('Crypto')}</span>
+        <span><i className="line solid" />{copy('Strong relation')}</span>
+        <span><i className="line dashed" />{copy('Medium relation')}</span>
       </div>
     </div>
   )
@@ -7766,7 +7656,7 @@ function scriptTone(direction: string | null | undefined, confidence: number | n
 function scriptSideTone(side: string | null | undefined) {
   const normalized = (side || '').toLowerCase()
   if (normalized.includes('no')) return 'red'
-  if (normalized.includes('观察') || normalized.includes('watch')) return 'muted'
+  if (normalized.includes('watch')) return 'muted'
   return 'green'
 }
 
@@ -7778,10 +7668,10 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
       if (!target) return []
       return [{
         id: `fallback_chain_${index + 1}`,
-        title: copy(`${directionLabel(link.direction)}: ${trimNodeTitle(target.title, 26)}`, `${directionLabel(link.direction)}：${trimNodeTitle(target.title, 26)}`),
-        summary: englishTextOrFallback(link.rationale || target.reason, copy('This book may reprice if the root outcome occurs.', '根节点发生后，该盘口可能出现联动重定价。')),
+        title: copy(`${directionLabel(link.direction)}: ${trimNodeTitle(target.title, 26)}`),
+        summary: englishTextOrFallback(link.rationale || target.reason, copy('This book may reprice if the root outcome occurs.')),
         confidence: link.confidence,
-        expectedReturnHint: copy('Confirm live depth and slippage before adding this direction to an order draft.', '按当前盘口方向加入交易草稿前，仍需确认实时深度和滑点。'),
+        expectedReturnHint: copy('Confirm live depth and slippage before adding this direction to an order draft.'),
         legs: [{
           marketId: target.id,
           marketTitle: target.title,
@@ -7791,7 +7681,7 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
           direction: link.direction,
           impact: link.impact || inferenceImpactSummary(link.direction),
           confidence: link.confidence,
-          rationale: englishTextOrFallback(link.rationale || target.reason || target.evidenceSummary, copy('AI verified that this market is related to the root node.', 'AI 已核实该市场与根节点有关联。')),
+          rationale: englishTextOrFallback(link.rationale || target.reason || target.evidenceSummary, copy('AI verified that this market is related to the root node.')),
           orderHint: defaultOrderHintForDirection(link.direction),
           evidenceIds: link.evidenceIds || target.evidenceIds || [],
         }],
@@ -7802,10 +7692,10 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
   if (related.length) {
     return related.map((item, index) => ({
       id: `related_chain_${index + 1}`,
-      title: copy(`Path ${index + 1}: ${trimNodeTitle(item.title, 28)}`, `链路 ${index + 1}：${trimNodeTitle(item.title, 28)}`),
-      summary: englishTextOrFallback(item.reason || item.evidenceSummary, copy('This market passed relevance checks and can be monitored as a downstream path.', '该市场已通过相关性核实，可作为根节点发生后的观察链路。')),
+      title: copy(`Path ${index + 1}: ${trimNodeTitle(item.title, 28)}`),
+      summary: englishTextOrFallback(item.reason || item.evidenceSummary, copy('This market passed relevance checks and can be monitored as a downstream path.')),
       confidence: item.verificationScore || item.confidence,
-      expectedReturnHint: copy('This path is assembled from related markets. Review live books before trading.', '该链路由相关市场自动编排，交易前需复核实时盘口。'),
+      expectedReturnHint: copy('This path is assembled from related markets. Review live books before trading.'),
       legs: [{
         marketId: item.id,
         marketTitle: item.title,
@@ -7815,7 +7705,7 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
         direction: item.direction || 'unknown',
         impact: item.impact || inferenceImpactSummary(item.direction),
         confidence: item.verificationScore || item.confidence,
-        rationale: item.reason || item.evidenceSummary || copy('AI verified that this market is related to the root node.', 'AI 已核实该市场与根节点有关联。'),
+        rationale: item.reason || item.evidenceSummary || copy('AI verified that this market is related to the root node.'),
         orderHint: defaultOrderHintForDirection(item.direction),
         evidenceIds: item.evidenceIds || [],
       }],
@@ -7823,10 +7713,10 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
   }
   return [{
     id: 'pending_chain',
-    title: copy('Waiting for AI script path', '等待 AI 生成剧本链'),
-    summary: copy(`After inference completes, this section will show which tradable Polymarket books may react if "${market.title}" occurs.`, `推演完成后，这里会展示「${market.title}」发生后影响哪些真实 Polymarket 盘口。`),
+    title: copy('Waiting for AI script path'),
+    summary: copy(`After inference completes, this section will show which tradable Polymarket books may react if "${market.title}" occurs.`),
     confidence: 0.5,
-    expectedReturnHint: copy('No executable market yet.', '暂无可执行盘口。'),
+    expectedReturnHint: copy('No executable market yet.'),
     legs: [],
   }]
 }
@@ -7855,21 +7745,21 @@ function CausalMap({
   return (
     <div className="causal-map script-chain-map">
       <div className="script-map-head">
-        <span>{copy('Root Event', '根因事件')}</span>
+        <span>{copy('Root Event')}</span>
         <div>
-          <span><i className="line green" />{copy('Positive impact', '正向影响')}</span>
-          <span><i className="line red" />{copy('Negative impact', '负向影响')}</span>
-          <span><i className="line orange" />{copy('Conditional path', '条件传导')}</span>
+          <span><i className="line green" />{copy('Positive impact')}</span>
+          <span><i className="line red" />{copy('Negative impact')}</span>
+          <span><i className="line orange" />{copy('Conditional path')}</span>
         </div>
       </div>
       <div className="script-root-card">
         <MarketIcon market={market} size="medium" />
         <div>
-          <small>{copy('Root Market', '根节点市场')}</small>
+          <small>{copy('Root Market')}</small>
           <b>{market.title}</b>
           {market.eventTitle ? <small>{market.eventTitle}</small> : null}
           <strong>{market.price}% <span>{formatConfidence(result?.confidence)}</span></strong>
-          <em>{copy(`Synced ${formatDate(market.syncedAt)}`, `同步于 ${formatDate(market.syncedAt)}`)}</em>
+          <em>{copy(`Synced ${formatDate(market.syncedAt)}`)}</em>
         </div>
       </div>
       <svg className="script-chain-lines" viewBox="0 0 1000 310" preserveAspectRatio="none" aria-hidden="true">
@@ -7941,17 +7831,17 @@ function CausalMap({
       </div>
       <div className="script-chain-action">
         <div>
-          <b>{copy(`Selected path: ${selectedChain?.title || 'None'}`, `已选择剧本链：${selectedChain?.title || '暂无'}`)}</b>
-          <span>{selectedChain?.expectedReturnHint || copy('Choose a script path to add all included market directions to the order draft.', '选择一条剧本链后，可将其中所有盘口方向加入交易草稿。')}</span>
+          <b>{copy(`Selected path: ${selectedChain?.title || 'None'}`)}</b>
+          <span>{selectedChain?.expectedReturnHint || copy('Choose a script path to add all included market directions to the order draft.')}</span>
         </div>
-        <button type="button" disabled={!selectedChain?.legs.length} onClick={onOpenOrderPanel}>{copy('Buy This Path', '买入该剧本链盘口')}</button>
+        <button type="button" disabled={!selectedChain?.legs.length} onClick={onOpenOrderPanel}>{copy('Buy This Path')}</button>
       </div>
       <div className="confidence-legend">
-        <b>{copy('Confidence Guide', '置信度说明')}</b>
-        <span><i className="dot green" />{copy('High confidence >= 0.65', '高置信度 ≥ 0.65')}</span>
-        <span><i className="dot orange" />{copy('Elevated confidence 0.45 - 0.64', '较高置信度 0.45 - 0.64')}</span>
-        <span><i className="dot red" />{copy('Medium confidence 0.25 - 0.44', '中等置信度 0.25 - 0.44')}</span>
-        <span><i className="dot purple" />{copy('Lower confidence 0.10 - 0.24', '较低置信度 0.10 - 0.24')}</span>
+        <b>{copy('Confidence Guide')}</b>
+        <span><i className="dot green" />{copy('High confidence >= 0.65')}</span>
+        <span><i className="dot orange" />{copy('Elevated confidence 0.45 - 0.64')}</span>
+        <span><i className="dot red" />{copy('Medium confidence 0.25 - 0.44')}</span>
+        <span><i className="dot purple" />{copy('Lower confidence 0.10 - 0.24')}</span>
       </div>
     </div>
   )
@@ -8017,7 +7907,7 @@ function MarketHoverCard({
     ? `${market.marketsCount ?? market.topMarkets?.length ?? 0} markets - ${market.category}`
     : market.eventTitle || market.category
   const topMarketLabel = topMarket?.groupItemTitle || topMarket?.title
-  const rulesText = rules || description || copy('Polymarket has not provided detailed rules for this market.', 'Polymarket 未提供详细规则说明。')
+  const rulesText = rules || description || copy('Polymarket has not provided detailed rules for this market.')
   return (
     <aside
       className={`market-hover-card ${placement}`}
@@ -8035,25 +7925,25 @@ function MarketHoverCard({
         </div>
       </div>
       <div className="hover-card-stats">
-        <div><span>{copy('Price', '价格')}</span><b>{market.price}%</b></div>
-        <div><span>{copy('Volume', '成交量')}</span><b>{market.volume}</b></div>
-        <div><span>{copy('Liquidity', '流动性')}</span><b>{formatCompactMoney(market.liquidity)}</b></div>
-        <div><span>{copy('End Date', '结束时间')}</span><b>{formatDate(market.endDate)}</b></div>
+        <div><span>{copy('Price')}</span><b>{market.price}%</b></div>
+        <div><span>{copy('Volume')}</span><b>{market.volume}</b></div>
+        <div><span>{copy('Liquidity')}</span><b>{formatCompactMoney(market.liquidity)}</b></div>
+        <div><span>{copy('End Date')}</span><b>{formatDate(market.endDate)}</b></div>
       </div>
       <div className="hover-card-body" tabIndex={0}>
         {hasDistinctSummary ? (
           <section className="hover-card-section">
-            <span>{copy('Summary', '简介')}</span>
+            <span>{copy('Summary')}</span>
             <p>{description}</p>
           </section>
         ) : null}
         <section className="hover-card-section">
-          <span>{copy('Rules', '规则说明')}</span>
+          <span>{copy('Rules')}</span>
           <p>{rulesText}</p>
         </section>
       </div>
       <div className="hover-card-footer">
-        <span className={market.acceptingOrders === false ? 'closed' : 'open'}>{market.acceptingOrders === false ? copy('Orders paused', '暂停接单') : copy('Tradable', '可交易')}</span>
+        <span className={market.acceptingOrders === false ? 'closed' : 'open'}>{market.acceptingOrders === false ? copy('Orders paused') : copy('Tradable')}</span>
         {topMarket ? <span>{topMarketLabel}: {formatUnitPercent(topMarket.price)}</span> : topOutcome ? <span>{topOutcome.label}: {formatUnitPercent(topOutcome.price)}</span> : null}
       </div>
     </aside>
@@ -8085,7 +7975,7 @@ function SectionHeader({ title, note }: { title: string; note?: string }) {
 function BackButton({ onClick }: { onClick: () => void }) {
   return (
     <button className="back-button" type="button" onClick={onClick}>
-      <ArrowLeft size={17} /> {copy('Back', '返回')}
+      <ArrowLeft size={17} /> {copy('Back')}
     </button>
   )
 }
@@ -8106,9 +7996,9 @@ function SearchPopover({
   results: MarketSearchResult[]
 }) {
   const tabs: Array<{ type: SearchResultType; label: string }> = [
-    { type: 'market', label: copy('Markets', '盘口') },
-    { type: 'event', label: copy('Events', '事件') },
-    { type: 'topic', label: copy('Topics', '主题') },
+    { type: 'market', label: copy('Markets') },
+    { type: 'event', label: copy('Events') },
+    { type: 'topic', label: copy('Topics') },
   ]
   const filteredResults = results.filter((result) => result.type === activeType)
   return (
@@ -8131,25 +8021,25 @@ function SearchPopover({
             </span>
             <span className="search-result-main">
               <b>{result.title}</b>
-              <small>{result.subtitle || result.category || copy('Polymarket market', 'Polymarket 市场')}</small>
+              <small>{result.subtitle || result.category || copy('Polymarket market')}</small>
             </span>
             <span className="search-result-meta">
               <b>{formatProbability(result.price)}</b>
-              <small>{result.type === 'topic' ? copy('Topic', '主题') : result.endDate ? formatDate(result.endDate) : formatCompactMoney(result.volume)}</small>
+              <small>{result.type === 'topic' ? copy('Topic') : result.endDate ? formatDate(result.endDate) : formatCompactMoney(result.volume)}</small>
             </span>
           </button>
         ))}
-        {!loading && !filteredResults.length ? <div className="search-empty">{copy(`No ${searchTypeLabel(activeType)} results found for "${query}"`, `没有找到 “${query}” 的${searchTypeLabel(activeType)}结果`)}</div> : null}
-        {loading ? <div className="search-empty">{copy('Searching Polymarket markets...', '正在搜索 Polymarket 市场...')}</div> : null}
+        {!loading && !filteredResults.length ? <div className="search-empty">{copy(`No ${searchTypeLabel(activeType)} results found for "${query}"`)}</div> : null}
+        {loading ? <div className="search-empty">{copy('Searching Polymarket markets...')}</div> : null}
       </div>
     </div>
   )
 }
 
 function searchTypeLabel(type: SearchResultType) {
-  if (type === 'market') return copy('market', '盘口')
-  if (type === 'event') return copy('event', '事件')
-  return copy('topic', '主题')
+  if (type === 'market') return copy('market')
+  if (type === 'event') return copy('event')
+  return copy('topic')
 }
 
 function CategoryChips({
@@ -8270,7 +8160,7 @@ function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Ma
           ))}
         </div>
       </div>
-      <svg viewBox="0 0 760 336" aria-label={copy('Market price chart', '市场价格走势')}>
+      <svg viewBox="0 0 760 336" aria-label={copy('Market price chart')}>
         <g className="grid-lines">
           {ticks.map((tick) => {
             const y = chartY(tick, maxPrice)
@@ -8287,7 +8177,7 @@ function HistoricalMarketPriceChart({ eventMarkets, market }: { eventMarkets: Ma
               </text>
             )
           })}
-          <text x="36" y="314">{copy('Market start', '市场开始')}</text>
+          <text x="36" y="314">{copy('Market start')}</text>
           <text x="648" y="314">{formatDate(market.endDate)}</text>
         </g>
         {chartRows.map((outcome) => (
@@ -8350,7 +8240,7 @@ function marketOutcomeRows(market: Market) {
       id: market.id,
       market,
       label: marketDisplayLabel(market),
-      subtitle: copy(`Token ${formatToken(market.outcomes?.[0]?.tokenId)} · Market volume ${market.volume}`, `Token ${formatToken(market.outcomes?.[0]?.tokenId)} · 市场成交量 ${market.volume}`),
+      subtitle: copy(`Token ${formatToken(market.outcomes?.[0]?.tokenId)} · Market volume ${market.volume}`),
       index: 0,
       percent: unitPriceToPercent(yesPrice),
       bid: market.bestBid ?? yesPrice,
@@ -8364,7 +8254,7 @@ function marketOutcomeRows(market: Market) {
     id: `${outcome.label}-${outcome.index}`,
     market,
     label: outcome.label,
-    subtitle: copy(`Token ${formatToken(outcome.tokenId)} · Market volume ${market.volume}`, `Token ${formatToken(outcome.tokenId)} · 市场成交量 ${market.volume}`),
+    subtitle: copy(`Token ${formatToken(outcome.tokenId)} · Market volume ${market.volume}`),
     index: outcome.index,
     percent: outcome.percent,
     bid: outcome.index === 0 ? market.bestBid ?? outcome.yesPrice : outcome.yesPrice,
@@ -8431,7 +8321,7 @@ function MarketOrderBook({
             id: item.id,
             market: item,
             label: marketDisplayLabel(item),
-            subtitle: copy(`Token ${formatToken(item.outcomes?.[0]?.tokenId)} · Market volume ${item.volume}`, `Token ${formatToken(item.outcomes?.[0]?.tokenId)} · 市场成交量 ${item.volume}`),
+            subtitle: copy(`Token ${formatToken(item.outcomes?.[0]?.tokenId)} · Market volume ${item.volume}`),
             index,
             percent: item.price,
             bid: item.bestBid ?? item.price / 100,
@@ -8445,10 +8335,9 @@ function MarketOrderBook({
   const orderbookCountText = eventMarkets.length > 1
     ? copy(
       `${visibleMarketCountLabel} market${outcomeRows.length === 1 ? '' : 's'}${hasMoreMarkets && totalMarkets ? ` (loaded ${loadedMarketCount} / ${formatCompactCount(totalMarkets)})` : ''}`,
-      `${visibleMarketCountLabel} 个盘口${hasMoreMarkets && totalMarkets ? `（已加载 ${loadedMarketCount} / ${formatCompactCount(totalMarkets)}）` : ''}`,
     )
-    : copy(`${outcomeRows.length} market${outcomeRows.length === 1 ? '' : 's'}`, `${outcomeRows.length} 个盘口`)
-  const orderbookStatusText = market.acceptingOrders === false ? copy('Orders paused', '暂停接单') : copy('Tradable', '可交易')
+    : copy(`${outcomeRows.length} market${outcomeRows.length === 1 ? '' : 's'}`)
+  const orderbookStatusText = market.acceptingOrders === false ? copy('Orders paused') : copy('Tradable')
   const handleOutcomeSelect = useCallback((row: typeof outcomeRows[number], action: OrderbookOutcomeAction) => {
     if (!action.outcomeId) {
       setOrderError('Selected outcome is missing an outcomeId.')
@@ -8461,8 +8350,8 @@ function MarketOrderBook({
     <div className="market-orderbook">
       <div className="orderbook-head">
         <div>
-          <b>{copy('Markets', '盘口')}</b>
-          <span>{loading ? copy('Syncing event markets...', '正在同步 event 盘口...') : `${orderbookCountText} · ${orderbookStatusText}`}</span>
+          <b>{copy('Markets')}</b>
+          <span>{loading ? copy('Syncing event markets...') : `${orderbookCountText} · ${orderbookStatusText}`}</span>
         </div>
         <div className="orderbook-meta">
           <span>Vol. {market.volume}</span>
@@ -8508,18 +8397,18 @@ function MarketOrderBook({
                     disabled={loading || outcome.market.acceptingOrders === false || !action.outcomeId}
                     key={action.label}
                     type="button"
-                    aria-label={copy(`Analyze ${outcome.label} ${action.label} ${formatCents(action.price)}`, `推演 ${outcome.label} ${action.label} ${formatCents(action.price)}`)}
+                    aria-label={copy(`Analyze ${outcome.label} ${action.label} ${formatCents(action.price)}`)}
                     aria-pressed={selectedOutcomeId === action.outcomeId}
                     onClick={() => handleOutcomeSelect(outcome, action)}
                   >
-                    {copy('Analyze', '推演')} {action.label} <span>{formatCents(action.price)}</span>
+                    {copy('Analyze')} {action.label} <span>{formatCents(action.price)}</span>
                   </button>
                 ))}
               </div>
             </div>
           )
         }) : (
-          <div className="orderbook-empty">{hasMoreMarkets ? copy('No matches in the loaded markets. Try another keyword or open the original Polymarket event to confirm.', '当前已加载盘口中没有匹配结果，请换个关键词或打开 Polymarket 原事件确认。') : copy('No markets match this search.', '没有匹配的盘口。')}</div>
+          <div className="orderbook-empty">{hasMoreMarkets ? copy('No matches in the loaded markets. Try another keyword or open the original Polymarket event to confirm.') : copy('No markets match this search.')}</div>
         )}
       </div>
       {orderError ? <div className="status-note error">{orderError}</div> : null}
@@ -8547,7 +8436,7 @@ function RelatedMarketList({ currentMarket }: { currentMarket: Market }) {
           <MarketIcon market={market} size="small" />
           <div>
             <b>{market.title}</b>
-            <span>{copy(`Volume ${market.volume} · Traders ${market.traders}`, `成交量 ${market.volume} · 交易者 ${market.traders}`)}</span>
+            <span>{copy(`Volume ${market.volume} · Traders ${market.traders}`)}</span>
           </div>
           <strong>{market.price}%</strong>
           <span className={market.change > 0 ? 'green-text' : 'red-text'}>{market.change > 0 ? '+' : ''}{market.change}%</span>
@@ -8577,12 +8466,12 @@ function Divider() {
 
 function PreviewList({ market, settings }: { market: Market; settings: InferenceSettingsState }) {
   const items = [
-    [copy('Root Market', '根节点市场'), market.title],
-    [copy('Inference Scope', '推演范围'), scopeLabel(settings.scope)],
-    [copy('Time Range', '时间周期'), timeRangeLabel(settings.timeRange, market)],
+    [copy('Root Market'), market.title],
+    [copy('Inference Scope'), scopeLabel(settings.scope)],
+    [copy('Time Range'), timeRangeLabel(settings.timeRange, market)],
     ['Depth', `${settings.depth} layers`],
-    [copy('AI Model', 'AI 模型'), modelPreferenceLabel(settings.modelPreference)],
-    [copy('Confidence Preference', '置信度偏好'), `${confidenceModeLabel(settings.confidenceMode)} · ${settings.confidenceThreshold.toFixed(2)}`],
+    [copy('AI Model'), modelPreferenceLabel(settings.modelPreference)],
+    [copy('Confidence Preference'), `${confidenceModeLabel(settings.confidenceMode)} · ${settings.confidenceThreshold.toFixed(2)}`],
   ]
   return (
     <div className="preview-list">
@@ -8609,7 +8498,7 @@ function DiscoveryTable({ market, relatedMarkets }: { market?: Market; relatedMa
           const tone = categoryTones[item.category] || seedMarket.tone
           const score = item.verificationScore ?? item.confidence
           const evidenceCount = item.evidenceCount ?? item.evidenceIds?.length ?? 0
-          const relationMeta = evidenceCount > 0 ? copy(`Evidence ${evidenceCount}`, `证据 ${evidenceCount}`) : item.relation
+          const relationMeta = evidenceCount > 0 ? copy(`Evidence ${evidenceCount}`) : item.relation
           return (
             <div key={item.id}>
               <MarketIcon market={{ icon: seedMarket.icon, iconUrl: item.icon || item.image || null, tone }} size="small" />
@@ -8657,19 +8546,19 @@ function LogList({ logs, loading }: { logs?: string[]; loading?: boolean }) {
   const displayLogs = logs?.length
     ? logs
     : [
-        copy('Retrieving directly related markets for the root node...', '正在检索根节点的直接关联市场...'),
-        copy('Expanding second-order related markets...', '正在扩展二阶关联市场...'),
-        copy('Collecting Polymarket market context...', '正在收集 Polymarket 市场上下文...'),
-        copy('Requesting the DeepSeek inference model...', '正在请求 DeepSeek 推演模型...'),
+        copy('Retrieving directly related markets for the root node...'),
+        copy('Expanding second-order related markets...'),
+        copy('Collecting Polymarket market context...'),
+        copy('Requesting the DeepSeek inference model...'),
       ]
   return (
     <div className="log-list">
       {displayLogs.map((title, index) => (
         <div key={`${title}-${index}`}>
           <i className={`dot ${index > 3 ? 'green' : index > 1 ? 'cyan' : 'blue'}`} />
-          <span>{loading && index === displayLogs.length - 1 ? copy('Processing', '进行中') : copy('Complete', '完成')}</span>
+          <span>{loading && index === displayLogs.length - 1 ? copy('Processing') : copy('Complete')}</span>
           <b>{title}</b>
-          <small>{index === 0 ? copy('Root node, same-event markets, and local edges are included in context.', '根节点、同事件盘口和本地边已纳入上下文') : copy('Used to generate causal paths, scenarios, and risk notes.', '用于生成因果链路、情景和风险提示')}</small>
+          <small>{index === 0 ? copy('Root node, same-event markets, and local edges are included in context.') : copy('Used to generate causal paths, scenarios, and risk notes.')}</small>
         </div>
       ))}
     </div>
@@ -8712,7 +8601,7 @@ function SummaryList({ market, result }: { market: Market; result: InferenceResu
       ]]
       : []
     const items = [
-      [copy('Root Market Thesis', '根市场推演结论'), englishTextOrFallback(result.thesis, 'AI analyzed the selected root outcome against related Polymarket markets.')],
+      [copy('Root Market Thesis'), englishTextOrFallback(result.thesis, 'AI analyzed the selected root outcome against related Polymarket markets.')],
       ...chainItems,
       ...(chainItems.length ? [] : linkItems),
       ...scenarioItems,
@@ -8730,16 +8619,16 @@ function SummaryList({ market, result }: { market: Market; result: InferenceResu
     )
   }
   const items = [
-    [market.title, copy(`Current market price is ${market.price}% with ${market.volume} volume. This is the root node for this inference.`, `市场当前价格为 ${market.price}%，成交量为 ${market.volume}，这是本次推演的根节点。`)],
+    [market.title, copy(`Current market price is ${market.price}% with ${market.volume} volume. This is the root node for this inference.`)],
     [
-      copy('Same-Event Market Links', '同事件市场联动'),
+      copy('Same-Event Market Links'),
       market.eventTitle
-        ? copy(`Prioritize other markets under the "${market.eventTitle}" event to evaluate probability migration inside the event.`, `优先检索「${market.eventTitle}」事件下的其他盘口，判断同事件内概率迁移。`)
-        : copy('Prioritize markets with similar topics and categories to evaluate probability migration between nearby markets.', '优先检索同主题和同分类市场，判断相近盘口的概率迁移。'),
+        ? copy(`Prioritize other markets under the "${market.eventTitle}" event to evaluate probability migration inside the event.`)
+        : copy('Prioritize markets with similar topics and categories to evaluate probability migration between nearby markets.'),
     ],
     ['Liquidity', `This market has ${formatCompactMoney(market.liquidity)} liquidity; review live depth before trading.`],
-    [copy('Time Constraint', '时间约束'), copy(`Market end date is ${formatDate(market.endDate)}. Inference prioritizes key triggers before close.`, `市场结束时间为 ${formatDate(market.endDate)}，推演将优先关注结束前的关键触发因素。`)],
-    [copy('Risk Note', '风险提示'), copy('This script is scenario analysis based on market data and AI reasoning. It is not trading advice.', '该脚本为基于市场数据和 AI 推理的情景分析，不构成交易建议。')],
+    [copy('Time Constraint'), copy(`Market end date is ${formatDate(market.endDate)}. Inference prioritizes key triggers before close.`)],
+    [copy('Risk Note'), copy('This script is scenario analysis based on market data and AI reasoning. It is not trading advice.')],
   ]
   return (
     <div className="summary-list">
