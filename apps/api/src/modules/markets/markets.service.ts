@@ -103,6 +103,10 @@ const NETWORK_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()(
   rules: true,
   icon: true,
   image: true,
+  active: true,
+  closed: true,
+  archived: true,
+  staleDetectedAt: true,
   acceptingOrders: true,
   enableOrderBook: true,
   bestBid: true,
@@ -1309,6 +1313,8 @@ export class MarketsService {
       volume: toNullableNumber(candidate.market.volume),
     }));
 
+    const tradingFlags = eventGroupTradingFlags(group.candidates.map((candidate) => candidate.market));
+
     return {
       nodeType: 'event' as const,
       id: event.id,
@@ -1328,7 +1334,7 @@ export class MarketsService {
       volume24hr: group.volume24hr,
       liquidity: toNullableNumber(event.liquidity) ?? group.liquidity,
       endDate: event.endDate?.toISOString() ?? primaryMarket.endDate?.toISOString() ?? null,
-      acceptingOrders: group.candidates.some((candidate) => candidate.market.acceptingOrders),
+      ...tradingFlags,
       category: group.category,
       categoryKey: group.category,
       officialCategory: group.category,
@@ -1367,7 +1373,12 @@ export class MarketsService {
       volume24hr: toNullableNumber(market.volume24hr),
       liquidity: toNullableNumber(market.liquidity),
       endDate: market.endDate?.toISOString() ?? market.event?.endDate?.toISOString() ?? null,
+      active: market.active,
+      closed: market.closed,
+      archived: market.archived,
+      staleDetectedAt: market.staleDetectedAt?.toISOString() ?? null,
       acceptingOrders: market.acceptingOrders,
+      enableOrderBook: market.enableOrderBook,
       category: normalizedCategory,
       categoryKey: normalizedCategory,
       officialCategory: normalizedCategory,
@@ -1427,6 +1438,42 @@ function eventDetailMarketEventContext(event: EventDetailRecord): ExplorerMarket
     syncedAt: event.syncedAt,
     description: event.description,
   };
+}
+
+type NetworkMarketTradingState = Pick<
+  NetworkMarketRecord,
+  'active' | 'closed' | 'archived' | 'staleDetectedAt' | 'acceptingOrders' | 'enableOrderBook'
+>;
+
+function eventGroupTradingFlags(markets: NetworkMarketTradingState[]) {
+  const openMarkets = markets.filter(isOpenNetworkMarket);
+  if (openMarkets.length) {
+    const hasTradableMarket = openMarkets.some((market) => market.acceptingOrders && market.enableOrderBook);
+    const hasAcceptingMarket = openMarkets.some((market) => market.acceptingOrders);
+    const hasOrderBookMarket = openMarkets.some((market) => market.enableOrderBook);
+    return {
+      active: true,
+      closed: false,
+      archived: false,
+      staleDetectedAt: null,
+      acceptingOrders: hasTradableMarket || hasAcceptingMarket,
+      enableOrderBook: hasTradableMarket || (!hasAcceptingMarket && hasOrderBookMarket),
+    };
+  }
+
+  const firstStaleAt = markets.find((market) => market.staleDetectedAt)?.staleDetectedAt ?? null;
+  return {
+    active: markets.some((market) => market.active),
+    closed: markets.length ? markets.every((market) => market.closed) : false,
+    archived: markets.length ? markets.every((market) => market.archived) : false,
+    staleDetectedAt: firstStaleAt?.toISOString() ?? null,
+    acceptingOrders: false,
+    enableOrderBook: false,
+  };
+}
+
+function isOpenNetworkMarket(market: NetworkMarketTradingState): boolean {
+  return market.active && !market.closed && !market.archived && market.staleDetectedAt == null;
 }
 
 type MarketSort = 'volume' | 'volume24hr' | 'endDate' | 'syncedAt';

@@ -3,6 +3,7 @@ import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { orderToJsonV2, Side as SdkSide, type OrderType as SdkOrderType } from '@polymarket/clob-client-v2';
 import { encodeAbiParameters, getAddress, keccak256, toHex } from 'viem';
+import { REAL_TRADING_DISABLED_MESSAGE } from '../../../common/constants/api.constants';
 import { ApiException } from '../../../common/errors/api.exception';
 import type { OrderBookSnapshot } from '../types';
 import {
@@ -372,7 +373,7 @@ export class ClobClient {
     if (!this.realOrdersEnabled) {
       return {
         status: 'unavailable' as TradingCapabilityStatus,
-        reason: 'CLOB real trading is disabled by ENABLE_REAL_ORDERS=false',
+        reason: REAL_TRADING_DISABLED_MESSAGE,
         signatureType: auth?.signatureType ?? this.signatureType,
       };
     }

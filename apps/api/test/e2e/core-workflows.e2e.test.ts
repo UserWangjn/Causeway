@@ -346,7 +346,7 @@ describe('core backend workflows e2e', () => {
 
     expect(tradesBody.data).toMatchObject({
       capability: 'degraded',
-      dataSource: 'local',
+      dataSource: 'causeway_order_ledger',
       nextCursor: null,
       hasMore: false,
     });

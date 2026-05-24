@@ -1,4 +1,5 @@
 export const REQUEST_ID_HEADER = 'x-request-id';
+export const REAL_TRADING_DISABLED_MESSAGE = 'Real order execution is not enabled in this environment.';
 
 export const API_ERROR_CODES = {
   AUTH_REQUIRED: 'AUTH_REQUIRED',

@@ -15,11 +15,15 @@ import {
   type NormalizedDataApiPosition,
 } from '../../integrations/polymarket/data-api-position-normalizer';
 import { DataApiClient } from '../../integrations/polymarket/services/data-api.client';
+import { TradingService } from '../trading/trading.service';
 import { PortfolioOrdersQueryDto } from './dto/portfolio-orders-query.dto';
 import { PortfolioTradesQueryDto } from './dto/portfolio-trades-query.dto';
 
-const CASH_BALANCE_UNAVAILABLE_REASON = 'cash balance source is not wired yet';
-const LOCAL_TRADE_HISTORY_REASON = 'trade history is based on monitored Causeway orders; external non-Causeway trades are excluded';
+const TRADING_BALANCE_UNAVAILABLE_REASON = 'Trading wallet balance is temporarily unavailable.';
+const CAUSEWAY_TRADE_HISTORY_LIMITATION_REASON = 'trade history is based on monitored Causeway orders; external non-Causeway trades are excluded';
+const CAUSEWAY_ORDER_LEDGER_SOURCE = 'causeway_order_ledger';
+const PENDING_SYNC_SOURCE = 'pending_sync';
+const UNAVAILABLE_SOURCE = 'unavailable';
 
 const PORTFOLIO_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
   id: true,
@@ -128,44 +132,67 @@ export class PortfolioService {
     private readonly dataApiClient: DataApiClient,
     @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(TradingService)
+    private readonly tradingService: TradingService,
   ) {}
 
   async summary(user: CurrentUser) {
     const capability = this.dataApiClient.getCapability();
-    const positions = await this.prisma.externalPosition.findMany({
-      where: { userId: user.id },
-      select: { currentValue: true, pnl: true },
-    });
-    const openOrders = await this.prisma.causewayOrder.findMany({
-      where: {
-        orderIntent: { userId: user.id, executionMode: 'real' },
-        status: { in: ['submitted', 'partially_filled'] },
-      },
-      select: { amountUsd: true },
-    });
+    const [positions, tradingBalance] = await Promise.all([
+      this.prisma.externalPosition.findMany({
+        where: { userId: user.id },
+        select: { currentValue: true, pnl: true },
+      }),
+      this.resolveTradingBalance(user),
+    ]);
     const openPositionsValue = sumNullable(positions.map((position) => position.currentValue));
     const pnl = sumNullable(positions.map((position) => position.pnl));
-    const openOrdersValue = sumNullable(openOrders.map((order) => order.amountUsd));
-    const hasLocalExposure = positions.length > 0 || openOrders.length > 0;
-    const summaryState = hasLocalExposure
+    const positionValueMissing = positions.some((position) => toNullableNumber(position.currentValue) == null);
+    const pnlMissing = positions.some((position) => toNullableNumber(position.pnl) == null);
+    const summaryState = positions.length > 0
       ? {
-          capability: 'degraded' as const,
-          dataSource: resolvePortfolioSummaryDataSource(positions.length, openOrders.length),
-          error: CASH_BALANCE_UNAVAILABLE_REASON,
+          capability: positionValueMissing || pnlMissing ? 'degraded' : 'available',
+          dataSource: 'polymarket_data_api' as const,
+          error: positionValueMissing || pnlMissing ? 'Some synced position values are temporarily unavailable.' : null,
         }
       : resolveEmptySummaryState(await this.findLatestPositionSync(user.id), capability);
+    const summaryError = summaryState.error ?? tradingBalance.error;
+    const summaryCapability = summaryError
+      ? (summaryState.capability === 'unavailable' ? 'unavailable' : 'degraded')
+      : 'available';
+    const portfolioValue = tradingBalance.cashAvailable == null
+      ? null
+      : roundCurrency(tradingBalance.cashAvailable + (openPositionsValue ?? 0));
 
     return {
-      capability: summaryState.capability,
+      capability: summaryCapability,
       dataSource: summaryState.dataSource,
-      cashAvailable: null,
-      portfolioValue: openPositionsValue,
+      cashAvailable: tradingBalance.cashAvailable,
+      portfolioValue,
       openPositionsValue,
-      openOrdersValue,
+      openOrdersValue: null,
       pnl,
       refreshedAt: new Date().toISOString(),
-      error: summaryState.error,
+      error: summaryError,
     };
+  }
+
+  private async resolveTradingBalance(user: CurrentUser): Promise<{ cashAvailable: number | null; error: string | null }> {
+    try {
+      const readiness = await this.tradingService.getReadiness(user, { refreshExternal: true, tradingAccountType: 'auto' });
+      const cashAvailable = parseBalance(readiness.balance.raw);
+      return {
+        cashAvailable,
+        error: cashAvailable == null
+          ? readiness.reason ?? 'Trading wallet balance has not been refreshed yet.'
+          : null,
+      };
+    } catch {
+      return {
+        cashAvailable: null,
+        error: TRADING_BALANCE_UNAVAILABLE_REASON,
+      };
+    }
   }
 
   async positions(user: CurrentUser) {
@@ -205,7 +232,7 @@ export class PortfolioService {
       items,
       refreshedAt: new Date().toISOString(),
       error: hasUnresolvedPositions
-        ? 'some positions are not linked to local markets yet'
+        ? 'some positions are missing Causeway market metadata'
         : items.length
           ? 'external position sync is not fully automated yet'
           : emptyPositionState.error,
@@ -388,7 +415,7 @@ export class PortfolioService {
 
     return {
       capability: 'degraded',
-      dataSource: 'local',
+      dataSource: CAUSEWAY_ORDER_LEDGER_SOURCE,
       items: items.map((intent) => ({
         intentId: intent.id,
         status: intent.status,
@@ -438,7 +465,7 @@ export class PortfolioService {
     if (!items.length) {
       return {
         capability: 'available',
-        dataSource: 'local',
+        dataSource: CAUSEWAY_ORDER_LEDGER_SOURCE,
         items: [],
         nextCursor: null,
         hasMore: false,
@@ -449,7 +476,7 @@ export class PortfolioService {
 
     return {
       capability: 'degraded',
-      dataSource: 'local',
+      dataSource: CAUSEWAY_ORDER_LEDGER_SOURCE,
       items: items.map((order) => ({
         tradeId: order.id,
         orderId: order.id,
@@ -475,7 +502,7 @@ export class PortfolioService {
       nextCursor: orders.length > limit ? encodeTimestampCursor('portfolio_trades', items.at(-1)) : null,
       hasMore: orders.length > limit,
       refreshedAt: new Date().toISOString(),
-      error: LOCAL_TRADE_HISTORY_REASON,
+      error: CAUSEWAY_TRADE_HISTORY_LIMITATION_REASON,
     };
   }
 }
@@ -534,6 +561,14 @@ function sumNullable(values: unknown[]): number | null {
   return roundCurrency(numbers.reduce((sum, value) => sum + value, 0));
 }
 
+function parseBalance(value: string | null): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  return /^-?\d+$/.test(trimmed) ? parsed / 1_000_000 : parsed;
+}
+
 function firstNullableNumber(...values: unknown[]): number | null {
   for (const value of values) {
     const parsed = toNullableNumber(value);
@@ -542,51 +577,12 @@ function firstNullableNumber(...values: unknown[]): number | null {
   return null;
 }
 
-function resolvePortfolioSummaryDataSource(positionCount: number, openOrderCount: number): 'polymarket_data_api' | 'local' | 'stub' {
-  if (positionCount > 0) return 'polymarket_data_api';
-  if (openOrderCount > 0) return 'local';
-  return 'stub';
-}
-
 function resolveEmptySummaryState(
   latestSync: { status: string; error: string | null } | null,
   dataApiCapability: { status: 'available' | 'unavailable'; reason: string | null },
 ): {
-  capability: 'degraded' | 'unavailable';
-  dataSource: 'polymarket_data_api' | 'stub';
-  error: string | null;
-} {
-  if (latestSync?.status === 'completed') {
-    return {
-      capability: 'degraded',
-      dataSource: 'polymarket_data_api',
-      error: CASH_BALANCE_UNAVAILABLE_REASON,
-    };
-  }
-  if (latestSync?.status === 'failed') {
-    return {
-      capability: 'unavailable',
-      dataSource: 'stub',
-      error: latestSync.error ?? 'positions sync failed',
-    };
-  }
-  if (dataApiCapability.status === 'unavailable') {
-    return {
-      capability: 'unavailable',
-      dataSource: 'stub',
-      error: dataApiCapability.reason ?? 'positions sync is unavailable',
-    };
-  }
-  return {
-    capability: 'degraded',
-    dataSource: 'stub',
-    error: 'positions have not been synced yet',
-  };
-}
-
-function resolveEmptyPositionState(latestSync: { status: string; error: string | null } | null): {
   capability: 'available' | 'degraded' | 'unavailable';
-  dataSource: 'polymarket_data_api' | 'stub';
+  dataSource: 'polymarket_data_api' | typeof PENDING_SYNC_SOURCE | typeof UNAVAILABLE_SOURCE;
   error: string | null;
 } {
   if (latestSync?.status === 'completed') {
@@ -599,13 +595,46 @@ function resolveEmptyPositionState(latestSync: { status: string; error: string |
   if (latestSync?.status === 'failed') {
     return {
       capability: 'unavailable',
-      dataSource: 'stub',
+      dataSource: UNAVAILABLE_SOURCE,
+      error: latestSync.error ?? 'positions sync failed',
+    };
+  }
+  if (dataApiCapability.status === 'unavailable') {
+    return {
+      capability: 'unavailable',
+      dataSource: UNAVAILABLE_SOURCE,
+      error: dataApiCapability.reason ?? 'positions sync is unavailable',
+    };
+  }
+  return {
+    capability: 'degraded',
+    dataSource: PENDING_SYNC_SOURCE,
+    error: 'positions have not been synced yet',
+  };
+}
+
+function resolveEmptyPositionState(latestSync: { status: string; error: string | null } | null): {
+  capability: 'available' | 'degraded' | 'unavailable';
+  dataSource: 'polymarket_data_api' | typeof PENDING_SYNC_SOURCE | typeof UNAVAILABLE_SOURCE;
+  error: string | null;
+} {
+  if (latestSync?.status === 'completed') {
+    return {
+      capability: 'available',
+      dataSource: 'polymarket_data_api',
+      error: null,
+    };
+  }
+  if (latestSync?.status === 'failed') {
+    return {
+      capability: 'unavailable',
+      dataSource: UNAVAILABLE_SOURCE,
       error: latestSync.error ?? 'positions sync failed',
     };
   }
   return {
     capability: 'degraded',
-    dataSource: 'stub',
+    dataSource: PENDING_SYNC_SOURCE,
     error: 'positions have not been synced yet',
   };
 }

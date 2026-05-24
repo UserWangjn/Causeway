@@ -127,7 +127,7 @@ describe('ClobClient', () => {
 
     expect(client.getCapability()).toEqual({
       status: 'unavailable',
-      reason: 'CLOB real trading is disabled by ENABLE_REAL_ORDERS=false',
+      reason: 'Real order execution is not enabled in this environment.',
       signatureType: 2,
     });
   });

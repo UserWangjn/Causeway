@@ -4,31 +4,21 @@ import type { CurrentUser } from '../../src/common/decorators/current-user.decor
 import type { PrismaService } from '../../src/database/prisma.service';
 import type { DataApiClient } from '../../src/integrations/polymarket/services/data-api.client';
 import { PortfolioService } from '../../src/modules/portfolio/portfolio.service';
+import type { TradingService } from '../../src/modules/trading/trading.service';
 
 describe('PortfolioService', () => {
-  it('summarizes only the authenticated user local exposure', async () => {
+  it('summarizes only the authenticated user account exposure', async () => {
     const externalPositionFindMany = vi.fn().mockResolvedValue([
       {
         currentValue: '12.50',
         pnl: '1.25',
       },
     ]);
-    const causewayOrderFindMany = vi.fn().mockResolvedValue([
-      {
-        amountUsd: '10',
-      },
-      {
-        amountUsd: '15.25',
-      },
-    ]);
     const service = createService({
       externalPosition: {
         findMany: externalPositionFindMany,
       },
-      causewayOrder: {
-        findMany: causewayOrderFindMany,
-      },
-    });
+    }, {}, tradingBalance('9000000'));
 
     const result = await service.summary(currentUser());
 
@@ -36,22 +26,15 @@ describe('PortfolioService', () => {
       where: { userId: 'user_1' },
       select: { currentValue: true, pnl: true },
     });
-    expect(causewayOrderFindMany).toHaveBeenCalledWith({
-      where: {
-        orderIntent: { userId: 'user_1', executionMode: 'real' },
-        status: { in: ['submitted', 'partially_filled'] },
-      },
-      select: { amountUsd: true },
-    });
     expect(result).toMatchObject({
-      capability: 'degraded',
+      capability: 'available',
       dataSource: 'polymarket_data_api',
-      cashAvailable: null,
-      portfolioValue: 12.5,
+      cashAvailable: 9,
+      portfolioValue: 21.5,
       openPositionsValue: 12.5,
-      openOrdersValue: 25.25,
+      openOrdersValue: null,
       pnl: 1.25,
-      error: 'cash balance source is not wired yet',
+      error: null,
     });
   });
 
@@ -96,7 +79,7 @@ describe('PortfolioService', () => {
     });
     expect(result).toMatchObject({
       capability: 'degraded',
-      dataSource: 'stub',
+      dataSource: 'pending_sync',
       cashAvailable: null,
       portfolioValue: null,
       openPositionsValue: null,
@@ -128,7 +111,7 @@ describe('PortfolioService', () => {
       capability: 'degraded',
       dataSource: 'polymarket_data_api',
       cashAvailable: null,
-      error: 'cash balance source is not wired yet',
+      error: 'Trading wallet balance has not been refreshed yet.',
     });
   });
 
@@ -149,13 +132,13 @@ describe('PortfolioService', () => {
 
     expect(result).toMatchObject({
       capability: 'unavailable',
-      dataSource: 'stub',
+      dataSource: 'unavailable',
       cashAvailable: null,
       error: 'fixture data api unavailable',
     });
   });
 
-  it('lists local orders with user-scoped status filtering', async () => {
+  it('lists Causeway order ledger records with user-scoped status filtering', async () => {
     const orderIntentFindMany = vi.fn().mockResolvedValue([
       {
         id: 'intent_1',
@@ -274,7 +257,7 @@ describe('PortfolioService', () => {
     });
     expect(result).toMatchObject({
       capability: 'degraded',
-      dataSource: 'local',
+      dataSource: 'causeway_order_ledger',
       nextCursor: null,
       hasMore: false,
       items: [
@@ -411,7 +394,7 @@ describe('PortfolioService', () => {
     });
   });
 
-  it('does not expose unresolved local position links as public position ids', async () => {
+  it('does not expose unresolved position links as public position ids', async () => {
     const externalPositionFindMany = vi.fn().mockResolvedValue([
       {
         id: 'position_1',
@@ -440,7 +423,7 @@ describe('PortfolioService', () => {
       capability: 'degraded',
       dataSource: 'polymarket_data_api',
       items: [],
-      error: 'some positions are not linked to local markets yet',
+      error: 'some positions are missing Causeway market metadata',
     });
   });
 
@@ -849,7 +832,7 @@ describe('PortfolioService', () => {
     });
     expect(result).toMatchObject({
       capability: 'degraded',
-      dataSource: 'local',
+      dataSource: 'causeway_order_ledger',
       nextCursor: null,
       hasMore: false,
       error: 'trade history is based on monitored Causeway orders; external non-Causeway trades are excluded',
@@ -869,7 +852,7 @@ describe('PortfolioService', () => {
     });
   });
 
-  it('returns a local empty trades page when no local trades exist', async () => {
+  it('returns an empty Causeway order ledger trades page when no trades exist', async () => {
     const service = createService({
       causewayOrder: {
         findMany: vi.fn().mockResolvedValue([]),
@@ -888,7 +871,7 @@ describe('PortfolioService', () => {
 
     expect(result).toMatchObject({
       capability: 'available',
-      dataSource: 'local',
+      dataSource: 'causeway_order_ledger',
       items: [],
       nextCursor: null,
       hasMore: false,
@@ -897,7 +880,11 @@ describe('PortfolioService', () => {
   });
 });
 
-function createService(prisma: unknown, dataApiOverrides: Partial<DataApiClient> = {}): PortfolioService {
+function createService(
+  prisma: unknown,
+  dataApiOverrides: Partial<DataApiClient> = {},
+  tradingOverrides: Partial<TradingService> = {},
+): PortfolioService {
   const dataApiClient = {
     getCapability: vi.fn().mockReturnValue({
       status: 'unavailable',
@@ -906,8 +893,15 @@ function createService(prisma: unknown, dataApiOverrides: Partial<DataApiClient>
     getCurrentPositions: vi.fn(),
     ...dataApiOverrides,
   } as unknown as DataApiClient;
+  const tradingService = {
+    getReadiness: vi.fn().mockResolvedValue({
+      balance: { raw: null },
+      reason: 'Trading wallet balance has not been refreshed yet.',
+    }),
+    ...tradingOverrides,
+  } as unknown as TradingService;
 
-  return new PortfolioService(dataApiClient, prisma as PrismaService);
+  return new PortfolioService(dataApiClient, prisma as PrismaService, tradingService);
 }
 
 function dataApiAvailable(overrides: Partial<DataApiClient> = {}): Partial<DataApiClient> {
@@ -917,6 +911,15 @@ function dataApiAvailable(overrides: Partial<DataApiClient> = {}): Partial<DataA
       reason: null,
     }),
     ...overrides,
+  };
+}
+
+function tradingBalance(raw: string | null): Partial<TradingService> {
+  return {
+    getReadiness: vi.fn().mockResolvedValue({
+      balance: { raw },
+      reason: raw == null ? 'Trading wallet balance has not been refreshed yet.' : null,
+    }),
   };
 }
 

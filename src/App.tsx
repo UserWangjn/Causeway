@@ -357,7 +357,7 @@ type TradeStatusItem = {
 
 type OpenOrdersResult = {
   capability: 'available' | 'degraded' | 'unavailable'
-  dataSource: 'polymarket_clob' | 'local' | string
+  dataSource: 'polymarket_clob' | string
   ownerWalletAddress?: string | null
   tradingWalletAddress?: string | null
   walletRole?: string | null
@@ -370,7 +370,7 @@ type OpenOrdersResult = {
 
 type PortfolioSummary = {
   capability: 'available' | 'degraded' | 'unavailable'
-  dataSource: 'polymarket_data_api' | 'local' | 'stub' | string
+  dataSource: 'polymarket_data_api' | 'pending_sync' | 'unavailable' | string
   cashAvailable: number | null
   portfolioValue: number | null
   openPositionsValue: number | null
@@ -1118,7 +1118,12 @@ type BackendMarketNetwork = {
     endDate?: string | null
     description?: string | null
     rules?: string | null
+    active?: boolean
+    closed?: boolean
+    archived?: boolean
+    staleDetectedAt?: string | null
     acceptingOrders?: boolean
+    enableOrderBook?: boolean
     category: string | null
     categoryKey?: string | null
     officialCategory?: string | null
@@ -1215,9 +1220,32 @@ function formatApiError(response: Response, payload: ApiErrorEnvelope | null) {
     ?? response.statusText
     ?? `HTTP ${response.status}`
   const detail = summarizeApiDetails(errorRecord?.details ?? payload?.details)
+  const friendlyCapabilityMessage = formatCapabilityUnavailableMessage(message, code, detail)
+  if (friendlyCapabilityMessage) return friendlyCapabilityMessage
   const suffix = code ? ` (${code})` : ''
   const detailSuffix = detail ? `: ${detail}` : ''
   return `${message}${suffix}${detailSuffix}`
+}
+
+function formatCapabilityUnavailableMessage(message: string, code: string | null, detail?: string | null) {
+  if (code !== 'CAPABILITY_UNAVAILABLE') return null
+  const combined = `${message} ${detail ?? ''}`
+  return normalizeTradingCapabilityReason(combined)
+}
+
+function normalizeTradingCapabilityReason(reason: string | null | undefined) {
+  if (!reason) return null
+  if (isRealTradingDisabledReason(reason)) {
+    return copy('Real order execution is not enabled in this environment. Enable real order execution and Polymarket credentials in server settings before submitting real CLOB orders.')
+  }
+  return reason
+}
+
+function isRealTradingDisabledReason(reason: string) {
+  const normalized = reason.toLowerCase()
+  return normalized.includes('enable_real_orders=false')
+    || normalized.includes('real trading is disabled')
+    || normalized.includes('clob real trading is disabled')
 }
 
 function formatUnexpectedApiResponse(response: Response, rawText: string) {
@@ -1282,7 +1310,12 @@ function backendNetworkToApiNode(node: BackendMarketNetwork['nodes'][number], in
     endDate: node.endDate ?? null,
     description: node.description ?? null,
     rules: node.rules ?? null,
+    active: node.active ?? true,
+    closed: node.closed ?? false,
+    archived: node.archived ?? false,
+    staleDetectedAt: node.staleDetectedAt ?? null,
     acceptingOrders: node.acceptingOrders ?? true,
+    enableOrderBook: node.enableOrderBook ?? true,
     outcomes: [],
     marketsCount: node.marketsCount ?? null,
     topMarkets: node.topMarkets ?? [],
@@ -2250,6 +2283,18 @@ function parseDraftNumber(value: string): number | null {
 function formatUsd(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return copy('Pending')
   return `$${value.toFixed(value >= 100 ? 0 : 2)}`
+}
+
+function formatSignedUsd(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return copy('Pending')
+  if (Math.abs(value) < Number.EPSILON) return formatUsd(0)
+  return `${value > 0 ? '+' : '-'}${formatUsd(Math.abs(value))}`
+}
+
+function sumCurrency(values: Array<number | null | undefined>) {
+  const numbers = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  if (!numbers.length) return null
+  return Number(numbers.reduce((sum, value) => sum + value, 0).toFixed(2))
 }
 
 function formatShares(value: number | null | undefined) {
@@ -4805,6 +4850,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   const handleCancelOpenOrder = useCallback(async (order: OpenOrderItem) => {
     const cancelId = order.orderId ?? order.externalOrderId
     if (!cancelId || cancelingOrderId) return
+    if (!confirmOpenOrderCancellation(order)) return
     setCancelingOrderId(cancelId)
     setOpenOrdersError(null)
     const activityId = addActivity('Cancel order', `Submitting cancellation for ${shortAddress(order.externalOrderId)}.`, 'pending')
@@ -5027,7 +5073,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                     <div><span>Status</span><b>{readiness?.status ?? 'Not checked'}</b></div>
                     <div><span>Minimum ready</span><b>{formatUsd(TRADING_WALLET_MIN_READY_USD)}</b></div>
                   </div>
-                  {readiness?.reason ? <div className="status-note warning wallet-status-note">{readiness.reason}</div> : null}
+                  {readiness?.reason ? <div className="status-note warning wallet-status-note">{normalizeTradingCapabilityReason(readiness.reason) ?? readiness.reason}</div> : null}
                   <button className="primary-button" disabled={quickSetupRunning || !auth.isConnected} type="button" onClick={handleStartTradingSetup}>
                     {quickSetupRunning ? 'Processing...' : 'Check and prepare trading wallet'}
                   </button>
@@ -5113,8 +5159,8 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                   <b>{shortAddress(openOrders?.ownerWalletAddress ?? auth.walletAddress ?? null)}</b>
                 </div>
                 <div>
-                  <span>Source</span>
-                  <b>{openOrders?.dataSource === 'polymarket_clob' ? 'CLOB' : openOrders?.dataSource ?? 'Not loaded'}</b>
+                  <span>Order feed</span>
+                  <b>{accountOrdersSourceLabel(openOrders)}</b>
                 </div>
               </div>
               <div className="open-orders-toolbar">
@@ -5151,7 +5197,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                           type="button"
                           onClick={() => void handleCancelOpenOrder(order)}
                         >
-                          {isCanceling ? 'Canceling' : order.canCancel ? 'Cancel' : 'Locked'}
+                          {isCanceling ? 'Canceling' : order.canCancel ? 'Cancel order' : 'Not cancelable'}
                         </button>
                       </div>
                     </div>
@@ -5162,7 +5208,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               </div>
               <div className="open-orders-section-title">
                 <span>Recent order status</span>
-                <small>{openOrders?.recentOrders?.length ?? 0} local records</small>
+                <small>{openOrders?.recentOrders?.length ?? 0} recent records</small>
               </div>
               <div className="open-orders-list compact">
                 {openOrdersLoading && !openOrders ? null : openOrders?.recentOrders?.length ? openOrders.recentOrders.slice(0, 8).map((order) => (
@@ -5272,18 +5318,40 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
     setLoading(true)
     setError(null)
     try {
-      const [nextSummary, nextPositions, nextOpenOrders, nextOrders, nextTrades] = await Promise.all([
+      const [nextSummary, nextPositions, nextOpenOrders, nextOrders, nextTrades] = await Promise.allSettled([
         fetchPortfolioSummary(nextToken),
         fetchPortfolioPositions(nextToken),
         fetchOpenOrders(nextToken),
         fetchPortfolioOrders(nextToken),
         fetchPortfolioTrades(nextToken),
       ])
-      setSummary(nextSummary)
-      setPositions(nextPositions)
-      setOpenOrders(nextOpenOrders)
-      setOrders(nextOrders)
-      setTrades(nextTrades)
+      const failures: string[] = []
+      if (nextSummary.status === 'fulfilled') setSummary(nextSummary.value)
+      else {
+        setSummary(null)
+        failures.push(accountLoadErrorMessage(copy('Portfolio summary'), nextSummary.reason))
+      }
+      if (nextPositions.status === 'fulfilled') setPositions(nextPositions.value)
+      else {
+        setPositions(null)
+        failures.push(accountLoadErrorMessage(copy('Positions'), nextPositions.reason))
+      }
+      if (nextOpenOrders.status === 'fulfilled') setOpenOrders(nextOpenOrders.value)
+      else {
+        setOpenOrders(null)
+        failures.push(accountLoadErrorMessage(copy('Open orders'), nextOpenOrders.reason))
+      }
+      if (nextOrders.status === 'fulfilled') setOrders(nextOrders.value)
+      else {
+        setOrders(null)
+        failures.push(accountLoadErrorMessage(copy('Order history'), nextOrders.reason))
+      }
+      if (nextTrades.status === 'fulfilled') setTrades(nextTrades.value)
+      else {
+        setTrades(null)
+        failures.push(accountLoadErrorMessage(copy('Fill history'), nextTrades.reason))
+      }
+      setError(failures.length ? failures.join(' ') : null)
     } catch (loadError) {
       setError(errorMessage(loadError))
     } finally {
@@ -5335,6 +5403,7 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
   const handleCancelAccountOrder = useCallback(async (order: OpenOrderItem) => {
     const cancelId = order.orderId ?? order.externalOrderId
     if (!cancelId || cancelingOrderId) return
+    if (!confirmOpenOrderCancellation(order)) return
     setCancelingOrderId(cancelId)
     setError(null)
     const activityId = addActivity('Cancel order', `Submitting cancellation for ${shortAddress(order.externalOrderId)}.`, 'pending')
@@ -5354,16 +5423,23 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
     }
   }, [addActivity, auth.accessToken, cancelingOrderId, loadAccount, updateActivity])
 
-  const positionsValue = summary?.openPositionsValue ?? 0
-  const openOrdersValue = summary?.openOrdersValue ?? 0
-  const cashAvailable = summary?.cashAvailable
-  const portfolioValue = summary?.portfolioValue ?? positionsValue
-  const pnl = summary?.pnl ?? 0
+  const positionsValue = summary?.openPositionsValue ?? (positions?.capability === 'available' ? 0 : null)
+  const liveOpenOrdersValue = openOrders
+    ? (openOrders.items.length ? sumCurrency(openOrders.items.map((order) => order.amountUsd)) : 0)
+    : null
+  const openOrdersValue = liveOpenOrdersValue ?? summary?.openOrdersValue ?? null
+  const cashAvailable = summary?.cashAvailable ?? null
+  const portfolioValue = summary?.portfolioValue ?? null
+  const pnl = summary?.pnl ?? (positions?.capability === 'available' ? 0 : null)
+  const positionDisplayState = accountPositionDisplayState(positions, loading)
+  const positionsValueLabel = positionsValue == null ? accountPositionValueFallback(positionDisplayState) : formatUsd(positionsValue)
+  const pnlLabel = pnl == null ? accountPositionPnlFallback(positionDisplayState) : `${formatSignedUsd(pnl)} ${copy('PnL')}`
+  const openOrdersValueLabel = openOrdersValue == null ? accountOpenOrdersValueFallback(openOrders, loading) : formatUsd(openOrdersValue)
   const openOrderCount = openOrders?.items.length ?? 0
   const positionCount = positions?.items.length ?? 0
-  const historyCount = orders?.items.length ?? 0
   const normalizedQuery = query.trim().toLowerCase()
   const historyRows = orders?.items.flatMap((intent) => intent.orders.map((order) => ({ intent, order }))) ?? []
+  const historyCount = historyRows.length
   const filteredPositions = (positions?.items ?? []).filter((position) => accountSearchMatches(normalizedQuery, [
     position.title,
     position.outcomeLabel,
@@ -5385,6 +5461,7 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
     intent.status,
   ]))
   const accountCapability = summary?.capability ?? positions?.capability ?? openOrders?.capability ?? orders?.capability ?? 'degraded'
+  const accountNotices = accountNoticeMessages([summary?.error, positions?.error, openOrders?.error, orders?.error, trades?.error])
   const accountExportCount = activeTab === 'positions'
     ? filteredPositions.length
     : activeTab === 'open'
@@ -5467,36 +5544,36 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
       <div className="account-dashboard">
         <Card className="account-balance-card">
           <div className="account-card-title">
-            <span>{copy('Portfolio')}</span>
-            <small>{accountCapability}</small>
+            <span>{copy('Positions value')}</span>
+            <small>{accountStatusLabel(accountCapability)}</small>
           </div>
-          <strong>{formatUsd(portfolioValue)}</strong>
-          <em className={pnl >= 0 ? 'green-text' : 'red-text'}>{pnl >= 0 ? '+' : ''}{formatUsd(pnl)} {copy('PnL')}</em>
+          <strong>{positionsValueLabel}</strong>
+          <em className={pnl == null ? '' : pnl >= 0 ? 'green-text' : 'red-text'}>{pnlLabel}</em>
           <div className="account-metric-grid">
             <div>
-              <span>{copy('Available')}</span>
+              <span>{copy('Trading cash')}</span>
               <b>{formatUsd(cashAvailable)}</b>
             </div>
             <div>
-              <span>{copy('Open orders')}</span>
-              <b>{formatUsd(openOrdersValue)}</b>
+              <span>{copy('Live open orders')}</span>
+              <b>{openOrdersValueLabel}</b>
             </div>
             <div>
-              <span>{copy('Positions')}</span>
-              <b>{positionCount}</b>
+              <span>{copy('Visible total')}</span>
+              <b>{formatUsd(portfolioValue)}</b>
             </div>
           </div>
         </Card>
         <Card className="account-balance-card account-side-card">
-          <div className="account-card-title"><span>{copy('Trading wallet')}</span><small>{openOrders?.dataSource ?? copy('CLOB')}</small></div>
+          <div className="account-card-title"><span>{copy('Trading wallet')}</span><small>{accountOrdersSourceLabel(openOrders)}</small></div>
           <div className="account-wallet-lines">
             <div>
               <span>{copy('Live orders')}</span>
               <b>{openOrderCount}</b>
             </div>
             <div>
-              <span>{copy('Source')}</span>
-              <b>{summary?.dataSource ?? copy('Loading')}</b>
+              <span>{copy('Data coverage')}</span>
+              <b>{accountCoverageLabel(summary, positions, openOrders)}</b>
             </div>
             <div>
               <span>{copy('Updated')}</span>
@@ -5507,7 +5584,9 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
       </div>
 
       {error ? <div className="status-note error">{error}</div> : null}
-      {summary?.error ? <div className="status-note warning">{summary.error}</div> : null}
+      {accountNotices.map((notice) => (
+        <div className="status-note warning" key={notice}>{notice}</div>
+      ))}
 
       <div className="account-ledger">
         <div className="account-ledger-head">
@@ -5565,7 +5644,7 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
                 <strong>{formatUsd(position.currentValue)}</strong>
                 <em className={(position.pnl ?? 0) >= 0 ? 'green-text' : 'red-text'}>{formatUsd(position.pnl)}</em>
               </div>
-            )) : <div className="account-empty-row">{loading ? copy('Loading positions...') : copy('No positions synced yet.')}</div>}
+            )) : <div className="account-empty-row">{accountPositionsEmptyMessage(positions, loading)}</div>}
           </div>
         ) : null}
 
@@ -5599,7 +5678,7 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
                   </div>
                   <strong>{formatUsd(order.amountUsd)}</strong>
                   <button className="account-row-action" disabled={!order.canCancel || cancelingOrderId === cancelId} type="button" onClick={() => void handleCancelAccountOrder(order)}>
-                    {cancelingOrderId === cancelId ? copy('Canceling') : order.canCancel ? copy('Cancel') : (order.rawStatus || order.status)}
+                    {cancelingOrderId === cancelId ? copy('Canceling') : order.canCancel ? copy('Cancel order') : (order.rawStatus || order.status)}
                   </button>
                 </div>
               )
@@ -5653,6 +5732,116 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
 function accountSearchMatches(query: string, values: Array<string | null | undefined>) {
   if (!query) return true
   return values.some((value) => value?.toLowerCase().includes(query))
+}
+
+function accountStatusLabel(capability: 'available' | 'degraded' | 'unavailable' | string | null | undefined) {
+  if (capability === 'available') return copy('Live')
+  if (capability === 'unavailable') return copy('Needs attention')
+  return copy('Partial data')
+}
+
+function accountOrdersSourceLabel(openOrders: OpenOrdersResult | null) {
+  if (!openOrders) return copy('Loading')
+  if (openOrders.capability === 'available') return copy('Live CLOB')
+  if (openOrders.capability === 'unavailable') return copy('Orders unavailable')
+  return copy('Partial orders')
+}
+
+function confirmOpenOrderCancellation(order: OpenOrderItem) {
+  const market = order.eventTitle || order.marketTitle || copy('this live Polymarket order')
+  const side = accountSideLabel(order.side)
+  const outcome = order.outcomeLabel || copy('Outcome')
+  return window.confirm(`${copy('Cancel this open order?')}\n\n${side} ${outcome}\n${market}\n${formatUsd(order.amountUsd)}`)
+}
+
+function accountOpenOrdersValueFallback(openOrders: OpenOrdersResult | null, loading: boolean) {
+  if (!openOrders) return loading ? copy('Loading') : copy('Unavailable')
+  if (openOrders.capability === 'unavailable') return copy('Unavailable')
+  return copy('Not available')
+}
+
+function accountPositionDisplayState(positions: PortfolioPositionsResult | null, loading: boolean) {
+  if (!positions) return loading ? 'loading' : 'unavailable'
+  if (positions.dataSource === 'pending_sync') return 'sync_required'
+  if (positions.capability === 'unavailable') return 'unavailable'
+  if (positions.capability === 'degraded') return 'partial'
+  return 'available'
+}
+
+function accountPositionValueFallback(state: ReturnType<typeof accountPositionDisplayState>) {
+  if (state === 'loading') return copy('Loading')
+  if (state === 'sync_required') return copy('Sync required')
+  if (state === 'unavailable') return copy('Unavailable')
+  return copy('Not available')
+}
+
+function accountPositionPnlFallback(state: ReturnType<typeof accountPositionDisplayState>) {
+  if (state === 'loading') return copy('Loading PnL')
+  if (state === 'sync_required') return copy('Sync positions for PnL')
+  return copy('PnL unavailable')
+}
+
+function accountPositionsEmptyMessage(positions: PortfolioPositionsResult | null, loading: boolean) {
+  if (loading && !positions) return copy('Loading positions...')
+  if (positions?.dataSource === 'pending_sync') return copy('Sync positions to load current holdings.')
+  if (positions?.capability === 'available') return copy('No open positions.')
+  if (positions?.capability === 'unavailable') return copy('Positions are temporarily unavailable.')
+  return copy('No positions available yet.')
+}
+
+function accountCoverageLabel(summary: PortfolioSummary | null, positions: PortfolioPositionsResult | null, openOrders: OpenOrdersResult | null) {
+  const positionCoverage = positions?.items.length
+    ? copy('Synced positions')
+    : positions?.capability === 'available' || summary?.dataSource === 'polymarket_data_api'
+      ? copy('No open positions')
+      : copy('Positions pending')
+  const orderCoverage = openOrders?.capability === 'available'
+    ? copy('Live orders')
+    : openOrders
+      ? copy('Orders pending')
+      : copy('Orders loading')
+  return `${positionCoverage} + ${orderCoverage}`
+}
+
+function accountNoticeMessages(messages: Array<string | null | undefined>) {
+  const seen = new Set<string>()
+  return messages.flatMap((message) => {
+    const notice = accountNoticeMessage(message)
+    if (!notice || seen.has(notice)) return []
+    seen.add(notice)
+    return [notice]
+  })
+}
+
+function accountNoticeMessage(message: string | null | undefined) {
+  if (!message) return null
+  const normalized = message.toLowerCase()
+  if (normalized.includes('trading wallet balance')) {
+    return copy('Trading cash is temporarily unavailable. Refresh the account or prepare the trading wallet to load the latest balance.')
+  }
+  if (normalized.includes('positions have not been synced')) {
+    return copy('Positions have not been synced yet. Use Sync positions to load current holdings.')
+  }
+  if (normalized.includes('position sync failed')) {
+    return copy('Position sync failed. Retry Sync positions before relying on account totals.')
+  }
+  if (normalized.includes('some positions are not linked') || normalized.includes('causeway market metadata')) {
+    return copy('Some synced positions are missing Causeway market metadata, so they are excluded from the position list.')
+  }
+  if (normalized.includes('position values are temporarily unavailable')) {
+    return copy('Some synced position values are temporarily unavailable. Refresh positions before relying on totals.')
+  }
+  if (normalized.includes('external position sync is not fully automated')) {
+    return copy('Positions are shown from the latest sync. Use Sync positions to refresh current holdings.')
+  }
+  if (normalized.includes('trade history is based on monitored causeway orders')) {
+    return copy('History includes Causeway-monitored orders; direct Polymarket activity may be absent.')
+  }
+  return message
+}
+
+function accountLoadErrorMessage(label: string, error: unknown) {
+  return `${label} ${copy('could not be loaded')}: ${errorMessage(error)}`
 }
 
 function normalizeAccountSide(side: string | null | undefined): 'buy' | 'sell' {
@@ -6300,6 +6489,13 @@ function inferenceModelOptions(capability: BackendInferenceCapability | null): I
   return options.sort((left, right) => modelSortWeight(left) - modelSortWeight(right))
 }
 
+function defaultInferenceModelOption(capability: BackendInferenceCapability | null): InferenceModelPreference {
+  const options = inferenceModelOptions(capability)
+  const defaultModel = capability?.defaultModel ? modelPreferenceFromProviderModel(capability.defaultModel) : null
+  if (defaultModel && options.includes(defaultModel)) return defaultModel
+  return options[0] ?? FREE_INFERENCE_MODEL
+}
+
 function modelSortWeight(model: InferenceModelPreference) {
   return INFERENCE_MODEL_ORDER.indexOf(model)
 }
@@ -6358,7 +6554,7 @@ function InferenceSettings({
         setCapabilityError(null)
         setSettings((current) => {
           const options = inferenceModelOptions(nextCapability)
-          return options.includes(current.modelPreference) ? current : { ...current, modelPreference: FREE_INFERENCE_MODEL }
+          return options.includes(current.modelPreference) ? current : { ...current, modelPreference: defaultInferenceModelOption(nextCapability) }
         })
       })
       .catch((error) => {
@@ -7187,7 +7383,7 @@ function ScriptOrderPanelState({
     changed = changed || fundedReadiness !== readiness
     readiness = fundedReadiness
     if (!readiness.canTrade) {
-      throw new Error(readiness.reason || readiness.steps[0]?.message || 'Polymarket trading is not ready for this wallet.')
+      throw new Error(normalizeTradingCapabilityReason(readiness.reason) || readiness.steps[0]?.message || 'Polymarket trading is not ready for this wallet.')
     }
     return { readiness, changed }
   }, [ensureDepositWalletFunded, signTypedDataAsync, tradingAccountType, walletClient])
@@ -7216,7 +7412,7 @@ function ScriptOrderPanelState({
         return
       }
       if (nextPreview.submitMode !== 'signed_clob_order' || !nextPreview.requiresSignature) {
-        setError(nextPreview.tradingCapabilityReason || copy('Polymarket order submission is currently unavailable.'))
+        setError(orderPreviewUnavailableReason(nextPreview))
         return
       }
     }
@@ -7302,7 +7498,7 @@ function ScriptOrderPanelState({
 
     if (nextPreview.executionMode === 'real') {
       if (nextPreview.submitMode !== 'signed_clob_order' || !nextPreview.requiresSignature) {
-        setError(nextPreview.tradingCapabilityReason || copy('Polymarket order submission is currently unavailable.'))
+        setError(orderPreviewUnavailableReason(nextPreview))
         return
       }
       setPendingSubmitPreview(nextPreview)
@@ -7589,10 +7785,15 @@ function OrderConfirmDialog({
 
 function orderPreviewStatusText(preview: OrderPreview) {
   if (preview.submitMode === 'unavailable') {
-    return preview.tradingCapabilityReason || copy('This order cannot be submitted right now. Refresh market data and try again.')
+    return orderPreviewUnavailableReason(preview)
   }
   const signatureText = preview.requiresSignature ? copy('Wallet signature required before submission') : copy('No wallet signature required before submission')
   return copy(`${signatureText}. Preview valid until ${formatDateTime(preview.expiresAt)}`)
+}
+
+function orderPreviewUnavailableReason(preview: OrderPreview) {
+  return normalizeTradingCapabilityReason(preview.tradingCapabilityReason)
+    || copy('This order cannot be submitted right now. Refresh market data and try again.')
 }
 
 function OrderSubmitBlock({ result }: { result: OrderSubmitResult }) {

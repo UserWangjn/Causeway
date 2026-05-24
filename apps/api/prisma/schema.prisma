@@ -291,7 +291,7 @@ model PolymarketMarket {
 
   @@index([active, closed, acceptingOrders, enableOrderBook])
   @@index([active, closed, archived, staleDetectedAt])
-  @@index([eventId, archived, staleDetectedAt, closed, active, acceptingOrders, enableOrderBook, volume24hr, volume, id], map: "PolymarketMarket_event_open_volume24hr_idx")
+  @@index([eventId, archived, staleDetectedAt, closed(sort: Asc), active(sort: Desc), acceptingOrders(sort: Desc), enableOrderBook(sort: Desc), volume24hr(sort: Desc), volume(sort: Desc), id(sort: Asc)], map: "PolymarketMarket_event_open_volume24hr_idx")
   @@index([volume24hr])
   @@index([endDate])
   @@index([discoveredAt])

@@ -8,6 +8,7 @@ import { deriveSafe } from '@polymarket/builder-relayer-client/dist/builder/deri
 import { getContractConfig } from '@polymarket/builder-relayer-client/dist/config';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { REAL_TRADING_DISABLED_MESSAGE } from '../../common/constants/api.constants';
 import { ApiException } from '../../common/errors/api.exception';
 import { CredentialCryptoService } from '../../common/security/credential-crypto.service';
 import { PrismaService } from '../../database/prisma.service';
@@ -378,7 +379,7 @@ export class TradingService {
     if (!this.enableRealOrders) {
       return {
         status: 'unavailable' as const,
-        reason: 'CLOB real trading is disabled by ENABLE_REAL_ORDERS=false',
+        reason: REAL_TRADING_DISABLED_MESSAGE,
         signatureType: SignatureTypeV2.POLY_GNOSIS_SAFE,
         requestedTradingAccountType,
         tradingAccountType: null,
@@ -497,7 +498,7 @@ export class TradingService {
 
   async getUserClobCredentials(user: CurrentUser): Promise<ClobApiCredentials> {
     if (!this.enableRealOrders) {
-      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', 'CLOB real trading is disabled by ENABLE_REAL_ORDERS=false');
+      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 'CAPABILITY_UNAVAILABLE', REAL_TRADING_DISABLED_MESSAGE);
     }
     const account = await this.prisma.userPolymarketAccount.findUnique({ where: { userId: user.id } });
     if (!account?.clobApiKeyCiphertext || !account.clobApiSecretCiphertext || !account.clobApiPassphraseCiphertext) {
@@ -1934,7 +1935,7 @@ function resolveReadinessStatus(input: {
   if (!input.enableRealOrders) {
     return {
       status: 'disabled',
-      reason: 'Real trading is disabled by ENABLE_REAL_ORDERS=false',
+      reason: REAL_TRADING_DISABLED_MESSAGE,
       steps: [{ code: 'enable_real_orders', message: 'Enable real order execution in the backend environment.', action: 'server_config' }],
     };
   }
@@ -2019,7 +2020,7 @@ function resolveFundedAccountStatus(input: {
   if (!input.enableRealOrders) {
     return {
       status: 'disabled',
-      reason: 'Real trading is disabled by ENABLE_REAL_ORDERS=false',
+      reason: REAL_TRADING_DISABLED_MESSAGE,
       steps: [{ code: 'enable_real_orders', message: 'Enable real order execution in the backend environment.', action: 'server_config' }],
     };
   }

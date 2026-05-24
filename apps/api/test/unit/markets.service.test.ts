@@ -754,6 +754,12 @@ describe('MarketsService', () => {
         id: 'market_1',
         marketId: 'market_1',
         title: 'First market',
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        acceptingOrders: true,
+        enableOrderBook: true,
         description: 'First market description',
         rules: 'First market rules',
         icon: null,
@@ -767,6 +773,12 @@ describe('MarketsService', () => {
         id: 'market_2',
         marketId: 'market_2',
         title: 'Second market',
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        acceptingOrders: true,
+        enableOrderBook: true,
         description: 'Second market description',
         rules: 'Second market rules',
         icon: null,
@@ -851,6 +863,12 @@ describe('MarketsService', () => {
       title: '2026 FIFA World Cup Winner',
       groupItemTitle: 'Ecuador',
       category: 'sports',
+      active: true,
+      closed: false,
+      archived: false,
+      staleDetectedAt: null,
+      acceptingOrders: true,
+      enableOrderBook: true,
       marketsCount: 2,
       topMarkets: [
         {
@@ -1206,6 +1224,46 @@ describe('MarketsService', () => {
     });
   });
 
+  it('keeps network trading flags false when no grouped market is fully tradable', async () => {
+    const networkNodeFindMany = vi.fn().mockResolvedValue([]);
+    const marketCount = vi.fn()
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(0);
+    const marketGroupBy = vi.fn().mockResolvedValue([{ eventId: 'event_1' }]);
+    const marketFindMany = vi.fn().mockResolvedValue([
+      networkMarket('market_1', 'event_1', 'Accepting without order book', '0.55', ['sports'], {
+        acceptingOrders: true,
+        enableOrderBook: false,
+      }),
+      networkMarket('market_2', 'event_1', 'Order book without accepting orders', '0.35', ['sports'], {
+        acceptingOrders: false,
+        enableOrderBook: true,
+      }),
+    ]);
+    const service = createService({
+      marketNetworkNode: {
+        findMany: networkNodeFindMany,
+      },
+      polymarketMarket: {
+        count: marketCount,
+        groupBy: marketGroupBy,
+        findMany: marketFindMany,
+      },
+    });
+
+    const result = await service.getMarketNetwork({ limit: 10 });
+
+    expect(result.nodes[0]).toMatchObject({
+      nodeType: 'event',
+      active: true,
+      closed: false,
+      archived: false,
+      staleDetectedAt: null,
+      acceptingOrders: true,
+      enableOrderBook: false,
+    });
+  });
+
   it('serves repeated price history requests from a short in-memory cache', async () => {
     const getPriceHistory = vi.fn().mockResolvedValue({
       history: {
@@ -1355,6 +1413,12 @@ function networkMarket(
     eventSlug?: string;
     eventDescription?: string | null;
     eventMarketsCount?: number;
+    active?: boolean;
+    closed?: boolean;
+    archived?: boolean;
+    staleDetectedAt?: Date | null;
+    acceptingOrders?: boolean;
+    enableOrderBook?: boolean;
   } = {},
 ) {
   const eventTitle = options.eventTitle ?? eventId;
@@ -1367,8 +1431,12 @@ function networkMarket(
     rules: options.rules ?? `${question} rules`,
     icon: null,
     image: null,
-    acceptingOrders: true,
-    enableOrderBook: true,
+    active: options.active ?? true,
+    closed: options.closed ?? false,
+    archived: options.archived ?? false,
+    staleDetectedAt: options.staleDetectedAt ?? null,
+    acceptingOrders: options.acceptingOrders ?? true,
+    enableOrderBook: options.enableOrderBook ?? true,
     bestBid: price,
     bestAsk: price,
     lastTradePrice: price,
