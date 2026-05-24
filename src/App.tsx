@@ -4139,7 +4139,11 @@ function apiNodeToMarket(node: ApiMarketNode, index: number): Market {
   }
 }
 
-function App() {
+type AppProps = {
+  showIntro?: boolean
+}
+
+function App({ showIntro = false }: AppProps) {
   const auth = useCausewayAuth()
   const membershipState = useMembershipState(auth)
   const autoSignInAttemptedRef = useRef(false)
@@ -4147,7 +4151,7 @@ function App() {
   const [selectedMarket, setSelectedMarket] = useState<Market>(rootMarket)
   const [inferenceResult, setInferenceResult] = useState<InferenceResult | null>(null)
   const [inferenceSettings, setInferenceSettings] = useState<InferenceSettingsState>(defaultInferenceSettings)
-  const [introVisible, setIntroVisible] = useState(true)
+  const [introVisible, setIntroVisible] = useState(showIntro)
   const [tradingWalletActivityItems, setTradingWalletActivityItems] = useState<TradingWalletActivityItem[]>([])
   const activeNav = view === 'scripts' ? 'scripts' : view === 'progress' ? 'monitor' : 'network'
 
@@ -4171,9 +4175,13 @@ function App() {
   }), [addTradingWalletActivity, tradingWalletActivityItems, updateTradingWalletActivity])
 
   useEffect(() => {
+    if (!showIntro) {
+      setIntroVisible(false)
+      return undefined
+    }
     const timer = window.setTimeout(() => setIntroVisible(false), 2600)
     return () => window.clearTimeout(timer)
-  }, [])
+  }, [showIntro])
 
   useEffect(() => {
     if (!auth.isConnected || auth.isAuthenticated) {

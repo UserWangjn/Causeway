@@ -1,0 +1,11 @@
+<svg width="1120" height="280" viewBox="0 0 1120 280" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Causeway Scenario Bridge Fan lockup white</title>
+  <desc id="desc">White single-color Causeway Scenario Bridge Fan lockup.</desc>
+  <g transform="translate(40 34) scale(.414)">
+    <path d="M154 256H392" stroke="#FFFFFF" stroke-width="58" stroke-linecap="round"/>
+    <path d="M154 256L356 154" stroke="#FFFFFF" stroke-width="58" stroke-linecap="round"/>
+    <path d="M154 256L356 358" stroke="#FFFFFF" stroke-width="58" stroke-linecap="round"/>
+    <circle cx="130" cy="256" r="42" fill="#FFFFFF"/>
+  </g>
+  <text x="288" y="180" fill="#FFFFFF" font-family="Inter, Geist, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="108" font-weight="760" letter-spacing="-3.5">Causeway</text>
+</svg>

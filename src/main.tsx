@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import MarketingHome from './MarketingHome'
 import { WalletProviders } from './wallet'
 import '@rainbow-me/rainbowkit/styles.css'
 import '@xyflow/react/dist/style.css'
@@ -12,10 +13,16 @@ window.addEventListener('error', (event) => {
   }
 })
 
+const isAppRoute = window.location.pathname === '/app' || window.location.pathname.startsWith('/app/')
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <WalletProviders>
-      <App />
-    </WalletProviders>
+    {isAppRoute ? (
+      <WalletProviders>
+        <App showIntro={false} />
+      </WalletProviders>
+    ) : (
+      <MarketingHome />
+    )}
   </StrictMode>,
 )
