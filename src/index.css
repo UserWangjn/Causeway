@@ -1294,6 +1294,56 @@ button {
   gap: 10px;
 }
 
+.open-orders-wallet-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.open-orders-wallet-summary div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e6eef8;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.open-orders-wallet-summary span,
+.open-orders-section-title small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.open-orders-wallet-summary b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #071327;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.open-orders-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.open-orders-section-title span {
+  color: #071327;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.open-orders-list.compact {
+  gap: 8px;
+}
+
 .open-order-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1303,6 +1353,11 @@ button {
   border: 1px solid #e6eef8;
   border-radius: 8px;
   background: #fff;
+}
+
+.open-order-row.history,
+.open-order-row.trade {
+  background: #fbfdff;
 }
 
 .open-order-main {
@@ -5788,6 +5843,10 @@ button {
   }
 
   .open-order-row {
+    grid-template-columns: 1fr;
+  }
+
+  .open-orders-wallet-summary {
     grid-template-columns: 1fr;
   }
 

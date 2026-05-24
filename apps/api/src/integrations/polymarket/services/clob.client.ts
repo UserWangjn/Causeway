@@ -173,6 +173,23 @@ export type ClobOpenOrder = {
   raw: unknown;
 };
 
+export type ClobTrade = {
+  id: string;
+  takerOrderId: string | null;
+  market: string | null;
+  assetId: string;
+  side: PolymarketOrderSide;
+  size: string | null;
+  price: string | null;
+  status: string;
+  matchTime: number | null;
+  lastUpdate: number | null;
+  makerAddress: string | null;
+  transactionHash: string | null;
+  traderSide: string | null;
+  raw: unknown;
+};
+
 export type ClobCancelOrderResult = {
   externalOrderId: string;
   status: 'cancelled' | 'failed';
@@ -477,6 +494,27 @@ export class ClobClient {
       if (!page.hasMore) break;
     }
     return orders;
+  }
+
+  async getTrades(
+    params: { makerAddress: string; market?: string | null; assetId?: string | null },
+    credentials?: ClobApiCredentials,
+  ): Promise<ClobTrade[]> {
+    const trades: ClobTrade[] = [];
+    let nextCursor = 'MA==';
+    for (let pageIndex = 0; pageIndex < 5 && nextCursor !== 'LTE='; pageIndex += 1) {
+      const response = await this.requestJson('/data/trades', 'GET', '', credentials, {
+        maker_address: normalizeAddress(params.makerAddress, 'makerAddress'),
+        ...(params.market ? { market: params.market.trim() } : {}),
+        ...(params.assetId ? { asset_id: params.assetId.trim() } : {}),
+        next_cursor: nextCursor,
+      });
+      const page = normalizeTradesPage(response);
+      trades.push(...page.trades);
+      nextCursor = page.nextCursor;
+      if (!page.hasMore) break;
+    }
+    return trades;
   }
 
   async cancelOrder(orderId: string, credentials?: ClobApiCredentials): Promise<ClobCancelOrderResult> {
@@ -1130,6 +1168,56 @@ function normalizeOpenOrder(value: unknown, fallbackId?: string): ClobOpenOrder 
 
 function normalizeOpenOrderSide(value: string | null): PolymarketOrderSide {
   return value?.toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+}
+
+function normalizeTradesPage(value: unknown): { trades: ClobTrade[]; nextCursor: string; hasMore: boolean } {
+  if (Array.isArray(value)) {
+    return {
+      trades: value.map((item) => normalizeTrade(item)).filter((item): item is ClobTrade => item != null),
+      nextCursor: 'LTE=',
+      hasMore: false,
+    };
+  }
+  if (!isRecord(value)) {
+    throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB trades returned an invalid body');
+  }
+  const data = Array.isArray(value.data) ? value.data : [];
+  const nextCursor = typeof value.next_cursor === 'string' ? value.next_cursor : 'LTE=';
+  return {
+    trades: data.map((item) => normalizeTrade(item)).filter((item): item is ClobTrade => item != null),
+    nextCursor,
+    hasMore: nextCursor !== 'LTE=',
+  };
+}
+
+function normalizeTrade(value: unknown): ClobTrade {
+  if (!isRecord(value)) {
+    throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB trade returned an invalid body');
+  }
+  const id = readString(value.id);
+  const assetId = readString(value.asset_id) ?? readString(value.assetId);
+  if (!id || !assetId) {
+    throw new ApiException(HttpStatus.BAD_GATEWAY, 'POLYMARKET_API_ERROR', 'CLOB trade returned missing identifiers', {
+      id,
+      assetId,
+    });
+  }
+  return {
+    id,
+    takerOrderId: readString(value.taker_order_id) ?? readString(value.takerOrderId),
+    market: readString(value.market),
+    assetId,
+    side: normalizeOpenOrderSide(readString(value.side)),
+    size: readString(value.size),
+    price: readString(value.price),
+    status: readString(value.status) ?? 'unknown',
+    matchTime: toNullableInteger(value.match_time ?? value.matchTime),
+    lastUpdate: toNullableInteger(value.last_update ?? value.lastUpdate),
+    makerAddress: readString(value.maker_address) ?? readString(value.makerAddress),
+    transactionHash: readString(value.transaction_hash) ?? readString(value.transactionHash),
+    traderSide: readString(value.trader_side) ?? readString(value.traderSide),
+    raw: value,
+  };
 }
 
 function readCancelOrderError(value: unknown, externalOrderId: string): string | null {

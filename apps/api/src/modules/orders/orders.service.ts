@@ -1,13 +1,13 @@
 import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ExecutionMode, OrderIntentStatus, Prisma } from '@prisma/client';
+import { CausewayOrderStatus, ExecutionMode, OrderIntentStatus, Prisma } from '@prisma/client';
 import { getAddress } from 'viem';
 import { ApiException } from '../../common/errors/api.exception';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { hashJson } from '../../common/utils/hash.util';
 import { roundCurrency, roundShares, toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
-import { ClobApiCredentials, ClobClient, ClobOpenOrder, PreparedClobOrder, SignedClobOrderInput } from '../../integrations/polymarket/services/clob.client';
+import { ClobApiCredentials, ClobClient, ClobOpenOrder, ClobTrade, PreparedClobOrder, SignedClobOrderInput } from '../../integrations/polymarket/services/clob.client';
 import type { OrderBookSnapshot } from '../../integrations/polymarket/types';
 import { TradingService } from '../trading/trading.service';
 import { type ConcreteTradingAccountType, type TradingAccountType, normalizeTradingAccountType } from '../trading/trading-account-type';
@@ -65,6 +65,45 @@ type OpenOrderListItem = {
   createdAt: string | null;
   makerAddress: string | null;
   canCancel: boolean;
+};
+
+type OrderStatusListItem = {
+  orderId: string;
+  intentId: string;
+  externalOrderId: string | null;
+  status: string;
+  marketTitle: string | null;
+  eventTitle: string | null;
+  outcomeLabel: string | null;
+  side: 'buy' | 'sell';
+  orderType: string | null;
+  price: number | null;
+  size: number | null;
+  amountUsd: number | null;
+  makerAddress: string | null;
+  createdAt: string;
+  updatedAt: string;
+  errorMessage: string | null;
+};
+
+type TradeListItem = {
+  tradeId: string;
+  orderId: string | null;
+  status: string;
+  marketId: string | null;
+  outcomeId: string | null;
+  clobTokenId: string;
+  marketTitle: string | null;
+  eventTitle: string | null;
+  outcomeLabel: string | null;
+  side: 'buy' | 'sell';
+  price: number | null;
+  size: number | null;
+  amountUsd: number | null;
+  makerAddress: string | null;
+  transactionHash: string | null;
+  traderSide: string | null;
+  matchedAt: string | null;
 };
 
 @Injectable()
@@ -487,10 +526,19 @@ export class OrdersService {
   async listOpenOrders(user: CurrentUser) {
     const credentials = await this.tradingService.getUserClobCredentials(user);
     const remoteOrders = await this.clobClient.getOpenOrders({}, credentials);
+    const account = await this.prisma.userPolymarketAccount.findUnique({
+      where: { userId: user.id },
+      select: {
+        walletAddress: true,
+        depositWalletAddress: true,
+      },
+    });
+    const tradingWalletAddress = account?.depositWalletAddress
+      ?? remoteOrders.find((order) => order.makerAddress)?.makerAddress
+      ?? null;
     const externalOrderIds = uniqueStrings(remoteOrders.map((order) => order.id));
-    const clobTokenIds = uniqueStrings(remoteOrders.map((order) => order.assetId));
 
-    const [localOrders, outcomes] = await Promise.all([
+    const [localOrders, localRecentOrders] = await Promise.all([
       externalOrderIds.length > 0
         ? this.prisma.causewayOrder.findMany({
             where: {
@@ -512,21 +560,66 @@ export class OrdersService {
             },
           })
         : Promise.resolve([]),
-      clobTokenIds.length > 0
-        ? this.prisma.polymarketOutcome.findMany({
-            where: {
-              clobTokenId: { in: clobTokenIds },
+      this.prisma.causewayOrder.findMany({
+        where: {
+          orderIntent: { userId: user.id },
+          status: { in: [
+            CausewayOrderStatus.submitted,
+            CausewayOrderStatus.partially_filled,
+            CausewayOrderStatus.filled,
+            CausewayOrderStatus.unknown,
+            CausewayOrderStatus.cancelled,
+            CausewayOrderStatus.failed,
+          ] },
+        },
+        include: {
+          orderIntent: {
+            select: {
+              id: true,
             },
+          },
+          market: {
             include: {
-              market: {
-                include: {
-                  event: true,
-                },
+              event: true,
+            },
+          },
+          outcome: true,
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 25,
+      }),
+    ]);
+    const remoteTrades = tradingWalletAddress
+      ? await this.clobClient.getTrades({ makerAddress: tradingWalletAddress }, credentials).catch((error) => {
+          this.logger.warn({
+            event: 'clob_trade_history_refresh_failed',
+            userId: user.id,
+            requestId: user.requestId ?? null,
+            tradingWalletAddress,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return [] as ClobTrade[];
+        })
+      : [];
+    const clobTokenIds = uniqueStrings([
+      ...remoteOrders.map((order) => order.assetId),
+      ...remoteTrades.map((trade) => trade.assetId),
+      ...localRecentOrders.map((order) => order.clobTokenId),
+    ]);
+    const outcomes = clobTokenIds.length > 0
+      ? await this.prisma.polymarketOutcome.findMany({
+          where: {
+            clobTokenId: { in: clobTokenIds },
+          },
+          include: {
+            market: {
+              include: {
+                event: true,
               },
             },
-          })
-        : Promise.resolve([]),
-    ]);
+          },
+        })
+      : [];
 
     const localByExternalOrderId = new Map<string, (typeof localOrders)[number]>();
     for (const order of localOrders) {
@@ -539,11 +632,16 @@ export class OrdersService {
     return {
       capability: 'available',
       dataSource: 'polymarket_clob',
+      ownerWalletAddress: account?.walletAddress ?? user.walletAddress,
+      tradingWalletAddress,
+      walletRole: 'deposit_wallet',
       items: remoteOrders.map((remoteOrder) => buildOpenOrderItem(
         remoteOrder,
         localByExternalOrderId.get(remoteOrder.id) ?? null,
         outcomeByTokenId.get(remoteOrder.assetId) ?? null,
       )),
+      recentOrders: localRecentOrders.map((order) => buildOrderStatusItem(order)),
+      trades: remoteTrades.map((trade) => buildTradeItem(trade, outcomeByTokenId.get(trade.assetId) ?? null)),
       refreshedAt: new Date().toISOString(),
       error: null,
     };
@@ -1164,6 +1262,64 @@ function buildOpenOrderItem(remoteOrder: ClobOpenOrder, localOrder: LocalOpenOrd
     makerAddress: remoteOrder.makerAddress,
     canCancel: isCancelableRemoteOrderStatus(status),
   };
+}
+
+function buildOrderStatusItem(order: LocalOpenOrder): OrderStatusListItem {
+  return {
+    orderId: order.id,
+    intentId: order.orderIntent.id,
+    externalOrderId: order.externalOrderId,
+    status: order.status,
+    marketTitle: order.market.question ?? null,
+    eventTitle: order.market.event?.title ?? null,
+    outcomeLabel: order.outcome.label ?? null,
+    side: order.side.toLowerCase() as 'buy' | 'sell',
+    orderType: order.orderType ?? null,
+    price: order.limitPrice == null ? null : Number(order.limitPrice),
+    size: order.size == null ? null : Number(order.size),
+    amountUsd: order.amountUsd == null ? null : Number(order.amountUsd),
+    makerAddress: readPreparedOrderAddress(order.submitPayload, 'maker')
+      ?? readPreparedOrderAddress(order.submitPayload, 'funderAddress'),
+    createdAt: order.createdAt.toISOString(),
+    updatedAt: order.updatedAt.toISOString(),
+    errorMessage: order.errorMessage,
+  };
+}
+
+function buildTradeItem(remoteTrade: ClobTrade, localOutcome: LocalOutcome | null): TradeListItem {
+  const price = toNullableNumber(remoteTrade.price);
+  const size = toNullableNumber(remoteTrade.size);
+  return {
+    tradeId: remoteTrade.id,
+    orderId: remoteTrade.takerOrderId,
+    status: remoteTrade.status,
+    marketId: localOutcome?.marketId ?? null,
+    outcomeId: localOutcome?.id ?? null,
+    clobTokenId: remoteTrade.assetId,
+    marketTitle: localOutcome?.market.question ?? null,
+    eventTitle: localOutcome?.market.event?.title ?? null,
+    outcomeLabel: localOutcome?.label ?? null,
+    side: remoteTrade.side.toLowerCase() as 'buy' | 'sell',
+    price,
+    size,
+    amountUsd: price == null || size == null ? null : roundCurrency(price * size),
+    makerAddress: remoteTrade.makerAddress,
+    transactionHash: remoteTrade.transactionHash,
+    traderSide: remoteTrade.traderSide,
+    matchedAt: normalizeClobCreatedAt(remoteTrade.matchTime),
+  };
+}
+
+function readPreparedOrderAddress(value: Prisma.JsonValue | null, key: 'maker' | 'funderAddress'): string | null {
+  const payload = readRecord(value);
+  const preparedOrder = readRecord(payload.preparedClobOrder);
+  if (key === 'funderAddress') {
+    const funder = preparedOrder.funderAddress;
+    return typeof funder === 'string' && funder.trim() ? funder.trim() : null;
+  }
+  const order = readRecord(preparedOrder.order);
+  const address = order[key];
+  return typeof address === 'string' && address.trim() ? address.trim() : null;
 }
 
 function normalizeRemoteOrderStatus(status: string): string {

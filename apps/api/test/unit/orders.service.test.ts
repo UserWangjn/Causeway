@@ -949,6 +949,12 @@ describe('OrdersService', () => {
       },
     ]);
     const service = createService({
+      userPolymarketAccount: {
+        findUnique: vi.fn().mockResolvedValue({
+          walletAddress: '0x1111111111111111111111111111111111111111',
+          depositWalletAddress: '0x2222222222222222222222222222222222222222',
+        }),
+      },
       causewayOrder: {
         findMany: vi.fn().mockResolvedValue([
           {
@@ -957,8 +963,23 @@ describe('OrdersService', () => {
             externalOrderId: '0x1111111111111111111111111111111111111111111111111111111111111111',
             marketId: 'market_1',
             outcomeId: 'outcome_1',
+            clobTokenId: 'token_1',
+            side: 'BUY',
             orderType: 'GTC',
+            limitPrice: new Prisma.Decimal('0.1'),
+            size: new Prisma.Decimal('50'),
+            amountUsd: new Prisma.Decimal('5'),
+            status: 'submitted',
+            submitPayload: {
+              preparedClobOrder: {
+                order: {
+                  maker: '0x2222222222222222222222222222222222222222',
+                },
+              },
+            },
+            errorMessage: null,
             createdAt: new Date('2026-05-19T00:00:00.000Z'),
+            updatedAt: new Date('2026-05-19T00:00:00.000Z'),
             orderIntent: {
               id: 'intent_1',
             },
@@ -1199,6 +1220,7 @@ function createService(
     getCapability: vi.fn().mockReturnValue(capability),
     resolveFunderAddress: vi.fn().mockResolvedValue('0x2222222222222222222222222222222222222222'),
     getOrderBook: vi.fn().mockResolvedValue(null),
+    getTrades: vi.fn().mockResolvedValue([]),
     prepareSignaturePayloads: vi.fn().mockReturnValue([]),
     postSignedOrders: vi.fn(),
     ...clobOverrides,

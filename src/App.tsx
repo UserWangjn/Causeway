@@ -474,10 +474,54 @@ type OpenOrderItem = {
   canCancel: boolean
 }
 
+type OrderStatusItem = {
+  orderId: string
+  intentId: string
+  externalOrderId: string | null
+  status: string
+  marketTitle: string | null
+  eventTitle: string | null
+  outcomeLabel: string | null
+  side: 'buy' | 'sell'
+  orderType: string | null
+  price: number | null
+  size: number | null
+  amountUsd: number | null
+  makerAddress: string | null
+  createdAt: string
+  updatedAt: string
+  errorMessage: string | null
+}
+
+type TradeStatusItem = {
+  tradeId: string
+  orderId: string | null
+  status: string
+  marketId: string | null
+  outcomeId: string | null
+  clobTokenId: string
+  marketTitle: string | null
+  eventTitle: string | null
+  outcomeLabel: string | null
+  side: 'buy' | 'sell'
+  price: number | null
+  size: number | null
+  amountUsd: number | null
+  makerAddress: string | null
+  transactionHash: string | null
+  traderSide: string | null
+  matchedAt: string | null
+}
+
 type OpenOrdersResult = {
   capability: 'available' | 'degraded' | 'unavailable'
   dataSource: 'polymarket_clob' | 'local' | string
+  ownerWalletAddress?: string | null
+  tradingWalletAddress?: string | null
+  walletRole?: string | null
   items: OpenOrderItem[]
+  recentOrders?: OrderStatusItem[]
+  trades?: TradeStatusItem[]
   refreshedAt: string
   error: string | null
 }
@@ -4835,10 +4879,20 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     setBridgeError(null)
     try {
       const token = await ensureTradingToken()
-      setStatusAddress(withdrawRecipient.trim())
+      const withdrawal = await createBridgeWithdrawal(token, {
+        toChainId: asset.chainId,
+        toTokenAddress: asset.token.address,
+        recipientAddr: withdrawRecipient.trim(),
+      })
+      const bridgeTransferAddress = evmBridgeAddressForDepositWalletTransfer(withdrawal.withdrawal.address)
+      if (!bridgeTransferAddress) {
+        throw new Error('Polymarket Bridge did not return a Polygon transfer address for this withdrawal.')
+      }
+      setBridgeWallet(withdrawal.wallet)
+      setStatusAddress(bridgeTransferAddress)
       const payload = await prepareDepositWalletTransfer(token, {
         amountMicroUsd: orderFundingAmountMicroUsd(amountUsd),
-        recipientAddress: withdrawRecipient.trim(),
+        recipientAddress: bridgeTransferAddress,
       })
       const signature = await signTypedDataWithFallback({
         variables: typedDataToSignVariables(payload.eip712),
@@ -4851,6 +4905,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       setReadiness(result.readiness)
       setWithdrawAmount('')
       void refreshWallet(token)
+      void fetchBridgeStatus(token, bridgeTransferAddress).then((status) => setBridgeStatus(status)).catch(() => null)
     } catch (error) {
       setBridgeError(errorMessage(error))
     } finally {
@@ -5141,8 +5196,8 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               {walletTab === 'withdraw' ? (
                 <div className="deposit-path-card">
                   <div className="deposit-path-head">
-                    <span><ArrowRight size={16} /> {copy('Transfer pUSD', '转移 pUSD')}</span>
-                    <small>{copy('Transfer pUSD directly from the current Polymarket wallet without creating a separate Bridge withdrawal address.', '从当前 Polymarket 钱包直接转出 pUSD，不再生成 Bridge 提现地址。')}</small>
+                    <span><ArrowRight size={16} /> Bridge withdraw pUSD</span>
+                    <small>Creates an official Polymarket Bridge withdrawal address in the background, then transfers pUSD from the Deposit Wallet to that address.</small>
                   </div>
                   <div className="withdraw-available-panel">
                     <span>Deposit Wallet available</span>
@@ -5276,9 +5331,23 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
               <div className="wallet-modal-head">
                 <div>
                   <span><ListOrdered size={18} /> Open Orders</span>
-                  <small>Live limit orders from Polymarket. Cancel here if you no longer want the order resting on the book.</small>
+                  <small>Orders are queried from the active Polymarket Deposit Wallet / proxy, not just the owner wallet page.</small>
                 </div>
                 <button className="modal-close-button" type="button" onClick={() => setOrdersOpen(false)}>×</button>
+              </div>
+              <div className="open-orders-wallet-summary">
+                <div>
+                  <span>Trading wallet</span>
+                  <b>{shortAddress(openOrders?.tradingWalletAddress ?? bridgeWallet?.polymarketWalletAddress ?? null)}</b>
+                </div>
+                <div>
+                  <span>Owner</span>
+                  <b>{shortAddress(openOrders?.ownerWalletAddress ?? auth.walletAddress ?? null)}</b>
+                </div>
+                <div>
+                  <span>Source</span>
+                  <b>{openOrders?.dataSource === 'polymarket_clob' ? 'CLOB' : openOrders?.dataSource ?? 'Not loaded'}</b>
+                </div>
               </div>
               <div className="open-orders-toolbar">
                 <span>{openOrders?.items.length ?? 0} open orders</span>
@@ -5321,6 +5390,54 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                   )
                 }) : (
                   <div className="soft-note">No live limit orders found for this wallet.</div>
+                )}
+              </div>
+              <div className="open-orders-section-title">
+                <span>Recent order status</span>
+                <small>{openOrders?.recentOrders?.length ?? 0} local records</small>
+              </div>
+              <div className="open-orders-list compact">
+                {openOrdersLoading && !openOrders ? null : openOrders?.recentOrders?.length ? openOrders.recentOrders.slice(0, 8).map((order) => (
+                  <div className="open-order-row history" key={order.orderId}>
+                    <div className="open-order-main">
+                      <b>{order.eventTitle || order.marketTitle || 'Polymarket order'}</b>
+                      {order.eventTitle && order.marketTitle ? <span>{order.marketTitle}</span> : null}
+                      <small>
+                        {order.side.toUpperCase()} {order.outcomeLabel || 'Outcome'} | {order.orderType ?? 'ORDER'} {formatLimitPrice(order.price)} | {formatShares(order.size)} shares
+                      </small>
+                      <em>{order.externalOrderId ? shortAddress(order.externalOrderId) : 'No CLOB id'} | {order.status}{order.errorMessage ? ` | ${order.errorMessage}` : ''}</em>
+                    </div>
+                    <div className="open-order-side">
+                      <b>{formatUsd(order.amountUsd)}</b>
+                      <small>{formatDateTime(order.updatedAt)}</small>
+                    </div>
+                  </div>
+                )) : (
+                  <div className="soft-note">No submitted order history for this trading wallet yet.</div>
+                )}
+              </div>
+              <div className="open-orders-section-title">
+                <span>Recent fills</span>
+                <small>{openOrders?.trades?.length ?? 0} CLOB trades</small>
+              </div>
+              <div className="open-orders-list compact">
+                {openOrdersLoading && !openOrders ? null : openOrders?.trades?.length ? openOrders.trades.slice(0, 8).map((trade) => (
+                  <div className="open-order-row trade" key={trade.tradeId}>
+                    <div className="open-order-main">
+                      <b>{trade.eventTitle || trade.marketTitle || 'Polymarket fill'}</b>
+                      {trade.eventTitle && trade.marketTitle ? <span>{trade.marketTitle}</span> : null}
+                      <small>
+                        {trade.side.toUpperCase()} {trade.outcomeLabel || 'Outcome'} | Fill {formatLimitPrice(trade.price)} | {formatShares(trade.size)} shares
+                      </small>
+                      <em>{shortAddress(trade.tradeId)} | {trade.status}{trade.transactionHash ? ` | ${shortAddress(trade.transactionHash)}` : ''}</em>
+                    </div>
+                    <div className="open-order-side">
+                      <b>{formatUsd(trade.amountUsd)}</b>
+                      <small>{trade.matchedAt ? formatDateTime(trade.matchedAt) : 'No match time'}</small>
+                    </div>
+                  </div>
+                )) : (
+                  <div className="soft-note">No fills returned for this trading wallet yet.</div>
                 )}
               </div>
             </div>
