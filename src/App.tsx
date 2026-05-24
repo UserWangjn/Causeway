@@ -70,7 +70,7 @@ function englishTextOrFallback(value: string | null | undefined, fallback: strin
   return trimmed && !hasCjkText(trimmed) ? trimmed : fallback
 }
 
-type View = 'network' | 'detail' | 'infer' | 'progress' | 'script' | 'scripts'
+type View = 'network' | 'detail' | 'infer' | 'progress' | 'script' | 'scripts' | 'account'
 
 type Market = {
   id: string
@@ -259,6 +259,7 @@ type InferenceCausalLink = {
 }
 
 type InferenceScriptLeg = {
+  selectionId?: string
   marketId: string
   marketTitle: string
   eventTitle?: string | null
@@ -286,6 +287,7 @@ type TradingAccountType = 'auto' | 'gnosis_safe' | 'proxy' | 'deposit_wallet'
 type OrderMode = 'market' | 'limit'
 type LimitOrderType = 'GTC' | 'GTD' | 'FOK' | 'FAK'
 type OrderSizingMode = 'amountUsd' | 'size'
+type OrderSubmissionStatus = 'idle' | 'saving' | 'previewing' | 'checking' | 'preparing_signature' | 'signing' | 'submitting'
 
 type ScriptOrderCandidate = {
   selectionId: string
@@ -488,6 +490,96 @@ type OpenOrdersResult = {
   items: OpenOrderItem[]
   recentOrders?: OrderStatusItem[]
   trades?: TradeStatusItem[]
+  refreshedAt: string
+  error: string | null
+}
+
+type PortfolioSummary = {
+  capability: 'available' | 'degraded' | 'unavailable'
+  dataSource: 'polymarket_data_api' | 'local' | 'stub' | string
+  cashAvailable: number | null
+  portfolioValue: number | null
+  openPositionsValue: number | null
+  openOrdersValue: number | null
+  pnl: number | null
+  refreshedAt: string
+  error: string | null
+}
+
+type PortfolioPositionItem = {
+  marketId: string
+  outcomeId: string
+  tokenId: string
+  title: string
+  outcomeLabel: string
+  size: number | null
+  avgPrice: number | null
+  currentPrice: number | null
+  currentValue: number | null
+  pnl: number | null
+}
+
+type PortfolioPositionsResult = {
+  capability: 'available' | 'degraded' | 'unavailable'
+  dataSource: string
+  items: PortfolioPositionItem[]
+  refreshedAt: string
+  error: string | null
+}
+
+type PortfolioOrderItem = {
+  intentId: string
+  status: string
+  executionMode: OrderExecutionMode
+  totalAmountUsd: number | null
+  createdAt: string
+  updatedAt: string
+  orders: Array<{
+    id: string
+    side: 'buy' | 'sell'
+    orderMode: OrderMode
+    orderType: LimitOrderType | null
+    limitPrice: number | null
+    estimatedFillPrice: number | null
+    size: number | null
+    amountUsd: number | null
+    externalOrderId: string | null
+    status: string
+    errorMessage: string | null
+    market?: { question?: string | null; title?: string | null } | null
+    outcome?: { label?: string | null } | null
+  }>
+}
+
+type PortfolioOrdersResult = {
+  capability: 'available' | 'degraded' | 'unavailable'
+  dataSource: string
+  items: PortfolioOrderItem[]
+  refreshedAt: string
+  error: string | null
+}
+
+type PortfolioTradeItem = {
+  tradeId: string
+  orderId: string
+  intentId: string
+  side: 'buy' | 'sell'
+  orderMode: OrderMode
+  orderType: LimitOrderType | null
+  price: number | null
+  size: number | null
+  amountUsd: number | null
+  externalOrderId: string | null
+  status: string
+  market?: { question?: string | null; title?: string | null } | null
+  outcome?: { label?: string | null } | null
+  tradedAt: string
+}
+
+type PortfolioTradesResult = {
+  capability: 'available' | 'degraded' | 'unavailable'
+  dataSource: string
+  items: PortfolioTradeItem[]
   refreshedAt: string
   error: string | null
 }
@@ -914,7 +1006,7 @@ type InferenceSettingsState = {
 }
 
 const defaultInferenceSettings: InferenceSettingsState = {
-  scope: 'all',
+  scope: 'markets',
   timeRange: 'until_close',
   modelPreference: 'deepseek-v4-flash',
   confidenceMode: 'balanced',
@@ -1466,25 +1558,6 @@ function orderPreviewWarningText(warnings: string[]) {
     if (warning.includes('ORDERBOOK_REFRESH_UNAVAILABLE_USING_LOCAL_CACHE')) return copy('Order book refresh failed; using local cached estimate.')
     return warning
   }).join(copy(', '))
-}
-
-function realOrderConfirmationText(preview: OrderPreview) {
-  const orderLines = preview.orders.slice(0, 5).map((order, index) => {
-    const price = order.orderMode === 'market' ? 'market' : `limit ${formatLimitPrice(order.limitPrice)}`
-    return `${index + 1}. ${order.outcomeLabel || 'Outcome'} - ${price}, ${formatShares(order.size)} shares, max ${formatUsd(order.amountUsd)}`
-  })
-  const extraCount = preview.orders.length - orderLines.length
-  const extraLine = extraCount > 0 ? [`...and ${extraCount} more order${extraCount === 1 ? '' : 's'}.`] : []
-  return [
-    'You are about to sign and submit a Polymarket order.',
-    '',
-    `Max spend: ${formatUsd(preview.totalAmountUsd)}`,
-    `Orders: ${preview.orders.length}`,
-    ...orderLines,
-    ...extraLine,
-    '',
-    'Canceling here will not submit an order.',
-  ].join('\n')
 }
 
 function formatTickSize(value: number | null | undefined) {
@@ -2293,14 +2366,18 @@ function formatShares(value: number | null | undefined) {
   return value.toFixed(4)
 }
 
-function buildDefaultOrderDrafts(candidates: ScriptOrderCandidate[]): OrderDraftSelection[] {
+function buildDefaultOrderDrafts(candidates: ScriptOrderCandidate[], selectedSelectionIds: string[] = []): OrderDraftSelection[] {
+  const selectedSelectionIdSet = new Set(selectedSelectionIds)
   return candidates.map((candidate) => {
     const orderMode = candidate.orderMode || 'limit'
     const amountUsd = positiveNumberOrNull(candidate.amountUsd) ?? 10
     const size = positiveNumberOrNull(candidate.size)
+    const enabled = selectedSelectionIdSet.size
+      ? candidate.isTradable && selectedSelectionIdSet.has(candidate.selectionId)
+      : candidate.isTradable && (candidate.userAction === 'buy' || candidate.aiAction === 'buy')
     return {
       ...candidate,
-      enabled: candidate.isTradable && (candidate.userAction === 'buy' || candidate.aiAction === 'buy'),
+      enabled,
       orderMode,
       limitPrice: orderMode === 'limit' ? defaultLimitPrice(candidate.limitPrice ?? candidate.price, candidate.tickSize) : null,
       amountUsd,
@@ -2379,6 +2456,7 @@ function scriptOrderChains(script: BackendScript, rootMarketId: string): Inferen
         ),
         legs: buyOutcomes.map((outcome) => {
           return {
+            selectionId: outcome.selectionId,
             marketId: scriptMarket.marketId,
             marketTitle: scriptMarket.title,
             eventTitle: scriptMarket.eventTitle ?? null,
@@ -2481,6 +2559,37 @@ async function fetchOpenOrders(token: string) {
   return fetch(`${API_PREFIX}/orders/open`, {
     headers: authHeaders(token),
   }).then((response) => readApiData<OpenOrdersResult>(response))
+}
+
+async function fetchPortfolioSummary(token: string) {
+  return fetch(`${API_PREFIX}/portfolio/summary`, {
+    headers: authHeaders(token),
+  }).then((response) => readApiData<PortfolioSummary>(response))
+}
+
+async function fetchPortfolioPositions(token: string) {
+  return fetch(`${API_PREFIX}/portfolio/positions`, {
+    headers: authHeaders(token),
+  }).then((response) => readApiData<PortfolioPositionsResult>(response))
+}
+
+async function syncPortfolioPositions(token: string) {
+  return fetch(`${API_PREFIX}/portfolio/positions/sync`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  }).then((response) => readApiData<unknown>(response))
+}
+
+async function fetchPortfolioOrders(token: string) {
+  return fetch(`${API_PREFIX}/portfolio/orders?limit=30`, {
+    headers: authHeaders(token),
+  }).then((response) => readApiData<PortfolioOrdersResult>(response))
+}
+
+async function fetchPortfolioTrades(token: string) {
+  return fetch(`${API_PREFIX}/portfolio/trades?limit=30`, {
+    headers: authHeaders(token),
+  }).then((response) => readApiData<PortfolioTradesResult>(response))
 }
 
 async function cancelOpenOrder(orderId: string, token: string) {
@@ -3406,6 +3515,11 @@ function marketChangeText(market: Market) {
   return `${market.change > 0 ? '+' : ''}${market.change}%`
 }
 
+function outcomePriceToPercent(price: number | null | undefined) {
+  if (price == null || Number.isNaN(price)) return null
+  return Math.round(price <= 1 ? clamp(price, 0, 1) * 100 : clamp(price, 0, 100))
+}
+
 function unitPriceToPercent(price: number | null | undefined) {
   if (price == null || Number.isNaN(price)) return null
   return Math.round(clamp(price, 0, 1) * 100)
@@ -4075,7 +4189,7 @@ function App({ showIntro = false }: AppProps) {
   const [inferenceSettings, setInferenceSettings] = useState<InferenceSettingsState>(defaultInferenceSettings)
   const [introVisible, setIntroVisible] = useState(showIntro)
   const [tradingWalletActivityItems, setTradingWalletActivityItems] = useState<TradingWalletActivityItem[]>([])
-  const activeNav = view === 'scripts' ? 'scripts' : view === 'progress' ? 'monitor' : 'network'
+  const activeNav = view === 'scripts' ? 'scripts' : view === 'account' ? 'account' : view === 'progress' ? 'discover' : 'network'
 
   const addTradingWalletActivity = useCallback((label: string, detail: string, status: TradingWalletActivityStatus = 'pending') => {
     const id = createIdempotencyKey()
@@ -4147,6 +4261,7 @@ function App({ showIntro = false }: AppProps) {
           {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
           {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={openInferenceSettings} />}
           {view === 'infer' && <InferenceSettings auth={auth} initialSettings={inferenceSettings} market={selectedMarket} membershipState={membershipState} onBack={() => setView('detail')} onStart={startInference} />}
+          {view === 'account' && <AccountPage auth={auth} />}
           {view === 'progress' && (
             <InferenceProgress
               market={selectedMarket}
@@ -4201,7 +4316,7 @@ function Header({
   const navItems = [
     { id: 'network', label: copy('Market Network'), view: 'network' as View },
     { id: 'discover', label: copy('Discover'), view: 'infer' as View },
-    { id: 'monitor', label: copy('Monitor'), view: 'progress' as View },
+    { id: 'account', label: copy('Account'), view: 'account' as View },
     { id: 'scripts', label: copy('My Scripts'), view: 'scripts' as View },
   ]
 
@@ -5404,6 +5519,250 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   )
 }
 
+function AccountPage({ auth }: { auth: CausewayAuth }) {
+  const [summary, setSummary] = useState<PortfolioSummary | null>(null)
+  const [positions, setPositions] = useState<PortfolioPositionsResult | null>(null)
+  const [openOrders, setOpenOrders] = useState<OpenOrdersResult | null>(null)
+  const [orders, setOrders] = useState<PortfolioOrdersResult | null>(null)
+  const [trades, setTrades] = useState<PortfolioTradesResult | null>(null)
+  const [activeTab, setActiveTab] = useState<'positions' | 'open' | 'history'>('positions')
+  const [loading, setLoading] = useState(false)
+  const [syncingPositions, setSyncingPositions] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const token = auth.accessToken ?? readStoredAuthSession()?.accessToken ?? null
+
+  const loadAccount = useCallback(async (nextToken = token) => {
+    if (!nextToken) {
+      setSummary(null)
+      setPositions(null)
+      setOpenOrders(null)
+      setOrders(null)
+      setTrades(null)
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const [nextSummary, nextPositions, nextOpenOrders, nextOrders, nextTrades] = await Promise.all([
+        fetchPortfolioSummary(nextToken),
+        fetchPortfolioPositions(nextToken),
+        fetchOpenOrders(nextToken),
+        fetchPortfolioOrders(nextToken),
+        fetchPortfolioTrades(nextToken),
+      ])
+      setSummary(nextSummary)
+      setPositions(nextPositions)
+      setOpenOrders(nextOpenOrders)
+      setOrders(nextOrders)
+      setTrades(nextTrades)
+    } catch (loadError) {
+      setError(errorMessage(loadError))
+    } finally {
+      setLoading(false)
+    }
+  }, [token])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadAccount()
+    }, 0)
+    if (!token) return () => window.clearTimeout(timer)
+    const interval = window.setInterval(() => void loadAccount(token), 45_000)
+    return () => {
+      window.clearTimeout(timer)
+      window.clearInterval(interval)
+    }
+  }, [loadAccount, token])
+
+  const handleSignIn = useCallback(async () => {
+    setError(null)
+    try {
+      if (!auth.isAuthenticated) await auth.signIn()
+      const nextToken = readStoredAuthSession()?.accessToken ?? auth.accessToken
+      await loadAccount(nextToken)
+    } catch (signInError) {
+      setError(errorMessage(signInError))
+    }
+  }, [auth, loadAccount])
+
+  const handleSyncPositions = useCallback(async () => {
+    const nextToken = readStoredAuthSession()?.accessToken ?? auth.accessToken
+    if (!nextToken) {
+      await handleSignIn()
+      return
+    }
+    setSyncingPositions(true)
+    setError(null)
+    try {
+      await syncPortfolioPositions(nextToken)
+      await loadAccount(nextToken)
+    } catch (syncError) {
+      setError(errorMessage(syncError))
+    } finally {
+      setSyncingPositions(false)
+    }
+  }, [auth.accessToken, handleSignIn, loadAccount])
+
+  const positionsValue = summary?.openPositionsValue ?? 0
+  const openOrdersValue = summary?.openOrdersValue ?? 0
+  const cashAvailable = summary?.cashAvailable
+  const portfolioValue = summary?.portfolioValue ?? positionsValue
+  const pnl = summary?.pnl ?? 0
+  const openOrderCount = openOrders?.items.length ?? 0
+  const positionCount = positions?.items.length ?? 0
+  const historyCount = orders?.items.length ?? 0
+
+  if (!auth.isAuthenticated && !token) {
+    return (
+      <section className="page account-page">
+        <PageTitle title={copy('Account')} subtitle={copy('Connect and sign in to view portfolio, positions, open orders, and recent trading history.')} />
+        <Card className="account-empty-card">
+          <WalletCards size={28} />
+          <div>
+            <b>{copy('Wallet sign-in required')}</b>
+            <span>{copy('Portfolio data is private and loaded from your authenticated Polymarket trading account.')}</span>
+          </div>
+          <button className="primary-button" type="button" onClick={() => void handleSignIn()}>
+            {auth.isConnected ? copy('Sign in') : copy('Connect wallet')}
+          </button>
+          {error ? <div className="status-note error">{error}</div> : null}
+        </Card>
+      </section>
+    )
+  }
+
+  return (
+    <section className="page account-page">
+      <div className="account-page-head">
+        <PageTitle title={copy('Account')} subtitle={copy('Portfolio, positions, open orders, and local order history.')} />
+        <div className="account-page-actions">
+          <button className="outline-button" disabled={loading} type="button" onClick={() => void loadAccount()}>
+            <RotateCw size={16} /> {loading ? copy('Refreshing') : copy('Refresh')}
+          </button>
+          <button className="primary-button" disabled={syncingPositions} type="button" onClick={() => void handleSyncPositions()}>
+            <Activity size={16} /> {syncingPositions ? copy('Syncing') : copy('Sync positions')}
+          </button>
+        </div>
+      </div>
+
+      <div className="account-summary-grid">
+        <Card className="account-balance-card">
+          <div className="account-card-title">
+            <span>{copy('Portfolio')}</span>
+            <small>{summary?.dataSource ?? copy('Loading')}</small>
+          </div>
+          <strong>{formatUsd(portfolioValue)}</strong>
+          <em className={pnl >= 0 ? 'green-text' : 'red-text'}>{pnl >= 0 ? '+' : ''}{formatUsd(pnl)} {copy('PnL')}</em>
+          <span>{copy('Use the wallet controls in the top bar for deposits, withdrawals, and trading setup.')}</span>
+        </Card>
+        <Card className="account-balance-card compact">
+          <div className="account-card-title"><span>{copy('Available')}</span><small>{copy('For trading')}</small></div>
+          <strong>{formatUsd(cashAvailable)}</strong>
+          <span>{summary?.error || copy('Cash balance uses the active Polymarket trading wallet when available.')}</span>
+        </Card>
+        <Card className="account-balance-card compact">
+          <div className="account-card-title"><span>{copy('Open Orders')}</span><small>{openOrders?.dataSource ?? copy('CLOB')}</small></div>
+          <strong>{formatUsd(openOrdersValue)}</strong>
+          <span>{openOrderCount} {copy('live order(s)')}</span>
+        </Card>
+      </div>
+
+      {error ? <div className="status-note error">{error}</div> : null}
+      {summary?.error ? <div className="status-note warning">{summary.error}</div> : null}
+
+      <div className="account-tabs">
+        <button className={activeTab === 'positions' ? 'active' : ''} type="button" onClick={() => setActiveTab('positions')}>
+          {copy('Positions')} <span>{positionCount}</span>
+        </button>
+        <button className={activeTab === 'open' ? 'active' : ''} type="button" onClick={() => setActiveTab('open')}>
+          {copy('Open Orders')} <span>{openOrderCount}</span>
+        </button>
+        <button className={activeTab === 'history' ? 'active' : ''} type="button" onClick={() => setActiveTab('history')}>
+          {copy('History')} <span>{historyCount}</span>
+        </button>
+      </div>
+
+      {activeTab === 'positions' ? (
+        <Card className="account-table-card">
+          <AccountTableHeader labels={[copy('Market'), copy('Outcome'), copy('Size'), copy('Avg'), copy('Current'), copy('Value'), copy('PnL')]} />
+          {positions?.items.length ? positions.items.map((position) => (
+            <div className="account-position-row" key={`${position.marketId}:${position.outcomeId}`}>
+              <div className="account-row-main">
+                <b>{position.title}</b>
+                <span>{shortAddress(position.tokenId)}</span>
+              </div>
+              <span>{position.outcomeLabel}</span>
+              <span>{formatShares(position.size)}</span>
+              <span>{formatUnitPercent(position.avgPrice)}</span>
+              <span>{formatUnitPercent(position.currentPrice)}</span>
+              <strong>{formatUsd(position.currentValue)}</strong>
+              <em className={(position.pnl ?? 0) >= 0 ? 'green-text' : 'red-text'}>{formatUsd(position.pnl)}</em>
+            </div>
+          )) : <div className="account-empty-row">{loading ? copy('Loading positions...') : copy('No positions synced yet.')}</div>}
+        </Card>
+      ) : null}
+
+      {activeTab === 'open' ? (
+        <Card className="account-table-card">
+          <AccountTableHeader labels={[copy('Market'), copy('Side'), copy('Limit'), copy('Remaining'), copy('Amount'), copy('Status'), copy('Created')]} />
+          {openOrders?.items.length ? openOrders.items.map((order) => (
+            <div className="account-order-row" key={order.externalOrderId}>
+              <div className="account-row-main">
+                <b>{order.eventTitle || order.marketTitle || copy('Polymarket order')}</b>
+                {order.eventTitle && order.marketTitle ? <span>{order.marketTitle}</span> : <span>{shortAddress(order.externalOrderId)}</span>}
+              </div>
+              <span>{order.side.toUpperCase()} {order.outcomeLabel || ''}</span>
+              <span>{formatLimitPrice(order.price)}</span>
+              <span>{formatShares(order.remainingSize)}</span>
+              <strong>{formatUsd(order.amountUsd)}</strong>
+              <span>{order.rawStatus || order.status}</span>
+              <span>{order.createdAt ? formatDateTime(order.createdAt) : copy('No timestamp')}</span>
+            </div>
+          )) : <div className="account-empty-row">{loading ? copy('Loading open orders...') : copy('No live limit orders found for this wallet.')}</div>}
+        </Card>
+      ) : null}
+
+      {activeTab === 'history' ? (
+        <Card className="account-table-card history">
+          <AccountTableHeader labels={[copy('Market'), copy('Order'), copy('Amount'), copy('Status'), copy('Updated')]} />
+          {orders?.items.length ? orders.items.map((intent) => (
+            <div className="account-history-group" key={intent.intentId}>
+              <div className="account-history-head">
+                <b>{formatUsd(intent.totalAmountUsd)}</b>
+                <span>{intent.status} - {formatDateTime(intent.updatedAt)}</span>
+              </div>
+              {intent.orders.map((order) => (
+                <div className="account-history-row" key={order.id}>
+                  <div className="account-row-main">
+                    <b>{order.market?.question || order.market?.title || copy('Polymarket order')}</b>
+                    <span>{order.externalOrderId ? shortAddress(order.externalOrderId) : shortAddress(order.id)}</span>
+                  </div>
+                  <span>{order.side.toUpperCase()} {order.outcome?.label || ''} {order.orderMode}</span>
+                  <strong>{formatUsd(order.amountUsd)}</strong>
+                  <span>{order.status}{order.errorMessage ? ` - ${order.errorMessage}` : ''}</span>
+                  <span>{formatDateTime(intent.updatedAt)}</span>
+                </div>
+              ))}
+            </div>
+          )) : <div className="account-empty-row">{loading ? copy('Loading order history...') : copy('No submitted order history yet.')}</div>}
+          {trades?.items.length ? (
+            <div className="account-trade-note">{trades.items.length} {copy('local fill record(s) available from the portfolio trade endpoint.')}</div>
+          ) : null}
+        </Card>
+      ) : null}
+    </section>
+  )
+}
+
+function AccountTableHeader({ labels }: { labels: string[] }) {
+  return (
+    <div className="account-table-header">
+      {labels.map((label) => <span key={label}>{label}</span>)}
+    </div>
+  )
+}
+
 function assetOptionKey(asset: BridgeSupportedAsset) {
   return `${asset.chainId}:${asset.token.address}`
 }
@@ -5708,6 +6067,7 @@ function MarketDetail({
   onInfer: (market?: Market, outcomeId?: string | null) => void
 }) {
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null)
+  const [eventDetailRefreshing, setEventDetailRefreshing] = useState(false)
   const [selectedOutcome, setSelectedOutcome] = useState<SelectedInferenceOutcome | null>(null)
   const detailParams = useMemo(() => {
     const params = new URLSearchParams()
@@ -5723,18 +6083,41 @@ function MarketDetail({
     return params.toString()
   }, [market.eventId, market.id, market.marketId, market.nodeType, market.outcomes?.length])
 
-  useEffect(() => {
-    const controller = new AbortController()
-    fetch(`${API_PREFIX}/events/detail?${detailParams}`, { signal: controller.signal })
+  const loadEventDetail = useCallback(async (signal?: AbortSignal, showRefreshing = false) => {
+    if (showRefreshing) setEventDetailRefreshing(true)
+    try {
+      const data = await fetch(`${API_PREFIX}/events/detail?${detailParams}`, { signal })
       .then((response) => {
         return readApiData<EventDetailResponse['data']>(response)
       })
-      .then((data) => setEventDetail(data))
-      .catch((error: Error) => {
-        if (error.name !== 'AbortError') setEventDetail(null)
-      })
-    return () => controller.abort()
+      setEventDetail(data)
+    } catch (error) {
+      if (error instanceof Error && error.name !== 'AbortError') setEventDetail(null)
+    } finally {
+      if (showRefreshing && !signal?.aborted) setEventDetailRefreshing(false)
+    }
   }, [detailParams])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      void loadEventDetail(controller.signal)
+    }, 0)
+    const interval = window.setInterval(() => {
+      void loadEventDetail(controller.signal)
+    }, 15_000)
+    return () => {
+      window.clearTimeout(timer)
+      window.clearInterval(interval)
+      controller.abort()
+    }
+  }, [loadEventDetail])
+
+  const handleRefreshEventDetail = useCallback(() => {
+    const controller = new AbortController()
+    void loadEventDetail(controller.signal, true)
+    return () => controller.abort()
+  }, [loadEventDetail])
 
   const eventMarkets = useMemo(
     () => eventDetail?.markets.map(apiNodeToMarket) || [],
@@ -5779,6 +6162,9 @@ function MarketDetail({
               <h1>{displayMarket.title}</h1>
             </div>
             <div className="market-head-actions">
+              <button className="outline-button" type="button" disabled={eventDetailRefreshing} onClick={handleRefreshEventDetail}>
+                <RotateCw size={17} /> {eventDetailRefreshing ? copy('Refreshing') : copy('Refresh prices')}
+              </button>
               <button className="outline-button square" type="button" aria-label={copy('Save market')}>
                 <Star size={18} />
               </button>
@@ -5818,6 +6204,10 @@ function MarketDetail({
               selectedOutcomeId={activeSelectedOutcome?.outcomeId ?? null}
               totalMarkets={eventDetail?.event?.marketsCount ?? detailMarkets.length}
             />
+            <div className="market-data-freshness">
+              <span>{copy('Market list auto-refreshes every 15s from Causeway backend cache.')}</span>
+              <b>{copy(`Synced ${formatDateTime(displayMarket.syncedAt)}`)}</b>
+            </div>
           </Card>
         </div>
 
@@ -5919,13 +6309,10 @@ function confidenceModeLabel(mode: ConfidenceMode) {
 }
 
 function estimateInference(settings: InferenceSettingsState) {
-  const scopeCost = settings.scope === 'all' ? 8 : 5
-  const depthCost = settings.depth * 5
-  const modelCost = settings.modelPreference === 'deepseek-v4-pro' ? 8 : 4
   const minutes = settings.modelPreference === 'deepseek-v4-pro'
     ? settings.depth === 3 ? '3-6 min' : '2-4 min'
     : settings.depth === 3 ? '2-5 min' : '1-3 min'
-  return { minutes, points: scopeCost + depthCost + modelCost }
+  return { minutes }
 }
 
 function InferenceSettings({
@@ -5978,7 +6365,9 @@ function InferenceSettings({
   const isPremium = auth.isAuthenticated && membershipState.membership?.tier === 'premium'
   const advancedModelLocked = inferenceModelRequiresPremium(settings.modelPreference) && !isPremium
   const advancedDepthLocked = settings.depth > 1 && !isPremium
-  const advancedSettingsLocked = advancedModelLocked || advancedDepthLocked
+  const premiumScopeLocked = settings.scope === 'all' && !isPremium
+  const premiumConfidenceLocked = settings.confidenceMode === 'strict' && !isPremium
+  const advancedSettingsLocked = advancedModelLocked || advancedDepthLocked || premiumScopeLocked || premiumConfidenceLocked
   const handleStartInference = useCallback(() => {
     if (!canStartInference) return
     if (advancedSettingsLocked) return
@@ -6003,6 +6392,7 @@ function InferenceSettings({
       ? copy(`Default ${capability.defaultModel ?? 'Not configured'}`)
       : capability?.reason ?? modelPreferenceHint(settings.modelPreference)
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId) ?? market.outcomes?.find((outcome) => outcome.outcomeId)
+  const selectedOutcomePercent = outcomePriceToPercent(selectedOutcome?.price) ?? market.price
   return (
     <section className="page">
       <BackButton onClick={onBack} />
@@ -6017,8 +6407,8 @@ function InferenceSettings({
               <p>{marketSubtitle(market)}</p>
               {selectedOutcome ? <span className="root-outcome-pill">{copy(`Inference direction: ${selectedOutcome.label}`)}</span> : null}
             </div>
-            <strong>{market.price}%</strong>
-            <span className={market.change >= 0 ? 'green-text' : 'red-text'}>{marketChangeText(market)}</span>
+            <strong>{selectedOutcomePercent}%</strong>
+            {market.change ? <span className={market.change >= 0 ? 'green-text' : 'red-text'}>{marketChangeText(market)}</span> : null}
             <div className="mini-stat">
               <b>{market.volume}</b>
               <span>{copy('Volume')}</span>
@@ -6031,18 +6421,21 @@ function InferenceSettings({
           <Divider />
           <SectionHeader title={copy('Inference Scope')} note={copy('Choose the data context to include in the analysis.')} />
           <div className="option-grid two">
-            {scopeOptions.map(([scope, title, subtitle], index) => (
+            {scopeOptions.map(([scope, title, subtitle], index) => {
+              const locked = scope === 'all' && !isPremium
+              return (
               <button
-                className={settings.scope === scope ? 'option-card selected' : 'option-card'}
+                className={[settings.scope === scope ? 'option-card selected' : 'option-card', locked ? 'locked' : ''].filter(Boolean).join(' ')}
+                disabled={locked}
                 key={scope}
                 type="button"
                 onClick={() => updateSettings({ scope, includeWebSearch: false })}
               >
                 <span className="option-icon">{index + 1}</span>
-                <b>{title}</b>
+                <b>{title}{locked ? ' - Premium' : ''}</b>
                 <small>{subtitle}</small>
               </button>
-            ))}
+            )})}
           </div>
           <Divider />
           <div className="form-grid">
@@ -6072,7 +6465,7 @@ function InferenceSettings({
               <select value={settings.confidenceMode} onChange={(event) => selectConfidenceMode(event.target.value as ConfidenceMode)}>
                 <option value="broad">{copy('Broad coverage')}</option>
                 <option value="balanced">{copy('Balanced (Recommended)')}</option>
-                <option value="strict">{copy('High confidence')}</option>
+                <option disabled={!isPremium} value="strict">{copy('High confidence')} - Premium</option>
               </select>
               <small>{confidenceModeLabel(settings.confidenceMode)} · {copy('Threshold')} {settings.confidenceThreshold.toFixed(2)}</small>
             </label>
@@ -6119,9 +6512,6 @@ function InferenceSettings({
             <span>
               <Bot size={18} /> {copy(`Estimated time: ${estimate.minutes}`)}
             </span>
-            <span>
-              <ShieldCheck size={18} /> {copy(`Estimated points: ${estimate.points}`)}
-            </span>
           </div>
           {!auth.isAuthenticated ? (
             <div className="soft-note auth-note">
@@ -6138,7 +6528,7 @@ function InferenceSettings({
           {advancedSettingsLocked ? (
             <div className="soft-note auth-note">
               <Star size={18} />
-              Premium membership is required for DeepSeek v4 Pro or inference deeper than 1 layer.
+              Premium membership is required for Polymarket Context, High confidence, DeepSeek v4 Pro, or inference deeper than 1 layer.
             </div>
           ) : null}
           {auth.isAuthenticated && membershipState.error ? (
@@ -6298,9 +6688,6 @@ function InferenceProgress({
             note={result?.verification ? copy(`Candidates ${result.verification.candidateCount || 0} · Kept ${result.verification.verifiedCount || result.relatedMarkets.length} · Excluded ${result.verification.excludedCount || 0}`) : undefined}
           />
           <DiscoveryTable market={market} relatedMarkets={displayedRelatedMarkets} />
-          <button className="link-button" type="button">
-            {displayedRelatedMarkets ? copy(`${displayedRelatedMarkets.length} verified markets`) : copy('Verifying live markets')} <ArrowRight size={15} />
-          </button>
         </Card>
         <Card>
           <SectionHeader title={copy('Live Inference Log')} />
@@ -6351,6 +6738,13 @@ function CausalScript({
   onScripts: () => void
   result: InferenceResult | null
 }) {
+  const scriptChains = useMemo(() => displayScriptChains(market, result), [market, result])
+  const [selectedChainId, setSelectedChainId] = useState<string | null>(null)
+  const selectedChain = scriptChains.find((chain) => chain.id === selectedChainId) || scriptChains[0]
+  const selectedOrderSelectionIds = useMemo(
+    () => selectedChain?.legs.map((leg) => leg.selectionId).filter((selectionId): selectionId is string => Boolean(selectionId)) ?? [],
+    [selectedChain],
+  )
   const openOrderPanel = useCallback(() => {
     document.getElementById('script-order-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [])
@@ -6386,7 +6780,14 @@ function CausalScript({
       </div>
       <div className="content-grid script-grid">
         <Card className="script-map-card">
-          <CausalMap market={market} onOpenOrderPanel={openOrderPanel} result={result} />
+          <CausalMap
+            chains={scriptChains}
+            market={market}
+            onOpenOrderPanel={openOrderPanel}
+            onSelectedChainIdChange={setSelectedChainId}
+            result={result}
+            selectedChainId={selectedChain?.id ?? null}
+          />
         </Card>
         <Card>
           <SectionHeader title={copy('Causal Path Summary')} />
@@ -6396,7 +6797,7 @@ function CausalScript({
         </Card>
       </div>
       <ArcProofPanel auth={auth} scriptId={result?.scriptId ?? null} />
-      <ScriptOrderPanel auth={auth} result={result} />
+      <ScriptOrderPanel auth={auth} result={result} selectedSelectionIds={selectedOrderSelectionIds} />
       <Card className="script-footer-card">
         <div className="footer-meta">
           <span><BrainCircuit size={16} /> {copy(`Inference model: ${result?.model || 'DeepSeek'}`)}</span>
@@ -6566,15 +6967,25 @@ function ArcProofPanel({ auth, scriptId }: { auth: CausewayAuth; scriptId: strin
   )
 }
 
-function ScriptOrderPanel({ auth, result }: { auth: CausewayAuth; result: InferenceResult | null }) {
+function ScriptOrderPanel({
+  auth,
+  result,
+  selectedSelectionIds,
+}: {
+  auth: CausewayAuth
+  result: InferenceResult | null
+  selectedSelectionIds: string[]
+}) {
   const candidates = useMemo(() => result?.orderCandidates ?? [], [result?.orderCandidates])
   const scriptId = result?.scriptId ?? null
   const draftSeedKey = useMemo(() => orderDraftsKey(candidates), [candidates])
+  const selectedSelectionKey = selectedSelectionIds.join('|')
   return (
     <ScriptOrderPanelState
-      key={`${scriptId || 'no-script'}:${draftSeedKey}`}
+      key={`${scriptId || 'no-script'}:${draftSeedKey}:${selectedSelectionKey}`}
       auth={auth}
       candidates={candidates}
+      selectedSelectionIds={selectedSelectionIds}
       scriptId={scriptId}
     />
   )
@@ -6583,10 +6994,12 @@ function ScriptOrderPanel({ auth, result }: { auth: CausewayAuth; result: Infere
 function ScriptOrderPanelState({
   auth,
   candidates,
+  selectedSelectionIds,
   scriptId,
 }: {
   auth: CausewayAuth
   candidates: ScriptOrderCandidate[]
+  selectedSelectionIds: string[]
   scriptId: string | null
 }) {
   const { signTypedDataAsync } = useSignTypedData()
@@ -6595,10 +7008,11 @@ function ScriptOrderPanelState({
   const { addActivity, updateActivity } = useTradingWalletActivity()
   const executionMode: OrderExecutionMode = 'real'
   const tradingAccountType: TradingAccountType = 'auto'
-  const [drafts, setDrafts] = useState<OrderDraftSelection[]>(() => buildDefaultOrderDrafts(candidates))
+  const [drafts, setDrafts] = useState<OrderDraftSelection[]>(() => buildDefaultOrderDrafts(candidates, selectedSelectionIds))
   const [preview, setPreview] = useState<OrderPreview | null>(null)
+  const [pendingSubmitPreview, setPendingSubmitPreview] = useState<OrderPreview | null>(null)
   const [submitResult, setSubmitResult] = useState<OrderSubmitResult | null>(null)
-  const [status, setStatus] = useState<'idle' | 'saving' | 'previewing' | 'signing' | 'submitting'>('idle')
+  const [status, setStatus] = useState<OrderSubmissionStatus>('idle')
   const [error, setError] = useState<string | null>(null)
 
   const activeDrafts = useMemo(() => drafts.filter((draft) => draft.enabled), [drafts])
@@ -6617,6 +7031,7 @@ function ScriptOrderPanelState({
   const updateDraft = useCallback((selectionId: string, patch: Partial<OrderDraftSelection>) => {
     setDrafts((current) => current.map((draft) => (draft.selectionId === selectionId ? { ...draft, ...patch } : draft)))
     setPreview(null)
+    setPendingSubmitPreview(null)
     setSubmitResult(null)
   }, [])
 
@@ -6739,9 +7154,12 @@ function ScriptOrderPanelState({
   }, [addActivity, auth.walletAddress, estimatedRequiredUsd, signMessageAsync, signTypedDataAsync, tradingAccountType, updateActivity, walletClient])
 
   const ensureRealTradingReady = useCallback(async (token: string, requiredAmountUsd?: number) => {
-    setStatus('signing')
+    let changed = false
+    setStatus('checking')
     let readiness = await fetchTradingReadiness(token, tradingAccountType)
     if (!readiness.clobApiKeyConfigured) {
+      changed = true
+      setStatus('signing')
       const authPayload = await prepareClobAuth(token)
       const signature = await signTypedDataWithFallback({
         variables: typedDataToSignVariables(authPayload.eip712),
@@ -6753,35 +7171,36 @@ function ScriptOrderPanelState({
       readiness = await fetchTradingReadiness(token, tradingAccountType)
     }
     if (readiness.tradingAccountType === 'deposit_wallet' && !readiness.depositWalletDeployed) {
+      changed = true
       readiness = await ensureDepositWallet(token)
       readiness = await waitForDepositWalletReadiness(token, readiness, tradingAccountType)
     }
     if (readiness.status === 'deposit_wallet_pending') {
       throw new Error(readiness.reason || 'Polymarket deposit wallet is being created. Please retry after it is confirmed.')
     }
-    readiness = await ensureDepositWalletFunded(token, readiness, requiredAmountUsd)
+    const fundedReadiness = await ensureDepositWalletFunded(token, readiness, requiredAmountUsd)
+    changed = changed || fundedReadiness !== readiness
+    readiness = fundedReadiness
     if (!readiness.canTrade) {
       throw new Error(readiness.reason || readiness.steps[0]?.message || 'Polymarket trading is not ready for this wallet.')
     }
-    return readiness
+    return { readiness, changed }
   }, [ensureDepositWalletFunded, signTypedDataAsync, tradingAccountType, walletClient])
 
-  const handleSubmit = useCallback(async () => {
-    let nextPreview = executionMode === 'real' ? await buildPreview() : preview ?? await buildPreview()
-    if (!nextPreview) return
-    if (!nextPreview.orders.every((order) => order.valid)) {
-      setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.'))
-      return
-    }
+  const submitConfirmedPreview = useCallback(async (initialPreview: OrderPreview) => {
+    let nextPreview = initialPreview
+    setPendingSubmitPreview(null)
 
     if (nextPreview.executionMode === 'real') {
       try {
         const { token } = await ensureAuthToken()
-        await ensureRealTradingReady(token, nextPreview.totalAmountUsd)
-        setPreview(null)
-        const readyPreview = await buildPreview()
-        if (!readyPreview) return
-        nextPreview = readyPreview
+        const readinessResult = await ensureRealTradingReady(token, nextPreview.totalAmountUsd)
+        if (readinessResult.changed) {
+          setPreview(null)
+          const readyPreview = await buildPreview()
+          if (!readyPreview) return
+          nextPreview = readyPreview
+        }
       } catch (readinessError) {
         setError(errorMessage(readinessError))
         setStatus('idle')
@@ -6795,9 +7214,6 @@ function ScriptOrderPanelState({
         setError(nextPreview.tradingCapabilityReason || copy('Polymarket order submission is currently unavailable.'))
         return
       }
-      if (!window.confirm(realOrderConfirmationText(nextPreview))) {
-        return
-      }
     }
 
     let orderActivityId: string | null = null
@@ -6809,7 +7225,7 @@ function ScriptOrderPanelState({
         const chainId = session?.chainId ?? auth.chainId ?? supportedChain.id
         if (!walletAddress) throw new Error(copy('Order submission is missing an authenticated wallet address.'))
         orderActivityId = addActivity(copy('Submit order'), copy(`Waiting for wallet signature for ${nextPreview.orders.length} Polymarket order(s).`), 'pending')
-        setStatus('signing')
+        setStatus('preparing_signature')
         const prepared = await prepareOrderSignatures(nextPreview, walletAddress, chainId, token)
         orderDebugLog('prepare_order_signatures_result', {
           intentId: prepared.intentId,
@@ -6827,6 +7243,7 @@ function ScriptOrderPanelState({
         if (prepared.signingStatus !== 'ready') {
           throw new Error(prepared.error || copy('Order signing payload is not available yet.'))
         }
+        setStatus('signing')
         const rawSignedOrders = await Promise.all(prepared.payloads.map(async (payload) => ({
           orderId: payload.orderId,
           signature: await signTypedDataWithFallback({
@@ -6868,7 +7285,27 @@ function ScriptOrderPanelState({
     } finally {
       setStatus('idle')
     }
-  }, [addActivity, auth.chainId, auth.walletAddress, buildPreview, ensureAuthToken, ensureRealTradingReady, executionMode, preview, signTypedDataAsync, updateActivity, walletClient])
+  }, [addActivity, auth.chainId, auth.walletAddress, buildPreview, ensureAuthToken, ensureRealTradingReady, signTypedDataAsync, updateActivity, walletClient])
+
+  const handleSubmit = useCallback(async () => {
+    const nextPreview = executionMode === 'real' ? await buildPreview() : preview ?? await buildPreview()
+    if (!nextPreview) return
+    if (!nextPreview.orders.every((order) => order.valid)) {
+      setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.'))
+      return
+    }
+
+    if (nextPreview.executionMode === 'real') {
+      if (nextPreview.submitMode !== 'signed_clob_order' || !nextPreview.requiresSignature) {
+        setError(nextPreview.tradingCapabilityReason || copy('Polymarket order submission is currently unavailable.'))
+        return
+      }
+      setPendingSubmitPreview(nextPreview)
+      return
+    }
+
+    await submitConfirmedPreview(nextPreview)
+  }, [buildPreview, executionMode, preview, submitConfirmedPreview])
 
   const refreshIntent = useCallback(async () => {
     if (!currentIntentId) return
@@ -6890,7 +7327,9 @@ function ScriptOrderPanelState({
     idle: '',
     saving: copy('Saving script selections...'),
     previewing: copy('Generating order preview...'),
-    signing: copy('Waiting for wallet confirmation...'),
+    checking: copy('Checking trading wallet readiness...'),
+    preparing_signature: copy('Preparing wallet signature payload...'),
+    signing: copy('Wallet signature prompt is opening...'),
     submitting: copy('Submitting orders...'),
   }[status]
 
@@ -7039,6 +7478,14 @@ function ScriptOrderPanelState({
       {error ? <div className="status-note error">{error}</div> : null}
       {preview ? <OrderPreviewBlock draftBySelectionId={draftBySelectionId} preview={preview} /> : null}
       {submitResult ? <OrderSubmitBlock result={submitResult} /> : null}
+      {pendingSubmitPreview ? (
+        <OrderConfirmDialog
+          busy={busy}
+          preview={pendingSubmitPreview}
+          onCancel={() => setPendingSubmitPreview(null)}
+          onConfirm={() => void submitConfirmedPreview(pendingSubmitPreview)}
+        />
+      ) : null}
     </Card>
   )
 }
@@ -7074,6 +7521,64 @@ function OrderPreviewBlock({ draftBySelectionId, preview }: { draftBySelectionId
         })}
       </div>
     </div>
+  )
+}
+
+function OrderConfirmDialog({
+  busy,
+  onCancel,
+  onConfirm,
+  preview,
+}: {
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+  preview: OrderPreview
+}) {
+  return (
+    <BodyPortal>
+      <div className="wallet-modal-backdrop order-confirm-backdrop" role="presentation" onMouseDown={() => !busy && onCancel()}>
+        <div className="wallet-modal order-confirm-modal" role="dialog" aria-modal="true" aria-label="Confirm Polymarket order" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="wallet-modal-head">
+            <div>
+              <span><ShieldCheck size={18} /> {copy('Confirm Polymarket Order')}</span>
+              <small>{copy('Review the final preview before Causeway opens your wallet signature prompt.')}</small>
+            </div>
+            <button className="modal-close-button" type="button" disabled={busy} onClick={onCancel}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="order-confirm-summary">
+            <div><span>{copy('Max Spend')}</span><b>{formatUsd(preview.totalAmountUsd)}</b></div>
+            <div><span>{copy('Orders')}</span><b>{preview.orders.length}</b></div>
+            <div><span>{copy('Trading Wallet')}</span><b>{preview.tradingAccountLabel ?? preview.tradingAccountType ?? copy('Auto')}</b></div>
+          </div>
+          <div className="order-confirm-list">
+            {preview.orders.slice(0, 6).map((order, index) => (
+              <div className="order-confirm-row" key={order.selectionId}>
+                <span>{index + 1}</span>
+                <div>
+                  <b>{order.outcomeLabel || copy('Outcome')}</b>
+                  <small>{order.orderMode === 'market' ? copy('Market order') : copy(`Limit ${formatLimitPrice(order.limitPrice)}`)} 路 {formatShares(order.size)} shares</small>
+                </div>
+                <strong>{formatUsd(order.amountUsd)}</strong>
+              </div>
+            ))}
+            {preview.orders.length > 6 ? <small className="order-confirm-extra">+{preview.orders.length - 6} more order(s)</small> : null}
+          </div>
+          <div className="soft-note">
+            <Info size={16} />
+            {copy('Canceling here will not submit an order. Confirming will prepare the signature payload and open your wallet.')}
+          </div>
+          <div className="order-confirm-actions">
+            <button className="outline-button" type="button" disabled={busy} onClick={onCancel}>{copy('Cancel')}</button>
+            <button className="primary-button" type="button" disabled={busy} onClick={onConfirm}>
+              <Play size={16} /> {busy ? copy('Preparing...') : copy('Confirm and Sign')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </BodyPortal>
   )
 }
 
@@ -7722,21 +8227,27 @@ function scriptFallbackChains(market: Market, result: InferenceResult | null): I
   }]
 }
 
+function displayScriptChains(market: Market, result: InferenceResult | null): InferenceScriptChain[] {
+  const apiChains = (result?.scriptChains || []).filter((chain) => chain.legs?.length)
+  return (apiChains.length ? apiChains : scriptFallbackChains(market, result)).slice(0, 4)
+}
+
 function CausalMap({
+  chains,
   market,
   onOpenOrderPanel,
+  onSelectedChainIdChange,
   result,
+  selectedChainId,
 }: {
+  chains: InferenceScriptChain[]
   market: Market
   onOpenOrderPanel?: () => void
+  onSelectedChainIdChange: (chainId: string) => void
   result: InferenceResult | null
+  selectedChainId: string | null
 }) {
   const relatedById = useMemo(() => new Map((result?.relatedMarkets || []).map((item) => [item.id, item])), [result])
-  const chains = useMemo(() => {
-    const apiChains = (result?.scriptChains || []).filter((chain) => chain.legs?.length)
-    return (apiChains.length ? apiChains : scriptFallbackChains(market, result)).slice(0, 4)
-  }, [market, result])
-  const [selectedChainId, setSelectedChainId] = useState<string | null>(null)
 
   const selectedChain = chains.find((chain) => chain.id === selectedChainId) || chains[0]
   const activeChainId = selectedChain?.id || null
@@ -7792,7 +8303,7 @@ function CausalMap({
             <button
               className={`script-chain-lane ${tone}${selected ? ' selected' : ''}`}
               key={chain.id}
-              onClick={() => setSelectedChainId(chain.id)}
+              onClick={() => onSelectedChainIdChange(chain.id)}
               type="button"
             >
               <div className="script-chain-title">

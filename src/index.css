@@ -675,6 +675,227 @@ button {
   overscroll-behavior: contain;
 }
 
+.account-page {
+  display: grid;
+  gap: 20px;
+}
+
+.account-page-head,
+.account-page-actions,
+.account-tabs,
+.account-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-page-head {
+  justify-content: space-between;
+}
+
+.account-summary-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 1.1fr) repeat(2, minmax(220px, 0.8fr));
+  gap: 18px;
+}
+
+.account-balance-card {
+  display: grid;
+  gap: 14px;
+}
+
+.account-balance-card > strong {
+  color: #071327;
+  font-size: 42px;
+  line-height: 1;
+}
+
+.account-balance-card.compact > strong {
+  font-size: 32px;
+}
+
+.account-balance-card em,
+.account-balance-card span {
+  font-style: normal;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.account-card-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #31425d;
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.account-card-title small {
+  color: var(--muted);
+  font-weight: 720;
+}
+
+.account-tabs {
+  border-bottom: 1px solid var(--border);
+}
+
+.account-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: #66758a;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 820;
+}
+
+.account-tabs button.active {
+  color: #071327;
+  border-bottom-color: var(--blue);
+}
+
+.account-tabs span {
+  display: inline-grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--blue);
+  background: #eef4ff;
+  font-size: 12px;
+}
+
+.account-table-card {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.account-table-header,
+.account-position-row,
+.account-order-row,
+.account-history-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.5fr) minmax(120px, 0.75fr) repeat(5, minmax(90px, 0.55fr));
+  gap: 14px;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid #edf2f8;
+}
+
+.account-order-row {
+  grid-template-columns: minmax(280px, 1.6fr) minmax(130px, 0.8fr) repeat(5, minmax(100px, 0.6fr));
+}
+
+.account-history-row {
+  grid-template-columns: minmax(280px, 1.6fr) minmax(160px, 0.9fr) 110px minmax(150px, 0.8fr) 120px;
+  padding: 12px 18px;
+}
+
+.account-table-header {
+  color: #7a8aa1;
+  background: #fbfdff;
+  font-size: 12px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.account-position-row,
+.account-order-row,
+.account-history-row {
+  color: #31425d;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.account-row-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.account-row-main b {
+  overflow: hidden;
+  color: #071327;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-row-main span,
+.account-empty-row,
+.account-history-head span,
+.account-trade-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-position-row strong,
+.account-order-row strong,
+.account-history-row strong {
+  color: #071327;
+}
+
+.account-position-row em {
+  font-style: normal;
+}
+
+.account-empty-row {
+  padding: 24px 18px;
+  text-align: center;
+}
+
+.account-history-group {
+  display: grid;
+  border-bottom: 1px solid #edf2f8;
+}
+
+.account-history-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 18px;
+  background: #fbfdff;
+}
+
+.account-history-head b {
+  color: #071327;
+}
+
+.account-trade-note {
+  padding: 14px 18px;
+}
+
+.account-empty-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.account-empty-card > svg {
+  color: var(--blue);
+}
+
+.account-empty-card div {
+  display: grid;
+  gap: 4px;
+}
+
+.account-empty-card b {
+  color: #071327;
+}
+
+.account-empty-card span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .wallet-modal {
   display: grid;
   width: min(520px, 100%);
@@ -2894,6 +3115,25 @@ button {
   overflow: hidden;
 }
 
+.market-data-freshness {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 22px 20px;
+  padding: 10px 12px;
+  border: 1px solid #edf2f8;
+  border-radius: 8px;
+  color: var(--muted);
+  background: #fbfdff;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.market-data-freshness b {
+  color: #31425d;
+}
+
 .market-live-strip {
   display: grid;
   grid-template-columns: 1.4fr repeat(3, minmax(130px, 1fr));
@@ -3759,6 +3999,14 @@ button {
   box-shadow: inset 0 0 0 1px rgba(22, 119, 255, 0.25);
 }
 
+.option-card.locked,
+.option-card:disabled {
+  cursor: not-allowed;
+  color: #66758a;
+  background: #f7f9fc;
+  opacity: 0.72;
+}
+
 .option-icon,
 .preview-icon {
   display: inline-grid;
@@ -3913,7 +4161,7 @@ button {
 
 .estimate-strip {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 14px;
   margin-top: 24px;
 }
@@ -5156,6 +5404,91 @@ button {
   color: var(--muted);
   font-size: 12px;
   font-style: normal;
+}
+
+.order-confirm-modal {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.order-confirm-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.order-confirm-summary div {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid #edf2f8;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.order-confirm-summary span,
+.order-confirm-row small,
+.order-confirm-extra {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.order-confirm-summary b {
+  color: #071327;
+  font-size: 20px;
+}
+
+.order-confirm-list {
+  display: grid;
+  gap: 10px;
+  max-height: 310px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.order-confirm-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #edf2f8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.order-confirm-row > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--blue);
+  background: #eef4ff;
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.order-confirm-row div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.order-confirm-row b {
+  overflow: hidden;
+  color: #071327;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.order-confirm-row strong {
+  color: #071327;
+}
+
+.order-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .order-preview-metrics b {
