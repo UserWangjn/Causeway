@@ -868,8 +868,24 @@ export class TradingService {
   }
 
   async completeSafeDepositWalletFunding(user: CurrentUser, dto: CompleteDepositWalletFundingDto) {
-    const prepared = await this.prepareSafeDepositWalletFunding(user, dto.amountMicroUsd);
-    if (prepared.nonce !== dto.nonce || prepared.messageHash.toLowerCase() !== dto.messageHash.toLowerCase()) {
+    const account = await this.requireDepositWalletAccount(user);
+    const walletAddress = getAddress(user.walletAddress);
+    const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
+    const amount = normalizeMicroUsd(dto.amountMicroUsd);
+    const safeAddress = await this.fetchRelayerFunderAddress(walletAddress, 'SAFE');
+    const transaction = buildSafeTransferTransaction(depositWalletAddress, amount);
+    const messageHash = buildSafeTransactionHash(user.chainId, safeAddress, transaction, dto.nonce);
+    const prepared = {
+      walletAddress,
+      chainId: user.chainId,
+      safeAddress,
+      depositWalletAddress,
+      amountMicroUsd: amount,
+      amountUsd: amount / 1_000_000,
+      nonce: dto.nonce,
+      messageHash,
+    };
+    if (prepared.messageHash.toLowerCase() !== dto.messageHash.toLowerCase()) {
       throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Safe funding payload is stale; prepare the transfer again.');
     }
     const valid = await verifyMessage({
@@ -880,7 +896,6 @@ export class TradingService {
     if (!valid) {
       throw new ApiException(HttpStatus.UNAUTHORIZED, 'INVALID_SIGNATURE', 'Safe funding signature is invalid');
     }
-    const transaction = buildSafeTransferTransaction(prepared.depositWalletAddress, prepared.amountMicroUsd);
     const request = {
       from: prepared.walletAddress,
       to: transaction.to,

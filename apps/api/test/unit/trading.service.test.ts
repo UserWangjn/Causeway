@@ -3,6 +3,7 @@ import { Prisma, type UserPolymarketAccount } from '@prisma/client';
 import { getContractConfig } from '@polymarket/builder-relayer-client/dist/config';
 import { deriveDepositWallet } from '@polymarket/builder-relayer-client/dist/builder';
 import { getAddress } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CredentialCryptoService } from '../../src/common/security/credential-crypto.service';
 import { PrismaService } from '../../src/database/prisma.service';
@@ -242,6 +243,44 @@ describe('TradingService', () => {
     expect(fetchMock.mock.calls.map(([input]) => requestUrlFromMockInput(input).pathname)).toEqual(['/relay-payload', '/nonce']);
     expect(requestUrlFromMockInput(fetchMock.mock.calls[0]?.[0]).searchParams.get('type')).toBe('SAFE');
     expect(requestUrlFromMockInput(fetchMock.mock.calls[1]?.[0]).searchParams.get('type')).toBe('SAFE');
+  });
+
+  it('completes Safe funding with the prepared nonce instead of fetching a fresh nonce', async () => {
+    const owner = privateKeyToAccount('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    const user = { ...currentUser(), walletAddress: owner.address };
+    const account = accountFixture(user, { depositWalletDeployed: true });
+    const safeAddress = '0x2222222222222222222222222222222222222222';
+    const prisma = prismaMock({
+      upsert: vi.fn().mockResolvedValue(account),
+      update: vi.fn().mockResolvedValue(account),
+    });
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(rawUrl);
+      let body: unknown = { transactionID: 'tx_1', state: 'STATE_NEW' };
+      if (url.pathname === '/relay-payload') body = { safeAddress };
+      if (url.pathname === '/nonce') body = { nonce: '23' };
+      return Promise.resolve({
+        ok: true,
+        text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const service = createService(prisma, cryptoMock());
+
+    const payload = await service.prepareSafeDepositWalletFunding(user, 5_250_000);
+    const signature = await owner.signMessage({ message: { raw: payload.messageHash as `0x${string}` } });
+    const result = await service.completeSafeDepositWalletFunding(user, {
+      amountMicroUsd: payload.amountMicroUsd,
+      nonce: payload.nonce,
+      messageHash: payload.messageHash,
+      signature,
+    });
+
+    expect(result.transaction).toMatchObject({ transactionId: 'tx_1', state: 'STATE_NEW' });
+    const requestedPaths = fetchMock.mock.calls.map(([input]) => requestUrlFromMockInput(input).pathname);
+    expect(requestedPaths.slice(0, 4)).toEqual(['/relay-payload', '/nonce', '/relay-payload', '/submit']);
+    expect(requestedPaths.filter((path) => path === '/nonce')).toHaveLength(1);
   });
 
   it('returns sanitized relayer transaction status only for transactions owned by the user', async () => {
