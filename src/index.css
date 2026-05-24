@@ -4449,8 +4449,15 @@ button {
 .progress-steps {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-  margin: 36px 0 30px;
+  gap: 12px;
+  padding: 22px 26px 18px;
+  margin: 24px 0 24px;
+  border: 1px solid #dbe7f4;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.96), rgba(255, 255, 255, 0.98)),
+    radial-gradient(circle at 50% 0, rgba(22, 119, 255, 0.08), rgba(22, 119, 255, 0));
+  box-shadow: 0 14px 36px rgba(15, 43, 74, 0.06);
 }
 
 .progress-overview {
@@ -4489,31 +4496,86 @@ button {
   position: relative;
   display: grid;
   justify-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px 0;
   color: var(--muted);
   text-align: center;
 }
 
 .step:not(:last-child)::after {
   position: absolute;
-  top: 23px;
-  left: calc(50% + 34px);
-  width: calc(100% - 68px);
-  height: 1px;
+  top: 27px;
+  left: calc(50% + 30px);
+  width: calc(100% - 60px);
+  height: 2px;
   content: "";
-  background: var(--border);
+  background: #dbe7f4;
+  border-radius: 999px;
 }
 
 .step-circle {
   position: relative;
   display: grid;
-  width: 56px;
-  height: 56px;
+  z-index: 1;
+  width: 48px;
+  height: 48px;
   place-items: center;
   border-radius: 50%;
-  color: #94a3b8;
-  background: #f0f4fa;
+  color: #64748b;
+  background: #f4f7fb;
+  border: 1px solid #d7e3f2;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
   font-weight: var(--weight-bold);
+}
+
+.step strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: #17233a;
+  font-size: var(--text-md);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  color: #64748b;
+  background: transparent;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.2;
+}
+
+.step.done:not(:last-child)::after {
+  background: linear-gradient(90deg, rgba(22, 119, 255, 0.72), rgba(20, 184, 166, 0.62));
+}
+
+.step.done .step-circle {
+  color: #1171d9;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.98) 0 42%, rgba(231, 243, 255, 0.96) 43% 100%);
+  border-color: rgba(22, 119, 255, 0.42);
+  box-shadow:
+    0 8px 18px rgba(22, 119, 255, 0.12),
+    inset 0 0 0 5px rgba(22, 119, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.step.done .step-circle svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 2.4;
+}
+
+.step.done > span {
+  color: #067647;
+  background: #ecfdf5;
 }
 
 .step.current .step-circle::before,
@@ -4546,16 +4608,20 @@ button {
   animation: inference-node-pulse 1.8s ease-in-out infinite;
 }
 
-.step.done .step-circle,
 .step.current .step-circle {
   color: #fff;
   background: var(--blue);
+  border-color: rgba(22, 119, 255, 0.72);
   box-shadow: 0 10px 22px rgba(22, 119, 255, 0.25);
 }
 
-.step.done strong,
 .step.current strong {
   color: var(--blue);
+}
+
+.step.current > span {
+  color: #075985;
+  background: #e0f2fe;
 }
 
 .progress-caption {
@@ -6413,6 +6479,31 @@ button {
 
   .discovery-table > div {
     grid-template-columns: auto 1fr;
+  }
+
+  .progress-steps {
+    padding: 16px;
+  }
+
+  .step {
+    justify-items: start;
+    grid-template-columns: auto 1fr auto;
+    text-align: left;
+  }
+
+  .step:not(:last-child)::after {
+    top: 44px;
+    left: 31px;
+    width: 2px;
+    height: calc(100% - 28px);
+  }
+
+  .step strong {
+    align-self: center;
+  }
+
+  .step > span {
+    align-self: center;
   }
 
   .discovery-table .mini-chart {
