@@ -6648,8 +6648,8 @@ function ScriptOrderPanelState({
     await buildPreview()
   }, [buildPreview])
 
-  const ensureDepositWalletFunded = useCallback(async (token: string, initial: TradingReadiness) => {
-    const requiredUsd = Math.max(positiveNumberOrNull(estimatedRequiredUsd) ?? 0, TRADING_WALLET_MIN_READY_USD)
+  const ensureDepositWalletFunded = useCallback(async (token: string, initial: TradingReadiness, requiredAmountUsd?: number) => {
+    const requiredUsd = Math.max(positiveNumberOrNull(requiredAmountUsd) ?? positiveNumberOrNull(estimatedRequiredUsd) ?? 0, TRADING_WALLET_MIN_READY_USD)
     if (depositWalletReadyForAmount(initial, requiredUsd)) return initial
     return prepareTradingWalletForRealOrders({
       token,
@@ -6664,7 +6664,7 @@ function ScriptOrderPanelState({
     })
   }, [addActivity, auth.walletAddress, estimatedRequiredUsd, signMessageAsync, signTypedDataAsync, tradingAccountType, updateActivity, walletClient])
 
-  const ensureRealTradingReady = useCallback(async (token: string) => {
+  const ensureRealTradingReady = useCallback(async (token: string, requiredAmountUsd?: number) => {
     setStatus('signing')
     let readiness = await fetchTradingReadiness(token, tradingAccountType)
     if (!readiness.clobApiKeyConfigured) {
@@ -6685,7 +6685,7 @@ function ScriptOrderPanelState({
     if (readiness.status === 'deposit_wallet_pending') {
       throw new Error(readiness.reason || 'Polymarket deposit wallet is being created. Please retry after it is confirmed.')
     }
-    readiness = await ensureDepositWalletFunded(token, readiness)
+    readiness = await ensureDepositWalletFunded(token, readiness, requiredAmountUsd)
     if (!readiness.canTrade) {
       throw new Error(readiness.reason || readiness.steps[0]?.message || 'Polymarket trading is not ready for this wallet.')
     }
@@ -6693,25 +6693,30 @@ function ScriptOrderPanelState({
   }, [ensureDepositWalletFunded, signTypedDataAsync, tradingAccountType, walletClient])
 
   const handleSubmit = useCallback(async () => {
-    if (executionMode === 'real') {
-      try {
-        const { token } = await ensureAuthToken()
-        await ensureRealTradingReady(token)
-        setPreview(null)
-      } catch (readinessError) {
-        setError(errorMessage(readinessError))
-        setStatus('idle')
-        return
-      }
-    }
-
-    const nextPreview = executionMode === 'real' ? await buildPreview() : preview ?? await buildPreview()
+    let nextPreview = executionMode === 'real' ? await buildPreview() : preview ?? await buildPreview()
     if (!nextPreview) return
     if (!nextPreview.orders.every((order) => order.valid)) {
       setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.', '预览中存在无效订单，请修正金额、数量、限价或盘口状态。'))
       return
     }
+
     if (nextPreview.executionMode === 'real') {
+      try {
+        const { token } = await ensureAuthToken()
+        await ensureRealTradingReady(token, nextPreview.totalAmountUsd)
+        setPreview(null)
+        const readyPreview = await buildPreview()
+        if (!readyPreview) return
+        nextPreview = readyPreview
+      } catch (readinessError) {
+        setError(errorMessage(readinessError))
+        setStatus('idle')
+        return
+      }
+      if (!nextPreview.orders.every((order) => order.valid)) {
+        setError(invalidOrderPreviewMessage(nextPreview) || copy('The preview contains invalid orders. Correct amount, size, limit price, or market status.', '预览中存在无效订单，请修正金额、数量、限价或盘口状态。'))
+        return
+      }
       if (nextPreview.submitMode !== 'signed_clob_order' || !nextPreview.requiresSignature) {
         setError(nextPreview.tradingCapabilityReason || copy('Polymarket order submission is currently unavailable.', '当前 Polymarket 下单服务不可用。'))
         return
