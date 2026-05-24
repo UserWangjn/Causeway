@@ -225,6 +225,34 @@ describe('ClobClient', () => {
     });
   });
 
+  it('rounds limit BUY order amounts so the signed price satisfies the CLOB tick size', () => {
+    const expiresAt = new Date('2026-05-19T00:00:00.000Z');
+    const client = new ClobClient(configService({ retries: 0, enableRealOrders: true, withCreds: true }));
+
+    const [payload] = client.prepareSignaturePayloads([
+      {
+        orderId: 'order_1',
+        walletAddress: '0x1111111111111111111111111111111111111111',
+        funderAddress: '0x2222222222222222222222222222222222222222',
+        chainId: 137,
+        tokenId: '123456789',
+        side: 'BUY',
+        orderMode: 'limit',
+        orderType: 'GTC',
+        limitPrice: 0.163999999944,
+        estimatedFillPrice: 0.163999999944,
+        size: 30.487805,
+        amountUsd: 5,
+        tickSize: 0.001,
+        negRisk: false,
+      },
+    ], expiresAt);
+
+    expect(payload?.order.makerAmount).toBe('4998720');
+    expect(payload?.order.takerAmount).toBe('30480000');
+    expect(Number(payload?.order.makerAmount) / Number(payload?.order.takerAmount)).toBe(0.164);
+  });
+
   it('prepares POLY_1271 EIP-712 payloads with the configured builder code', () => {
     const expiresAt = new Date('2026-05-19T00:00:00.000Z');
     const builderCode = `0x${'f'.repeat(64)}`;

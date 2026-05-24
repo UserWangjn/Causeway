@@ -5,6 +5,11 @@ import { orderToJsonV2, Side as SdkSide, type OrderType as SdkOrderType } from '
 import { encodeAbiParameters, getAddress, keccak256, toHex } from 'viem';
 import { ApiException } from '../../../common/errors/api.exception';
 import type { OrderBookSnapshot } from '../types';
+import {
+  buildLimitBuyRawAmounts,
+  buildMarketBuyRawAmounts,
+  normalizeClobTickSize,
+} from '../utils/clob-rounding.util';
 
 export type TradingCapabilityStatus = 'available' | 'degraded' | 'unavailable';
 export type PolymarketOrderType = 'GTC' | 'GTD' | 'FOK' | 'FAK';
@@ -848,9 +853,18 @@ function buildClobOrderAmounts(input: ClobSignaturePayloadInput): { makerAmount:
     throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Order amount and size must be positive');
   }
 
+  const tickSize = normalizeTickSize(input.tickSize);
+  const price = input.orderMode === 'limit' ? input.limitPrice : input.estimatedFillPrice;
+  if (price == null || price <= 0) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'REQUEST_VALIDATION_FAILED', 'Order price is required for CLOB amount rounding');
+  }
+  const rawAmounts = input.orderMode === 'limit'
+    ? buildLimitBuyRawAmounts({ size: input.size, price, tickSize })
+    : buildMarketBuyRawAmounts({ amountUsd: input.amountUsd, price, tickSize });
+
   return {
-    makerAmount: toCollateralUnits(input.amountUsd),
-    takerAmount: toCollateralUnits(input.size),
+    makerAmount: toCollateralUnits(rawAmounts.makerAmount),
+    takerAmount: toCollateralUnits(rawAmounts.takerAmount),
   };
 }
 
@@ -916,8 +930,8 @@ function normalizeTickSize(value: number | null): string {
     throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'ORDERBOOK_UNAVAILABLE', 'CLOB tick size is required for real orders');
   }
 
-  const normalized = value.toString();
-  if (CLOB_TICK_SIZES.has(normalized)) return normalized;
+  const normalized = normalizeClobTickSize(value);
+  if (normalized && CLOB_TICK_SIZES.has(normalized)) return normalized;
 
   throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, 'INVALID_TICK_SIZE', 'Unsupported CLOB tick size', {
     tickSize: value,

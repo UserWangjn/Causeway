@@ -1,5 +1,12 @@
 import { roundCurrency, roundShares, toNullableNumber } from '../../common/utils/number.util';
 import type { OrderBookSnapshot } from '../../integrations/polymarket/types';
+import {
+  buildLimitBuyRawAmounts,
+  deriveLimitBuySizeFromAmount,
+  getClobRoundingConfig,
+  isTickAligned,
+  normalizeTickAlignedPrice,
+} from '../../integrations/polymarket/utils/clob-rounding.util';
 import type { OrderPreviewSelectionDto } from './dto/order-preview.dto';
 
 const AMOUNT_SIZE_TOLERANCE_USD = 0.01;
@@ -59,7 +66,9 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
   const warnings: string[] = [];
   const errors: string[] = [];
   const orderMode = input.orderMode as 'market' | 'limit';
-  const limitPrice = orderMode === 'limit' ? input.limitPrice ?? null : null;
+  const tickSize = context.orderBook?.tickSize ?? toNullableNumber(context.market.orderPriceMinTickSize);
+  const rawLimitPrice = orderMode === 'limit' ? input.limitPrice ?? null : null;
+  const limitPrice = rawLimitPrice != null ? normalizeTickAlignedPrice(rawLimitPrice, tickSize) : null;
   const marketFill = orderMode === 'market' && context.orderBook
     ? calculateMarketBuyFill(context.orderBook.asks, input.amountUsd ?? null, input.size ?? null)
     : null;
@@ -73,7 +82,6 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
   const estimatedFillPrice = orderMode === 'limit'
     ? limitPrice
     : marketFill?.filled === true ? marketFill.averagePrice : (context.requireFreshOrderBook ? null : localEstimatedPrice);
-  const tickSize = context.orderBook?.tickSize ?? toNullableNumber(context.market.orderPriceMinTickSize);
   const minOrderSize = context.orderBook?.minOrderSize ?? toNullableNumber(context.market.orderMinSize);
   const marketTradable = context.market.active
     && !context.market.closed
@@ -115,12 +123,30 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
   }
 
   const priceForSizing = estimatedFillPrice ?? limitPrice;
-  const amountUsd = orderMode === 'market' && marketFill?.filled
+  const rawAmountUsd = orderMode === 'market' && marketFill?.filled
     ? marketFill.amountUsd
     : input.amountUsd ?? (input.size != null && priceForSizing != null ? input.size * priceForSizing : 0);
-  const size = orderMode === 'market' && marketFill?.filled
+  const rawSize = orderMode === 'market' && marketFill?.filled
     ? marketFill.size
     : input.size ?? (input.amountUsd != null && priceForSizing != null && priceForSizing > 0 ? input.amountUsd / priceForSizing : 0);
+  const clobSizedLimit = orderMode === 'limit'
+    && limitPrice != null
+    && tickSize != null
+    && rawSize > 0
+    && isTickAligned(limitPrice, tickSize)
+    && getClobRoundingConfig(tickSize) != null
+    ? buildLimitBuyRawAmounts({
+      price: limitPrice,
+      size: input.size ?? deriveLimitBuySizeFromAmount({
+        amountUsd: rawAmountUsd,
+        price: limitPrice,
+        tickSize,
+      }),
+      tickSize,
+    })
+    : null;
+  const amountUsd = clobSizedLimit?.makerAmount ?? rawAmountUsd;
+  const size = clobSizedLimit?.takerAmount ?? rawSize;
 
   if (input.amountUsd != null && input.size != null && priceForSizing != null) {
     const impliedAmountUsd = roundCurrency(input.size * priceForSizing);
@@ -260,10 +286,4 @@ function fillBySize(
 
 function roundPrice(value: number): number {
   return Number(value.toFixed(6));
-}
-
-function isTickAligned(price: number, tickSize: number): boolean {
-  if (tickSize <= 0) return true;
-  const units = price / tickSize;
-  return Math.abs(units - Math.round(units)) < 1e-8;
 }

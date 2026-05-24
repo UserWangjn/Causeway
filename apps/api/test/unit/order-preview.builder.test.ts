@@ -58,6 +58,37 @@ describe('buildPreviewOrder', () => {
     expect(order.error).toBe('INVALID_TICK_SIZE');
   });
 
+  it('normalizes floating-point tick noise before storing a limit order preview', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'limit',
+        limitPrice: 0.163999999944,
+        amountUsd: 5,
+        orderType: 'GTC',
+      },
+      {
+        ...tradableContext,
+        orderBook: {
+          tokenId: 'token_1',
+          bids: [{ price: 0.16, size: 100 }],
+          asks: [{ price: 0.164, size: 100 }],
+          tickSize: 0.001,
+          minOrderSize: 2,
+          refreshedAt: '2026-05-19T00:00:00.000Z',
+        },
+        requireFreshOrderBook: true,
+      },
+    );
+
+    expect(order.valid).toBe(true);
+    expect(order.limitPrice).toBe(0.164);
+    expect(order.estimatedFillPrice).toBe(0.164);
+    expect(order.size).toBe(30.48);
+    expect(order.amountUsd).toBe(5);
+    expect(order.error).toBeNull();
+  });
+
   it('rejects inconsistent amount and size inputs', () => {
     const order = buildPreviewOrder(
       {
