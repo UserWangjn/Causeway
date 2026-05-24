@@ -159,7 +159,7 @@ export function buildPreviewOrder(input: OrderPreviewSelectionDto, context: Orde
     errors.push('REQUEST_VALIDATION_FAILED');
   }
 
-  if (minOrderSize != null && amountUsd > 0 && amountUsd < minOrderSize) {
+  if (minOrderSize != null && size > 0 && size + 1e-9 < minOrderSize) {
     errors.push('BELOW_MIN_ORDER_SIZE');
   }
 

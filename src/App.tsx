@@ -1424,10 +1424,10 @@ function orderPreviewErrorText(order: OrderPreviewOrder, draft?: OrderDraftSelec
     : order.outcomeLabel || order.marketId
   const rawError = order.error || ''
   if (rawError.includes('BELOW_MIN_ORDER_SIZE')) {
-    const minimum = order.minOrderSize != null ? formatUsd(order.minOrderSize) : copy('the market minimum', '市场最小下单金额')
+    const minimum = order.minOrderSize != null ? `${formatShares(order.minOrderSize)} shares` : copy('the market minimum', '市场最小订单数量')
     return copy(
-      `${label} is below the minimum order amount ${minimum} (current ${formatUsd(order.amountUsd)}).`,
-      `${label} 低于最小下单金额 ${minimum}（当前 ${formatUsd(order.amountUsd)}）`,
+      `${label} is below the minimum order size ${minimum} (current ${formatShares(order.size)} shares).`,
+      `${label} 低于最小订单数量 ${minimum}（当前 ${formatShares(order.size)} shares）。`,
     )
   }
   if (rawError.includes('INVALID_TICK_SIZE')) {
@@ -2251,6 +2251,13 @@ function estimateDraftAmountUsd(draft: Pick<ScriptOrderCandidate, 'amountUsd' | 
   const size = positiveNumberOrNull(draft.size)
   const price = positiveNumberOrNull(draft.limitPrice) ?? positiveNumberOrNull(draft.price)
   return size != null && price != null ? Number((size * price).toFixed(2)) : null
+}
+
+function estimateDraftSize(draft: Pick<ScriptOrderCandidate, 'amountUsd' | 'limitPrice' | 'price' | 'size'> & { sizingMode: OrderSizingMode }) {
+  if (draft.sizingMode === 'size') return positiveNumberOrNull(draft.size)
+  const amountUsd = positiveNumberOrNull(draft.amountUsd)
+  const price = positiveNumberOrNull(draft.limitPrice) ?? positiveNumberOrNull(draft.price)
+  return amountUsd != null && price != null && price > 0 ? roundDraftSize(amountUsd / price) : null
 }
 
 function scriptMarketTradable(market: Pick<BackendScript['markets'][number], 'active' | 'closed' | 'archived' | 'staleDetectedAt' | 'acceptingOrders' | 'enableOrderBook'>) {
@@ -6642,12 +6649,12 @@ function ScriptOrderPanelState({
         `${draft.outcomeLabel} is missing a valid ${draft.sizingMode === 'size' ? 'size' : 'amount'}.`,
         `${draft.outcomeLabel} 缺少有效的${draft.sizingMode === 'size' ? '数量' : '金额'}。`,
       )
-      const minOrderAmount = positiveNumberOrNull(draft.minOrderSize)
-      const estimatedAmount = estimateDraftAmountUsd(draft)
-      if (minOrderAmount != null && estimatedAmount != null && estimatedAmount < minOrderAmount) {
+      const minOrderSize = positiveNumberOrNull(draft.minOrderSize)
+      const estimatedSize = estimateDraftSize(draft)
+      if (minOrderSize != null && estimatedSize != null && estimatedSize + 1e-9 < minOrderSize) {
         return copy(
-          `${draft.outcomeLabel} is below the minimum order amount ${formatUsd(minOrderAmount)} (current ${formatUsd(estimatedAmount)}).`,
-          `${draft.outcomeLabel} 低于最小下单金额 ${formatUsd(minOrderAmount)}（当前 ${formatUsd(estimatedAmount)}）。`,
+          `${draft.outcomeLabel} is below the minimum order size ${formatShares(minOrderSize)} shares (current ${formatShares(estimatedSize)} shares).`,
+          `${draft.outcomeLabel} 低于最小订单数量 ${formatShares(minOrderSize)} shares（当前 ${formatShares(estimatedSize)} shares）。`,
         )
       }
       if (draft.orderMode === 'limit' && positiveNumberOrNull(draft.limitPrice) == null) {

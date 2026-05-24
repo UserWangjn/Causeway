@@ -89,6 +89,63 @@ describe('buildPreviewOrder', () => {
     expect(order.error).toBeNull();
   });
 
+  it('checks Polymarket minimum order size against shares rather than dollar spend', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'limit',
+        limitPrice: 0.99,
+        amountUsd: 5,
+        orderType: 'GTC',
+      },
+      {
+        ...tradableContext,
+        orderBook: {
+          tokenId: 'token_1',
+          bids: [{ price: 0.98, size: 100 }],
+          asks: [{ price: 0.99, size: 100 }],
+          tickSize: 0.001,
+          minOrderSize: 5,
+          refreshedAt: '2026-05-19T00:00:00.000Z',
+        },
+        requireFreshOrderBook: true,
+      },
+    );
+
+    expect(order.valid).toBe(true);
+    expect(order.amountUsd).toBe(5);
+    expect(order.size).toBe(5.05);
+    expect(order.error).toBeNull();
+  });
+
+  it('rejects orders below the Polymarket minimum order size in shares', () => {
+    const order = buildPreviewOrder(
+      {
+        selectionId: 'selection_1',
+        orderMode: 'limit',
+        limitPrice: 0.99,
+        amountUsd: 4,
+        orderType: 'GTC',
+      },
+      {
+        ...tradableContext,
+        orderBook: {
+          tokenId: 'token_1',
+          bids: [{ price: 0.98, size: 100 }],
+          asks: [{ price: 0.99, size: 100 }],
+          tickSize: 0.001,
+          minOrderSize: 5,
+          refreshedAt: '2026-05-19T00:00:00.000Z',
+        },
+        requireFreshOrderBook: true,
+      },
+    );
+
+    expect(order.valid).toBe(false);
+    expect(order.size).toBe(4.04);
+    expect(order.error).toBe('BELOW_MIN_ORDER_SIZE');
+  });
+
   it('rejects inconsistent amount and size inputs', () => {
     const order = buildPreviewOrder(
       {
