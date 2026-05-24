@@ -1173,7 +1173,8 @@ type NetworkSummary = {
   nodeType: 'event' | 'market'
 }
 
-const API_PREFIX = '/api/v1'
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/+$/, '')
+const API_PREFIX = `${API_BASE_URL}/api/v1`
 const DEPOSIT_WALLET_POLL_INTERVAL_MS = 2_500
 const DEPOSIT_WALLET_POLL_ATTEMPTS = 20
 const TRADING_WALLET_MIN_READY_USD = 5
