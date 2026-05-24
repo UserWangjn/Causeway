@@ -2,6 +2,7 @@ import type { ConfigService } from '@nestjs/config';
 import { Prisma, type UserPolymarketAccount } from '@prisma/client';
 import { getContractConfig } from '@polymarket/builder-relayer-client/dist/config';
 import { deriveDepositWallet } from '@polymarket/builder-relayer-client/dist/builder';
+import { deriveSafe } from '@polymarket/builder-relayer-client/dist/builder/derive';
 import { getAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -212,14 +213,14 @@ describe('TradingService', () => {
   it('prepares a Safe pUSD transfer into the Deposit Wallet before POLY_1271 trading', async () => {
     const user = currentUser();
     const account = accountFixture(user, { depositWalletDeployed: true });
-    const safeAddress = '0x2222222222222222222222222222222222222222';
+    const safeAddress = deriveSafeAddress(getAddress(user.walletAddress), user.chainId);
     const prisma = prismaMock({
       upsert: vi.fn().mockResolvedValue(account),
     });
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
       const url = new URL(rawUrl);
-      const body = url.pathname === '/relay-payload' ? { safeAddress } : { nonce: '23' };
+      const body = { nonce: '23' };
       return Promise.resolve({
         ok: true,
         text: vi.fn().mockResolvedValue(JSON.stringify(body)),
@@ -240,16 +241,15 @@ describe('TradingService', () => {
       nonce: '23',
     });
     expect(payload.messageHash).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(fetchMock.mock.calls.map(([input]) => requestUrlFromMockInput(input).pathname)).toEqual(['/relay-payload', '/nonce']);
+    expect(fetchMock.mock.calls.map(([input]) => requestUrlFromMockInput(input).pathname)).toEqual(['/nonce']);
     expect(requestUrlFromMockInput(fetchMock.mock.calls[0]?.[0]).searchParams.get('type')).toBe('SAFE');
-    expect(requestUrlFromMockInput(fetchMock.mock.calls[1]?.[0]).searchParams.get('type')).toBe('SAFE');
   });
 
   it('completes Safe funding with the prepared nonce instead of fetching a fresh nonce', async () => {
     const owner = privateKeyToAccount('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     const user = { ...currentUser(), walletAddress: owner.address };
     const account = accountFixture(user, { depositWalletDeployed: true });
-    const safeAddress = '0x2222222222222222222222222222222222222222';
+    const safeAddress = deriveSafeAddress(getAddress(user.walletAddress), user.chainId);
     const prisma = prismaMock({
       upsert: vi.fn().mockResolvedValue(account),
       update: vi.fn().mockResolvedValue(account),
@@ -281,7 +281,7 @@ describe('TradingService', () => {
 
     expect(result.transaction).toMatchObject({ transactionId: 'tx_1', state: 'STATE_NEW' });
     const requestedPaths = fetchMock.mock.calls.map(([input]) => requestUrlFromMockInput(input).pathname);
-    expect(requestedPaths.slice(0, 3)).toEqual(['/relay-payload', '/nonce', '/submit']);
+    expect(requestedPaths.slice(0, 2)).toEqual(['/nonce', '/submit']);
     expect(requestedPaths.filter((path) => path === '/nonce')).toHaveLength(1);
   });
 
@@ -807,4 +807,9 @@ function requestUrlFromMockInput(input: unknown): URL {
 function deriveDepositWalletAddress(walletAddress: string, chainId: number): string {
   const config = getContractConfig(chainId).DepositWalletContracts;
   return getAddress(deriveDepositWallet(walletAddress, config.DepositWalletFactory, config.DepositWalletImplementation));
+}
+
+function deriveSafeAddress(walletAddress: string, chainId: number): string {
+  const config = getContractConfig(chainId).SafeContracts;
+  return getAddress(deriveSafe(walletAddress, config.SafeFactory));
 }

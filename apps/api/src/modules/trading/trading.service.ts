@@ -4,6 +4,7 @@ import { Prisma, type UserPolymarketAccount } from '@prisma/client';
 import { randomInt } from 'node:crypto';
 import { encodeFunctionData, encodePacked, getAddress, hashTypedData, maxUint256, verifyMessage, zeroAddress, verifyTypedData, type Hex } from 'viem';
 import { buildDepositWalletCreateRequest, deriveDepositWallet } from '@polymarket/builder-relayer-client/dist/builder';
+import { deriveSafe } from '@polymarket/builder-relayer-client/dist/builder/derive';
 import { getContractConfig } from '@polymarket/builder-relayer-client/dist/config';
 import { BuilderConfig } from '@polymarket/builder-signing-sdk';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -851,7 +852,7 @@ export class TradingService {
     const walletAddress = getAddress(user.walletAddress);
     const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
     const amount = normalizeMicroUsd(amountMicroUsd);
-    const safeAddress = await this.fetchRelayerFunderAddress(walletAddress, 'SAFE');
+    const safeAddress = this.deriveSafeAddress(walletAddress, user.chainId);
     const nonce = await this.fetchRelayerNonce(walletAddress, 'SAFE');
     const transaction = buildSafeTransferTransaction(depositWalletAddress, amount);
     const messageHash = buildSafeTransactionHash(user.chainId, safeAddress, transaction, nonce);
@@ -877,6 +878,10 @@ export class TradingService {
     }
     const amount = normalizeMicroUsd(dto.amountMicroUsd);
     const safeAddress = getAddress(dto.safeAddress);
+    const expectedSafeAddress = this.deriveSafeAddress(walletAddress, user.chainId);
+    if (safeAddress !== expectedSafeAddress) {
+      throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Safe funding safe address changed; prepare the transfer again.');
+    }
     const transaction = buildSafeTransferTransaction(depositWalletAddress, amount);
     const messageHash = buildSafeTransactionHash(user.chainId, safeAddress, transaction, dto.nonce);
     const prepared = {
@@ -974,8 +979,8 @@ export class TradingService {
     const recipientAddress = getAddress(dto.recipientAddress);
     const safeAddress = getAddress(dto.safeAddress);
     const amount = normalizeMicroUsd(dto.amountMicroUsd);
-    const relayerSafeAddress = await this.fetchRelayerFunderAddress(walletAddress, 'SAFE').catch(() => null);
-    if (relayerSafeAddress && relayerSafeAddress.toLowerCase() !== safeAddress.toLowerCase()) {
+    const expectedSafeAddress = this.deriveSafeAddress(walletAddress, user.chainId);
+    if (expectedSafeAddress !== safeAddress) {
       throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Polymarket wallet transfer safe address changed; prepare the transfer again.');
     }
     const readiness = await this.getReadiness(user, { refreshExternal: true, tradingAccountType: 'deposit_wallet' }).catch(() => null);
@@ -1201,7 +1206,9 @@ export class TradingService {
 
     let funderAddress: string;
     try {
-      funderAddress = await this.fetchRelayerFunderAddress(getAddress(user.walletAddress), type === 'gnosis_safe' ? 'SAFE' : 'PROXY');
+      funderAddress = type === 'gnosis_safe'
+        ? this.deriveSafeAddress(user.walletAddress, user.chainId)
+        : await this.fetchRelayerFunderAddress(getAddress(user.walletAddress), 'PROXY');
     } catch {
       return this.buildAccountOption(
         type,
@@ -1501,6 +1508,11 @@ export class TradingService {
   private deriveDepositWalletAddress(walletAddress: string, chainId: number): string {
     const config = getContractConfig(chainId).DepositWalletContracts;
     return getAddress(deriveDepositWallet(getAddress(walletAddress), config.DepositWalletFactory, config.DepositWalletImplementation));
+  }
+
+  private deriveSafeAddress(walletAddress: string, chainId: number): string {
+    const config = getContractConfig(chainId).SafeContracts;
+    return getAddress(deriveSafe(getAddress(walletAddress), config.SafeFactory));
   }
 
   private async checkDepositWalletDeployed(address: string): Promise<boolean> {
