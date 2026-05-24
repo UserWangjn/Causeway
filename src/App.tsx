@@ -427,7 +427,7 @@ type OpenOrderItem = {
   marketId: string | null
   outcomeId: string | null
   clobTokenId: string
-  side: 'buy' | 'sell'
+  side: string
   orderType: string | null
   price: number | null
   originalSize: number | null
@@ -437,6 +437,7 @@ type OpenOrderItem = {
   outcomeLabel: string | null
   marketTitle: string | null
   eventTitle: string | null
+  marketImage?: string | null
   createdAt: string | null
   makerAddress: string | null
   canCancel: boolean
@@ -449,8 +450,9 @@ type OrderStatusItem = {
   status: string
   marketTitle: string | null
   eventTitle: string | null
+  marketImage?: string | null
   outcomeLabel: string | null
-  side: 'buy' | 'sell'
+  side: string
   orderType: string | null
   price: number | null
   size: number | null
@@ -470,8 +472,9 @@ type TradeStatusItem = {
   clobTokenId: string
   marketTitle: string | null
   eventTitle: string | null
+  marketImage?: string | null
   outcomeLabel: string | null
-  side: 'buy' | 'sell'
+  side: string
   price: number | null
   size: number | null
   amountUsd: number | null
@@ -511,6 +514,7 @@ type PortfolioPositionItem = {
   outcomeId: string
   tokenId: string
   title: string
+  marketImage?: string | null
   outcomeLabel: string
   size: number | null
   avgPrice: number | null
@@ -536,7 +540,7 @@ type PortfolioOrderItem = {
   updatedAt: string
   orders: Array<{
     id: string
-    side: 'buy' | 'sell'
+    side: string
     orderMode: OrderMode
     orderType: LimitOrderType | null
     limitPrice: number | null
@@ -546,6 +550,7 @@ type PortfolioOrderItem = {
     externalOrderId: string | null
     status: string
     errorMessage: string | null
+    marketImage?: string | null
     market?: { question?: string | null; title?: string | null } | null
     outcome?: { label?: string | null } | null
   }>
@@ -563,7 +568,7 @@ type PortfolioTradeItem = {
   tradeId: string
   orderId: string
   intentId: string
-  side: 'buy' | 'sell'
+  side: string
   orderMode: OrderMode
   orderType: LimitOrderType | null
   price: number | null
@@ -571,6 +576,7 @@ type PortfolioTradeItem = {
   amountUsd: number | null
   externalOrderId: string | null
   status: string
+  marketImage?: string | null
   market?: { question?: string | null; title?: string | null } | null
   outcome?: { label?: string | null } | null
   tradedAt: string
@@ -5067,11 +5073,6 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     void handleQuickSetup(readiness)
   }, [handleQuickSetup, quickSetupRunning, readiness])
 
-  const handleOpenOrders = useCallback(() => {
-    setOrdersOpen(true)
-    void refreshOpenOrders(auth.accessToken ?? readStoredAuthSession()?.accessToken)
-  }, [auth.accessToken, refreshOpenOrders])
-
   const handleCancelOpenOrder = useCallback(async (order: OpenOrderItem) => {
     const cancelId = order.orderId ?? order.externalOrderId
     if (!cancelId || cancelingOrderId) return
@@ -5118,7 +5119,6 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       ? displayedBalanceLabel ?? walletLabel
       : 'Loading'
   const recentPending = activityItems.filter((item) => item.status === 'pending').length
-  const openOrderCount = openOrders?.items.filter((order) => order.canCancel).length ?? 0
   const selectedDepositAddress = bridgeAddressForAsset(bridgeDeposit?.deposit.address, selectedDepositAsset)
   const bridgeChains = uniqueBridgeChains(supportedAssets)
   const quickSetupAllowanceReady = readiness ? (readinessAllowance(readiness) ?? 0) + Number.EPSILON >= TRADING_WALLET_MIN_READY_USD : false
@@ -5138,10 +5138,6 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       <button className="activity-pill" type="button" onClick={() => handleOpenWallet('withdraw')}>
         <ArrowRight size={16} />
         Withdraw
-      </button>
-      <button className="activity-pill" type="button" onClick={handleOpenOrders}>
-        <ListOrdered size={16} />
-        {openOrdersLoading && !openOrders ? 'Loading' : openOrderCount ? `${openOrderCount} Orders` : 'Orders'}
       </button>
       <button className="activity-pill" type="button" onClick={() => setActivityOpen(true)}>
         <Activity size={16} />
@@ -5520,14 +5516,17 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
 }
 
 function AccountPage({ auth }: { auth: CausewayAuth }) {
+  const { addActivity, updateActivity } = useTradingWalletActivity()
   const [summary, setSummary] = useState<PortfolioSummary | null>(null)
   const [positions, setPositions] = useState<PortfolioPositionsResult | null>(null)
   const [openOrders, setOpenOrders] = useState<OpenOrdersResult | null>(null)
   const [orders, setOrders] = useState<PortfolioOrdersResult | null>(null)
   const [trades, setTrades] = useState<PortfolioTradesResult | null>(null)
   const [activeTab, setActiveTab] = useState<'positions' | 'open' | 'history'>('positions')
+  const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [syncingPositions, setSyncingPositions] = useState(false)
+  const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const token = auth.accessToken ?? readStoredAuthSession()?.accessToken ?? null
@@ -5604,6 +5603,28 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
     }
   }, [auth.accessToken, handleSignIn, loadAccount])
 
+  const handleCancelAccountOrder = useCallback(async (order: OpenOrderItem) => {
+    const cancelId = order.orderId ?? order.externalOrderId
+    if (!cancelId || cancelingOrderId) return
+    setCancelingOrderId(cancelId)
+    setError(null)
+    const activityId = addActivity('Cancel order', `Submitting cancellation for ${shortAddress(order.externalOrderId)}.`, 'pending')
+    try {
+      const nextToken = readStoredAuthSession()?.accessToken ?? auth.accessToken
+      if (!nextToken) throw new Error(copy('Wallet authentication is not complete. Sign in with your wallet first.'))
+      await cancelOpenOrder(cancelId, nextToken)
+      updateActivity(activityId, 'done', `Cancelled ${shortAddress(order.externalOrderId)}.`)
+      await loadAccount(nextToken)
+      window.dispatchEvent(new Event('causeway:orders-changed'))
+    } catch (cancelError) {
+      const message = errorMessage(cancelError)
+      setError(message)
+      updateActivity(activityId, 'error', message)
+    } finally {
+      setCancelingOrderId(null)
+    }
+  }, [addActivity, auth.accessToken, cancelingOrderId, loadAccount, updateActivity])
+
   const positionsValue = summary?.openPositionsValue ?? 0
   const openOrdersValue = summary?.openOrdersValue ?? 0
   const cashAvailable = summary?.cashAvailable
@@ -5612,6 +5633,78 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
   const openOrderCount = openOrders?.items.length ?? 0
   const positionCount = positions?.items.length ?? 0
   const historyCount = orders?.items.length ?? 0
+  const normalizedQuery = query.trim().toLowerCase()
+  const historyRows = orders?.items.flatMap((intent) => intent.orders.map((order) => ({ intent, order }))) ?? []
+  const filteredPositions = (positions?.items ?? []).filter((position) => accountSearchMatches(normalizedQuery, [
+    position.title,
+    position.outcomeLabel,
+    position.tokenId,
+  ]))
+  const filteredOpenOrders = (openOrders?.items ?? []).filter((order) => accountSearchMatches(normalizedQuery, [
+    order.eventTitle,
+    order.marketTitle,
+    order.outcomeLabel,
+    order.externalOrderId,
+    order.rawStatus,
+  ]))
+  const filteredHistoryRows = historyRows.filter(({ intent, order }) => accountSearchMatches(normalizedQuery, [
+    order.market?.question,
+    order.market?.title,
+    order.outcome?.label,
+    order.externalOrderId,
+    order.status,
+    intent.status,
+  ]))
+  const accountCapability = summary?.capability ?? positions?.capability ?? openOrders?.capability ?? orders?.capability ?? 'degraded'
+  const accountExportCount = activeTab === 'positions'
+    ? filteredPositions.length
+    : activeTab === 'open'
+      ? filteredOpenOrders.length
+      : filteredHistoryRows.length
+
+  const handleExportAccount = () => {
+    if (activeTab === 'positions') {
+      downloadAccountCsv('causeway-positions.csv', [
+        ['Market', 'Outcome', 'Token', 'Size', 'Average price', 'Current price', 'Value', 'PnL'],
+        ...filteredPositions.map((position) => [
+          position.title,
+          position.outcomeLabel,
+          position.tokenId,
+          formatShares(position.size),
+          formatUnitPercent(position.avgPrice),
+          formatUnitPercent(position.currentPrice),
+          formatUsd(position.currentValue),
+          formatUsd(position.pnl),
+        ]),
+      ])
+      return
+    }
+    if (activeTab === 'open') {
+      downloadAccountCsv('causeway-open-orders.csv', [
+        ['Market', 'Order', 'Limit', 'Remaining', 'Amount', 'Status', 'Created'],
+        ...filteredOpenOrders.map((order) => [
+          order.eventTitle || order.marketTitle || 'Polymarket order',
+          `${order.side.toUpperCase()} ${order.outcomeLabel || 'Outcome'}`,
+          formatLimitPrice(order.price),
+          formatShares(order.remainingSize),
+          formatUsd(order.amountUsd),
+          order.rawStatus || order.status,
+          formatDateTime(order.createdAt),
+        ]),
+      ])
+      return
+    }
+    downloadAccountCsv('causeway-history.csv', [
+      ['Market', 'Order', 'Amount', 'Status', 'Updated'],
+      ...filteredHistoryRows.map(({ intent, order }) => [
+        order.market?.question || order.market?.title || 'Polymarket order',
+        `${order.side.toUpperCase()} ${order.outcome?.label || 'Outcome'} ${order.orderMode}`,
+        formatUsd(order.amountUsd),
+        `${order.status}${order.errorMessage ? ` - ${order.errorMessage}` : ''}`,
+        formatDateTime(intent.updatedAt),
+      ]),
+    ])
+  }
 
   if (!auth.isAuthenticated && !token) {
     return (
@@ -5635,7 +5728,7 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
   return (
     <section className="page account-page">
       <div className="account-page-head">
-        <PageTitle title={copy('Account')} subtitle={copy('Portfolio, positions, open orders, and local order history.')} />
+        <PageTitle title={copy('Account')} subtitle={copy('Portfolio, positions, open orders, and trading history.')} />
         <div className="account-page-actions">
           <button className="outline-button" disabled={loading} type="button" onClick={() => void loadAccount()}>
             <RotateCw size={16} /> {loading ? copy('Refreshing') : copy('Refresh')}
@@ -5646,121 +5739,254 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
         </div>
       </div>
 
-      <div className="account-summary-grid">
+      <div className="account-dashboard">
         <Card className="account-balance-card">
           <div className="account-card-title">
             <span>{copy('Portfolio')}</span>
-            <small>{summary?.dataSource ?? copy('Loading')}</small>
+            <small>{accountCapability}</small>
           </div>
           <strong>{formatUsd(portfolioValue)}</strong>
           <em className={pnl >= 0 ? 'green-text' : 'red-text'}>{pnl >= 0 ? '+' : ''}{formatUsd(pnl)} {copy('PnL')}</em>
-          <span>{copy('Use the wallet controls in the top bar for deposits, withdrawals, and trading setup.')}</span>
+          <div className="account-metric-grid">
+            <div>
+              <span>{copy('Available')}</span>
+              <b>{formatUsd(cashAvailable)}</b>
+            </div>
+            <div>
+              <span>{copy('Open orders')}</span>
+              <b>{formatUsd(openOrdersValue)}</b>
+            </div>
+            <div>
+              <span>{copy('Positions')}</span>
+              <b>{positionCount}</b>
+            </div>
+          </div>
         </Card>
-        <Card className="account-balance-card compact">
-          <div className="account-card-title"><span>{copy('Available')}</span><small>{copy('For trading')}</small></div>
-          <strong>{formatUsd(cashAvailable)}</strong>
-          <span>{summary?.error || copy('Cash balance uses the active Polymarket trading wallet when available.')}</span>
-        </Card>
-        <Card className="account-balance-card compact">
-          <div className="account-card-title"><span>{copy('Open Orders')}</span><small>{openOrders?.dataSource ?? copy('CLOB')}</small></div>
-          <strong>{formatUsd(openOrdersValue)}</strong>
-          <span>{openOrderCount} {copy('live order(s)')}</span>
+        <Card className="account-balance-card account-side-card">
+          <div className="account-card-title"><span>{copy('Trading wallet')}</span><small>{openOrders?.dataSource ?? copy('CLOB')}</small></div>
+          <div className="account-wallet-lines">
+            <div>
+              <span>{copy('Live orders')}</span>
+              <b>{openOrderCount}</b>
+            </div>
+            <div>
+              <span>{copy('Source')}</span>
+              <b>{summary?.dataSource ?? copy('Loading')}</b>
+            </div>
+            <div>
+              <span>{copy('Updated')}</span>
+              <b>{formatRelativeTime(summary?.refreshedAt ?? openOrders?.refreshedAt)}</b>
+            </div>
+          </div>
         </Card>
       </div>
 
       {error ? <div className="status-note error">{error}</div> : null}
       {summary?.error ? <div className="status-note warning">{summary.error}</div> : null}
 
-      <div className="account-tabs">
-        <button className={activeTab === 'positions' ? 'active' : ''} type="button" onClick={() => setActiveTab('positions')}>
-          {copy('Positions')} <span>{positionCount}</span>
-        </button>
-        <button className={activeTab === 'open' ? 'active' : ''} type="button" onClick={() => setActiveTab('open')}>
-          {copy('Open Orders')} <span>{openOrderCount}</span>
-        </button>
-        <button className={activeTab === 'history' ? 'active' : ''} type="button" onClick={() => setActiveTab('history')}>
-          {copy('History')} <span>{historyCount}</span>
-        </button>
-      </div>
+      <div className="account-ledger">
+        <div className="account-ledger-head">
+          <div className="account-tabs">
+            <button className={activeTab === 'positions' ? 'active' : ''} type="button" onClick={() => setActiveTab('positions')}>
+              {copy('Positions')} <span>{positionCount}</span>
+            </button>
+            <button className={activeTab === 'open' ? 'active' : ''} type="button" onClick={() => setActiveTab('open')}>
+              {copy('Open Orders')} <span>{openOrderCount}</span>
+            </button>
+            <button className={activeTab === 'history' ? 'active' : ''} type="button" onClick={() => setActiveTab('history')}>
+              {copy('History')} <span>{historyCount}</span>
+            </button>
+          </div>
+          <div className="account-toolbar">
+            <label className="account-search">
+              <Search size={18} />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy('Search markets')} />
+            </label>
+            <button className="account-tool-button" disabled={loading} type="button" onClick={() => void loadAccount()}>
+              <RotateCw size={16} /> {loading ? copy('Refreshing') : copy('Latest')}
+            </button>
+            <button className="account-tool-button" disabled={!accountExportCount} type="button" onClick={handleExportAccount}>
+              <Download size={16} /> {copy('Export')}
+            </button>
+          </div>
+        </div>
 
-      {activeTab === 'positions' ? (
-        <Card className="account-table-card">
-          <AccountTableHeader labels={[copy('Market'), copy('Outcome'), copy('Size'), copy('Avg'), copy('Current'), copy('Value'), copy('PnL')]} />
-          {positions?.items.length ? positions.items.map((position) => (
-            <div className="account-position-row" key={`${position.marketId}:${position.outcomeId}`}>
-              <div className="account-row-main">
-                <b>{position.title}</b>
-                <span>{shortAddress(position.tokenId)}</span>
-              </div>
-              <span>{position.outcomeLabel}</span>
-              <span>{formatShares(position.size)}</span>
-              <span>{formatUnitPercent(position.avgPrice)}</span>
-              <span>{formatUnitPercent(position.currentPrice)}</span>
-              <strong>{formatUsd(position.currentValue)}</strong>
-              <em className={(position.pnl ?? 0) >= 0 ? 'green-text' : 'red-text'}>{formatUsd(position.pnl)}</em>
+        {activeTab === 'positions' ? (
+          <div className="account-list-card">
+            <div className="account-list-header">
+              <span>{copy('Trade')}</span>
+              <span>{copy('Market')}</span>
+              <span>{copy('Outcome')}</span>
+              <span>{copy('Value')}</span>
+              <span>{copy('PnL')}</span>
             </div>
-          )) : <div className="account-empty-row">{loading ? copy('Loading positions...') : copy('No positions synced yet.')}</div>}
-        </Card>
-      ) : null}
-
-      {activeTab === 'open' ? (
-        <Card className="account-table-card">
-          <AccountTableHeader labels={[copy('Market'), copy('Side'), copy('Limit'), copy('Remaining'), copy('Amount'), copy('Status'), copy('Created')]} />
-          {openOrders?.items.length ? openOrders.items.map((order) => (
-            <div className="account-order-row" key={order.externalOrderId}>
-              <div className="account-row-main">
-                <b>{order.eventTitle || order.marketTitle || copy('Polymarket order')}</b>
-                {order.eventTitle && order.marketTitle ? <span>{order.marketTitle}</span> : <span>{shortAddress(order.externalOrderId)}</span>}
+            {filteredPositions.length ? filteredPositions.map((position) => (
+              <div className="account-list-row" key={`${position.marketId}:${position.outcomeId}`}>
+                <div className="account-trade-action">
+                  <span className="account-action-avatar"><Plus size={13} /></span>
+                  <b>{copy('Buy')}</b>
+                </div>
+                <div className="account-row-market">
+                  <AccountMarketAvatar image={position.marketImage} title={position.title} />
+                  <div>
+                    <b>{position.title}</b>
+                    <span>{shortAddress(position.tokenId)}</span>
+                  </div>
+                </div>
+                <div className="account-row-meta">
+                  <span className="account-outcome-chip">{position.outcomeLabel}</span>
+                  <small>{formatShares(position.size)} {copy('shares')} @ {formatUnitPercent(position.avgPrice)}</small>
+                </div>
+                <strong>{formatUsd(position.currentValue)}</strong>
+                <em className={(position.pnl ?? 0) >= 0 ? 'green-text' : 'red-text'}>{formatUsd(position.pnl)}</em>
               </div>
-              <span>{order.side.toUpperCase()} {order.outcomeLabel || ''}</span>
-              <span>{formatLimitPrice(order.price)}</span>
-              <span>{formatShares(order.remainingSize)}</span>
-              <strong>{formatUsd(order.amountUsd)}</strong>
-              <span>{order.rawStatus || order.status}</span>
-              <span>{order.createdAt ? formatDateTime(order.createdAt) : copy('No timestamp')}</span>
+            )) : <div className="account-empty-row">{loading ? copy('Loading positions...') : copy('No positions synced yet.')}</div>}
+          </div>
+        ) : null}
+
+        {activeTab === 'open' ? (
+          <div className="account-list-card">
+            <div className="account-list-header">
+              <span>{copy('Trade')}</span>
+              <span>{copy('Open order')}</span>
+              <span>{copy('Limit')}</span>
+              <span>{copy('Amount')}</span>
+              <span>{copy('Action')}</span>
             </div>
-          )) : <div className="account-empty-row">{loading ? copy('Loading open orders...') : copy('No live limit orders found for this wallet.')}</div>}
-        </Card>
-      ) : null}
+            {filteredOpenOrders.length ? filteredOpenOrders.map((order) => {
+              const cancelId = order.orderId ?? order.externalOrderId
+              return (
+                <div className="account-list-row" key={order.externalOrderId}>
+                  <div className="account-trade-action">
+                    <span className="account-action-avatar"><Plus size={13} /></span>
+                    <b>{accountSideLabel(order.side)}</b>
+                  </div>
+                  <div className="account-row-market">
+                    <AccountMarketAvatar image={order.marketImage} title={order.eventTitle || order.marketTitle} />
+                    <div>
+                      <b>{order.eventTitle || order.marketTitle || copy('Polymarket order')}</b>
+                      <span>{order.eventTitle && order.marketTitle ? order.marketTitle : shortAddress(order.externalOrderId)}</span>
+                    </div>
+                  </div>
+                  <div className="account-row-meta">
+                    <span className={`account-side-chip ${normalizeAccountSide(order.side)}`}>{normalizeAccountSide(order.side).toUpperCase()} {order.outcomeLabel || copy('Outcome')}</span>
+                    <small>{formatLimitPrice(order.price)} - {formatShares(order.remainingSize)} {copy('remaining')}</small>
+                  </div>
+                  <strong>{formatUsd(order.amountUsd)}</strong>
+                  <button className="account-row-action" disabled={!order.canCancel || cancelingOrderId === cancelId} type="button" onClick={() => void handleCancelAccountOrder(order)}>
+                    {cancelingOrderId === cancelId ? copy('Canceling') : order.canCancel ? copy('Cancel') : (order.rawStatus || order.status)}
+                  </button>
+                </div>
+              )
+            }) : <div className="account-empty-row">{loading ? copy('Loading open orders...') : copy('No live limit orders found for this wallet.')}</div>}
+          </div>
+        ) : null}
 
-      {activeTab === 'history' ? (
-        <Card className="account-table-card history">
-          <AccountTableHeader labels={[copy('Market'), copy('Order'), copy('Amount'), copy('Status'), copy('Updated')]} />
-          {orders?.items.length ? orders.items.map((intent) => (
-            <div className="account-history-group" key={intent.intentId}>
-              <div className="account-history-head">
-                <b>{formatUsd(intent.totalAmountUsd)}</b>
-                <span>{intent.status} - {formatDateTime(intent.updatedAt)}</span>
-              </div>
-              {intent.orders.map((order) => (
-                <div className="account-history-row" key={order.id}>
-                  <div className="account-row-main">
+        {activeTab === 'history' ? (
+          <div className="account-list-card">
+            <div className="account-list-header">
+              <span>{copy('Trade')}</span>
+              <span>{copy('Trade record')}</span>
+              <span>{copy('Order')}</span>
+              <span>{copy('Value')}</span>
+              <span>{copy('Time')}</span>
+            </div>
+            {filteredHistoryRows.length ? filteredHistoryRows.map(({ intent, order }) => (
+              <div className="account-list-row" key={`${intent.intentId}:${order.id}`}>
+                <div className="account-trade-action">
+                  <span className="account-action-avatar"><Plus size={13} /></span>
+                  <b>{accountSideLabel(order.side)}</b>
+                </div>
+                <div className="account-row-market">
+                  <AccountMarketAvatar image={order.marketImage} title={order.market?.question || order.market?.title} />
+                  <div>
                     <b>{order.market?.question || order.market?.title || copy('Polymarket order')}</b>
                     <span>{order.externalOrderId ? shortAddress(order.externalOrderId) : shortAddress(order.id)}</span>
                   </div>
-                  <span>{order.side.toUpperCase()} {order.outcome?.label || ''} {order.orderMode}</span>
-                  <strong>{formatUsd(order.amountUsd)}</strong>
-                  <span>{order.status}{order.errorMessage ? ` - ${order.errorMessage}` : ''}</span>
-                  <span>{formatDateTime(intent.updatedAt)}</span>
                 </div>
-              ))}
-            </div>
-          )) : <div className="account-empty-row">{loading ? copy('Loading order history...') : copy('No submitted order history yet.')}</div>}
-          {trades?.items.length ? (
-            <div className="account-trade-note">{trades.items.length} {copy('local fill record(s) available from the portfolio trade endpoint.')}</div>
-          ) : null}
-        </Card>
-      ) : null}
+                <div className="account-row-meta">
+                  <span className={`account-side-chip ${normalizeAccountSide(order.side)}`}>{normalizeAccountSide(order.side).toUpperCase()} {order.outcome?.label || copy('Outcome')}</span>
+                  <small>{order.orderMode}{order.limitPrice != null ? ` - ${formatLimitPrice(order.limitPrice)}` : ''}</small>
+                </div>
+                <div className="account-row-value">
+                  <strong>{formatUsd(order.amountUsd)}</strong>
+                  <small className={order.status === 'failed' ? 'red-text' : ''}>{order.status}{order.errorMessage ? ` - ${order.errorMessage}` : ''}</small>
+                </div>
+                <span>{formatRelativeTime(intent.updatedAt)}</span>
+              </div>
+            )) : <div className="account-empty-row">{loading ? copy('Loading order history...') : copy('No submitted order history yet.')}</div>}
+            {trades?.items.length ? (
+              <div className="account-trade-note">{trades.items.length} {copy('fill record(s) available from the portfolio trade endpoint.')}</div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </section>
   )
 }
 
-function AccountTableHeader({ labels }: { labels: string[] }) {
-  return (
-    <div className="account-table-header">
-      {labels.map((label) => <span key={label}>{label}</span>)}
-    </div>
-  )
+function accountSearchMatches(query: string, values: Array<string | null | undefined>) {
+  if (!query) return true
+  return values.some((value) => value?.toLowerCase().includes(query))
+}
+
+function normalizeAccountSide(side: string | null | undefined): 'buy' | 'sell' {
+  return side?.toLowerCase() === 'sell' ? 'sell' : 'buy'
+}
+
+function accountSideLabel(side: string | null | undefined) {
+  return normalizeAccountSide(side) === 'sell' ? copy('Sell') : copy('Buy')
+}
+
+function accountInitials(value: string | null | undefined) {
+  const words = (value || 'PM').replace(/[^a-zA-Z0-9\s]/g, ' ').trim().split(/\s+/).filter(Boolean)
+  return words.slice(0, 2).map((word) => word[0]?.toUpperCase()).join('') || 'PM'
+}
+
+function AccountMarketAvatar({ image, title }: { image?: string | null; title?: string | null }) {
+  const [failed, setFailed] = useState(false)
+  if (image && !failed) {
+    return (
+      <span className="account-market-avatar image">
+        <img alt="" src={image} onError={() => setFailed(true)} />
+      </span>
+    )
+  }
+  return <span className="account-market-avatar">{accountInitials(title)}</span>
+}
+
+function formatRelativeTime(value: string | null | undefined) {
+  if (!value) return copy('Not updated')
+  const timestamp = new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) return formatDateTime(value)
+  const diffMs = Date.now() - timestamp
+  const absMs = Math.abs(diffMs)
+  const minute = 60_000
+  const hour = 60 * minute
+  const day = 24 * hour
+  if (absMs < minute) return copy('Just now')
+  if (absMs < hour) return `${Math.max(1, Math.round(absMs / minute))}m ago`
+  if (absMs < day) return `${Math.max(1, Math.round(absMs / hour))}h ago`
+  return `${Math.max(1, Math.round(absMs / day))}d ago`
+}
+
+function downloadAccountCsv(filename: string, rows: string[][]) {
+  if (rows.length <= 1) return
+  const csv = rows.map((row) => row.map(csvCell).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function csvCell(value: string) {
+  const normalized = value.replace(/\r?\n/g, ' ')
+  return /[",\n]/.test(normalized) ? `"${normalized.replace(/"/g, '""')}"` : normalized
 }
 
 function assetOptionKey(asset: BridgeSupportedAsset) {

@@ -25,12 +25,12 @@ const PORTFOLIO_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>(
   id: true,
   slug: true,
   question: true,
+  icon: true,
+  image: true,
 });
 
 const PORTFOLIO_POSITION_MARKET_SELECT = Prisma.validator<Prisma.PolymarketMarketSelect>()({
   ...PORTFOLIO_MARKET_SELECT,
-  icon: true,
-  image: true,
 });
 
 const PORTFOLIO_OUTCOME_SELECT = Prisma.validator<Prisma.PolymarketOutcomeSelect>()({
@@ -185,6 +185,7 @@ export class PortfolioService {
           outcomeId: position.outcomeId,
           tokenId: position.clobTokenId,
           title: position.market.question,
+          marketImage: position.market.image ?? position.market.icon,
           outcomeLabel: position.outcome.label,
           size: toNullableNumber(position.size),
           avgPrice: toNullableNumber(position.avgPrice),
@@ -411,6 +412,7 @@ export class PortfolioService {
           status: order.status,
           errorMessage: order.errorMessage,
           market: order.market,
+          marketImage: order.market?.image ?? order.market?.icon ?? null,
           outcome: order.outcome,
         })),
       })),
@@ -466,6 +468,7 @@ export class PortfolioService {
         externalOrderId: order.externalOrderId,
         status: order.status,
         market: order.market,
+        marketImage: order.market?.image ?? order.market?.icon ?? null,
         outcome: order.outcome,
         tradedAt: order.updatedAt.toISOString(),
       })),

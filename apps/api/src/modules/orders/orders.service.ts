@@ -62,6 +62,7 @@ type OpenOrderListItem = {
   outcomeLabel: string | null;
   marketTitle: string | null;
   eventTitle: string | null;
+  marketImage: string | null;
   createdAt: string | null;
   makerAddress: string | null;
   canCancel: boolean;
@@ -74,6 +75,7 @@ type OrderStatusListItem = {
   status: string;
   marketTitle: string | null;
   eventTitle: string | null;
+  marketImage: string | null;
   outcomeLabel: string | null;
   side: 'buy' | 'sell';
   orderType: string | null;
@@ -95,6 +97,7 @@ type TradeListItem = {
   clobTokenId: string;
   marketTitle: string | null;
   eventTitle: string | null;
+  marketImage: string | null;
   outcomeLabel: string | null;
   side: 'buy' | 'sell';
   price: number | null;
@@ -1258,6 +1261,7 @@ function buildOpenOrderItem(remoteOrder: ClobOpenOrder, localOrder: LocalOpenOrd
     outcomeLabel: outcome?.label ?? remoteOrder.outcome,
     marketTitle: market?.question ?? null,
     eventTitle: market?.event?.title ?? null,
+    marketImage: market?.image ?? market?.icon ?? null,
     createdAt: normalizeClobCreatedAt(remoteOrder.createdAt) ?? localOrder?.createdAt.toISOString() ?? null,
     makerAddress: remoteOrder.makerAddress,
     canCancel: isCancelableRemoteOrderStatus(status),
@@ -1272,6 +1276,7 @@ function buildOrderStatusItem(order: LocalOpenOrder): OrderStatusListItem {
     status: order.status,
     marketTitle: order.market.question ?? null,
     eventTitle: order.market.event?.title ?? null,
+    marketImage: order.market.image ?? order.market.icon ?? null,
     outcomeLabel: order.outcome.label ?? null,
     side: order.side.toLowerCase() as 'buy' | 'sell',
     orderType: order.orderType ?? null,
@@ -1298,6 +1303,7 @@ function buildTradeItem(remoteTrade: ClobTrade, localOutcome: LocalOutcome | nul
     clobTokenId: remoteTrade.assetId,
     marketTitle: localOutcome?.market.question ?? null,
     eventTitle: localOutcome?.market.event?.title ?? null,
+    marketImage: localOutcome?.market.image ?? localOutcome?.market.icon ?? null,
     outcomeLabel: localOutcome?.label ?? null,
     side: remoteTrade.side.toLowerCase() as 'buy' | 'sell',
     price,
