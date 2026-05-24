@@ -1,6 +1,6 @@
-DROP INDEX CONCURRENTLY IF EXISTS "PolymarketMarket_event_open_volume24hr_idx";
+DROP INDEX IF EXISTS "PolymarketMarket_event_open_volume24hr_idx";
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "PolymarketMarket_event_open_volume24hr_idx"
+CREATE INDEX IF NOT EXISTS "PolymarketMarket_event_open_volume24hr_idx"
 ON "PolymarketMarket"(
   "eventId",
   "archived",
@@ -14,5 +14,5 @@ ON "PolymarketMarket"(
   "id" ASC
 );
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "MarketNetworkNode_category_score_idx"
+CREATE INDEX IF NOT EXISTS "MarketNetworkNode_category_score_idx"
 ON "MarketNetworkNode"("category", "score");
