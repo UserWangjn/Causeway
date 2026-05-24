@@ -226,10 +226,10 @@ button {
   top: 0;
   z-index: 30;
   display: grid;
-  grid-template-columns: 220px 1fr auto;
+  grid-template-columns: 210px minmax(260px, 1fr) auto;
   align-items: center;
   height: 72px;
-  padding: 0 40px;
+  padding: 0 32px;
   border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(16px);
@@ -272,13 +272,13 @@ button {
   align-items: stretch;
   justify-content: center;
   height: 100%;
-  gap: 28px;
+  gap: 18px;
 }
 
 .nav-button {
   position: relative;
-  min-width: 72px;
-  padding: 0 8px;
+  min-width: 92px;
+  padding: 0 12px;
   font-size: var(--text-md);
   font-weight: var(--weight-strong);
 }
@@ -302,16 +302,33 @@ button {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 10px;
+}
+
+.header-status-group,
+.header-icon-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.header-status-group {
+  padding-right: 2px;
+}
+
+.header-icon-group {
+  padding-left: 2px;
+  border-left: 1px solid #e4edf7;
 }
 
 .arc-audit-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 36px;
+  height: 34px;
   gap: 7px;
-  padding: 0 12px;
+  min-width: 104px;
+  padding: 0 11px;
   border: 1px solid #bbf7d0;
   border-radius: 999px;
   color: #047857;
@@ -338,10 +355,12 @@ button {
 
 .membership-pill {
   display: inline-flex;
-  height: 36px;
+  height: 34px;
   align-items: center;
   gap: 8px;
-  padding: 0 12px;
+  min-width: 104px;
+  justify-content: center;
+  padding: 0 11px;
   border: 1px solid var(--border);
   border-radius: 999px;
   color: #334155;
@@ -587,7 +606,7 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 36px;
+  height: 34px;
   border-radius: 999px;
 }
 
@@ -602,7 +621,7 @@ button {
 }
 
 .avatar {
-  width: 36px;
+  width: 34px;
   border: 0;
   color: #fff;
   background: linear-gradient(135deg, var(--ink), #35577d);
@@ -636,14 +655,14 @@ button {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .trading-wallet-pill,
 .deposit-button,
 .activity-pill {
   display: inline-flex;
-  height: 38px;
+  height: 34px;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -655,6 +674,7 @@ button {
 }
 
 .trading-wallet-pill {
+  min-width: 150px;
   padding: 0 10px;
   color: #24364f;
   background: #fff;
@@ -677,7 +697,8 @@ button {
 }
 
 .deposit-button {
-  padding: 0 14px;
+  min-width: 104px;
+  padding: 0 12px;
   border-color: #16a34a;
   color: #fff;
   background: #16a34a;
@@ -685,6 +706,7 @@ button {
 }
 
 .activity-pill {
+  min-width: 104px;
   padding: 0 12px;
   color: #475569;
   background: #fff;
@@ -706,7 +728,7 @@ button {
 
 .account-page {
   display: grid;
-  gap: 22px;
+  gap: 20px;
 }
 
 .account-page-head,
@@ -716,6 +738,16 @@ button {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.account-page-actions-end {
+  justify-content: flex-end;
+}
+
+.account-sync-button {
+  border-color: rgba(22, 119, 255, 0.28);
+  color: var(--blue);
+  background: #f7fbff;
 }
 
 .account-page-head {
@@ -4473,6 +4505,7 @@ button {
 }
 
 .step-circle {
+  position: relative;
   display: grid;
   width: 56px;
   height: 56px;
@@ -4481,6 +4514,36 @@ button {
   color: #94a3b8;
   background: #f0f4fa;
   font-weight: var(--weight-bold);
+}
+
+.step.current .step-circle::before,
+.step.current .step-circle::after {
+  position: absolute;
+  inset: -7px;
+  border: 2px solid rgba(22, 119, 255, 0.32);
+  border-top-color: rgba(22, 119, 255, 0.95);
+  border-radius: 50%;
+  content: "";
+  animation: inference-node-spin 1.1s linear infinite;
+}
+
+.step.current .step-circle::after {
+  inset: -13px;
+  border-color: rgba(22, 119, 255, 0.14);
+  border-right-color: rgba(20, 184, 166, 0.72);
+  animation-duration: 1.9s;
+  animation-direction: reverse;
+}
+
+.step.current::before {
+  position: absolute;
+  top: 5px;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  content: "";
+  background: radial-gradient(circle, rgba(22, 119, 255, 0.18), rgba(22, 119, 255, 0));
+  animation: inference-node-pulse 1.8s ease-in-out infinite;
 }
 
 .step.done .step-circle,
@@ -4656,6 +4719,32 @@ button {
   padding: 7px 0;
 }
 
+.log-list.live {
+  position: relative;
+  max-height: 450px;
+  padding: 2px 8px 2px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.live-log-row {
+  border-radius: 8px;
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.live-log-row.active {
+  margin: 2px 0;
+  padding: 10px 12px;
+  background: linear-gradient(90deg, rgba(22, 119, 255, 0.09), rgba(20, 184, 166, 0.07), transparent);
+  box-shadow: inset 3px 0 0 var(--blue);
+  animation: inference-log-in 0.32s ease both;
+}
+
+.live-log-row.active b {
+  color: #071327;
+}
+
 .log-list small {
   grid-column: 3;
   color: var(--muted);
@@ -4711,6 +4800,35 @@ button {
   background: var(--ink);
   box-shadow: 0 14px 30px rgba(8, 27, 51, 0.25);
   font-weight: var(--weight-strong);
+}
+
+@keyframes inference-node-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes inference-node-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.86);
+  }
+  50% {
+    opacity: 0.9;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes inference-log-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .script-header {

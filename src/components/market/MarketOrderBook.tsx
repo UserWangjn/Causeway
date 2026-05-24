@@ -171,7 +171,9 @@ export function MarketOrderBook({
                     title={tradable ? undefined : statusLabel}
                     onClick={() => handleOutcomeSelect(outcome, action)}
                   >
-                    {tradable ? copy('Analyze') : statusLabel} {action.label} <span>{formatCents(action.price)}</span>
+                    <span className="orderbook-button-action">{tradable ? copy('Analyze') : statusLabel}</span>
+                    <span className="orderbook-button-outcome">{action.label}</span>
+                    <span className="orderbook-button-price">{formatCents(action.price)}</span>
                   </button>
                 ))}
               </div>

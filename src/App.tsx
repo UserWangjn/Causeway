@@ -4115,18 +4115,22 @@ function Header({
         ))}
       </nav>
       <div className="header-actions">
-        <button className="arc-audit-button" type="button" onClick={() => onNavigate('scripts')}>
-          <ShieldCheck size={16} /> Arc Proof
-        </button>
-        <MembershipControl auth={auth} membershipState={membershipState} />
+        <div className="header-status-group">
+          <button className="arc-audit-button" type="button" onClick={() => onNavigate('scripts')}>
+            <ShieldCheck size={16} /> Arc Proof
+          </button>
+          <MembershipControl auth={auth} membershipState={membershipState} />
+        </div>
         <BridgeWalletControl auth={auth} />
-        <button className="icon-button" aria-label={copy('Search')} type="button" onClick={onSearch}>
-          <Search size={20} />
-        </button>
-        <button className="icon-button has-dot" aria-label={copy('Notifications')} type="button">
-          <Bell size={20} />
-        </button>
-        <AccountControls auth={auth} />
+        <div className="header-icon-group">
+          <button className="icon-button" aria-label={copy('Search')} type="button" onClick={onSearch}>
+            <Search size={19} />
+          </button>
+          <button className="icon-button has-dot" aria-label={copy('Notifications')} type="button">
+            <Bell size={19} />
+          </button>
+          <AccountControls auth={auth} />
+        </div>
       </div>
     </header>
   )
@@ -5301,6 +5305,7 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
   const [syncingPositions, setSyncingPositions] = useState(false)
   const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const autoPositionSyncRef = useRef<string | null>(null)
 
   const token = auth.accessToken ?? readStoredAuthSession()?.accessToken ?? null
 
@@ -5397,6 +5402,15 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
       setSyncingPositions(false)
     }
   }, [auth.accessToken, handleSignIn, loadAccount])
+
+  useEffect(() => {
+    if (!token || autoPositionSyncRef.current === token) return
+    autoPositionSyncRef.current = token
+    const timer = window.setTimeout(() => {
+      void handleSyncPositions()
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [handleSyncPositions, token])
 
   const handleCancelAccountOrder = useCallback(async (order: OpenOrderItem) => {
     const cancelId = order.orderId ?? order.externalOrderId
@@ -5534,8 +5548,8 @@ function AccountPage({ auth }: { auth: CausewayAuth }) {
         <button className="outline-button" disabled={loading} type="button" onClick={() => void loadAccount()}>
           <RotateCw size={16} /> {loading ? copy('Refreshing') : copy('Refresh')}
         </button>
-        <button className="primary-button" disabled={syncingPositions} type="button" onClick={() => void handleSyncPositions()}>
-          <Activity size={16} /> {syncingPositions ? copy('Syncing') : copy('Sync positions')}
+        <button className="outline-button account-sync-button" disabled={syncingPositions} type="button" onClick={() => void handleSyncPositions()}>
+          <Activity size={16} /> {syncingPositions ? copy('Auto-syncing') : copy('Refresh positions')}
         </button>
       </div>
 
@@ -5768,20 +5782,20 @@ function accountPositionDisplayState(positions: PortfolioPositionsResult | null,
 
 function accountPositionValueFallback(state: ReturnType<typeof accountPositionDisplayState>) {
   if (state === 'loading') return copy('Loading')
-  if (state === 'sync_required') return copy('Sync required')
+  if (state === 'sync_required') return copy('Syncing')
   if (state === 'unavailable') return copy('Unavailable')
   return copy('Not available')
 }
 
 function accountPositionPnlFallback(state: ReturnType<typeof accountPositionDisplayState>) {
   if (state === 'loading') return copy('Loading PnL')
-  if (state === 'sync_required') return copy('Sync positions for PnL')
+  if (state === 'sync_required') return copy('Syncing PnL')
   return copy('PnL unavailable')
 }
 
 function accountPositionsEmptyMessage(positions: PortfolioPositionsResult | null, loading: boolean) {
   if (loading && !positions) return copy('Loading positions...')
-  if (positions?.dataSource === 'pending_sync') return copy('Sync positions to load current holdings.')
+  if (positions?.dataSource === 'pending_sync') return copy('Current holdings are syncing automatically.')
   if (positions?.capability === 'available') return copy('No open positions.')
   if (positions?.capability === 'unavailable') return copy('Positions are temporarily unavailable.')
   return copy('No positions available yet.')
@@ -5818,10 +5832,10 @@ function accountNoticeMessage(message: string | null | undefined) {
     return copy('Trading cash is temporarily unavailable. Refresh the account or prepare the trading wallet to load the latest balance.')
   }
   if (normalized.includes('positions have not been synced')) {
-    return copy('Positions have not been synced yet. Use Sync positions to load current holdings.')
+    return copy('Positions have not been synced yet. Causeway is refreshing them automatically.')
   }
   if (normalized.includes('position sync failed')) {
-    return copy('Position sync failed. Retry Sync positions before relying on account totals.')
+    return copy('Position sync failed. Retry Refresh positions before relying on account totals.')
   }
   if (normalized.includes('some positions are not linked') || normalized.includes('causeway market metadata')) {
     return copy('Some synced positions are missing Causeway market metadata, so they are excluded from the position list.')
@@ -5830,7 +5844,7 @@ function accountNoticeMessage(message: string | null | undefined) {
     return copy('Some synced position values are temporarily unavailable. Refresh positions before relying on totals.')
   }
   if (normalized.includes('external position sync is not fully automated')) {
-    return copy('Positions are shown from the latest sync. Use Sync positions to refresh current holdings.')
+    return copy('Positions are shown from the latest sync. Use Refresh positions to update current holdings.')
   }
   if (normalized.includes('trade history is based on monitored causeway orders')) {
     return copy('History includes Causeway-monitored orders; direct Polymarket activity may be absent.')
@@ -9040,29 +9054,50 @@ function DiscoveryTable({ market, relatedMarkets, loading }: { market?: Market; 
 }
 
 type InferenceLogState = 'waiting' | 'processing' | 'complete' | 'error'
+type InferenceLogItem = {
+  detail: string
+  live?: boolean
+  state: InferenceLogState
+  title: string
+}
 
 function inferenceRuntimeLogs(
   runStatus: BackendInferenceStatus | null | undefined,
   loading: boolean | undefined,
   error: string | null | undefined,
+  tick = 0,
 ) {
   const stage = error ? runStatus?.stage : runStatus?.stage ?? (loading ? 'queued' : null)
   const activeIndex = inferenceProgressStepIndex(stage)
   const steps = inferenceProgressSteps()
-  return steps.map((step, index) => {
-    const state: InferenceLogState = error && index === activeIndex
-      ? 'error'
-      : index < activeIndex || runStatus?.status === 'completed'
-        ? 'complete'
-        : index === activeIndex && loading
-          ? 'processing'
-          : 'waiting'
-    return {
-      detail: inferenceStepDetail(step.stage),
-      state,
-      title: step.label,
+  const completed = runStatus?.status === 'completed'
+  const entries: InferenceLogItem[] = []
+  steps.forEach((step, index) => {
+    if (error && index === activeIndex) {
+      entries.push({ detail: error, state: 'error', title: step.label })
+      return
     }
+    if (completed || index < activeIndex) {
+      entries.push({ detail: inferenceStepCompleteDetail(step.stage), state: 'complete', title: step.label })
+      return
+    }
+    if (index === activeIndex && loading) {
+      const tasks = inferenceStageTasks(step.stage)
+      const activeTaskIndex = tasks.length ? tick % tasks.length : 0
+      tasks.forEach((task, taskIndex) => {
+        if (taskIndex > activeTaskIndex) return
+        entries.push({
+          detail: task.detail,
+          live: taskIndex === activeTaskIndex,
+          state: taskIndex === activeTaskIndex ? 'processing' : 'complete',
+          title: task.title,
+        })
+      })
+      return
+    }
+    entries.push({ detail: inferenceStepDetail(step.stage), state: 'waiting', title: step.label })
   })
+  return entries
 }
 
 function inferenceStepDetail(stage: string) {
@@ -9072,6 +9107,46 @@ function inferenceStepDetail(stage: string) {
   if (stage === 'outcome_mapping') return copy('AI output is mapped back to tradable Polymarket outcomes and verified market ids.')
   if (stage === 'script_generation') return copy('Causeway persists the causal script, graph, and tradable order candidates.')
   return copy('Waiting for the next backend update.')
+}
+
+function inferenceStepCompleteDetail(stage: string) {
+  if (stage === 'queued') return copy('Run accepted and execution slot assigned.')
+  if (stage === 'candidate_retrieval') return copy('Candidate market universe, prices, and order books loaded.')
+  if (stage === 'ai_reasoning') return copy('AI relevance and causal direction scoring completed.')
+  if (stage === 'outcome_mapping') return copy('Tradable outcomes mapped back to Polymarket ids.')
+  if (stage === 'script_generation') return copy('Script graph and order candidates are ready.')
+  return copy('Stage complete.')
+}
+
+function inferenceStageTasks(stage: string) {
+  if (stage === 'queued') return [
+    { title: copy('Register inference run'), detail: copy('Creating the backend job and reserving an execution slot.') },
+    { title: copy('Prepare market context'), detail: copy('Checking root market, selected outcome, confidence, and depth settings.') },
+    { title: copy('Warm cache'), detail: copy('Resolving recent market snapshots before candidate search begins.') },
+  ]
+  if (stage === 'candidate_retrieval') return [
+    { title: copy('Search event markets'), detail: copy('Scanning same-event Polymarket books and tradable sibling outcomes.') },
+    { title: copy('Load order books'), detail: copy('Refreshing bid, ask, spread, and liquidity for candidate markets.') },
+    { title: copy('Rank candidate graph'), detail: copy('Scoring related markets by tag overlap, event linkage, and market text similarity.') },
+    { title: copy('Filter tradable candidates'), detail: copy('Removing stale, settled, or non-tradable markets before AI reasoning.') },
+  ]
+  if (stage === 'ai_reasoning') return [
+    { title: copy('Build AI prompt'), detail: copy('Packing root market rules, prices, candidate books, and inference constraints.') },
+    { title: copy('Reason over causal links'), detail: copy('The AI model is comparing likely impacts, competitor effects, and conditional paths.') },
+    { title: copy('Search context signals'), detail: copy('Checking market text, event rules, and available context for external triggers.') },
+    { title: copy('Score confidence'), detail: copy('Assigning confidence to each causal path against the selected threshold.') },
+  ]
+  if (stage === 'outcome_mapping') return [
+    { title: copy('Map outcomes'), detail: copy('Connecting AI selections to concrete Polymarket outcome ids and token ids.') },
+    { title: copy('Verify buy direction'), detail: copy('Checking whether the generated path should analyze Yes, No, Over, Under, or another outcome.') },
+    { title: copy('Validate order candidates'), detail: copy('Ensuring each mapped outcome has live pricing and can be presented for trading review.') },
+  ]
+  if (stage === 'script_generation') return [
+    { title: copy('Generate causal script'), detail: copy('Writing the reasoning path, graph nodes, and explanation layers.') },
+    { title: copy('Persist workflow output'), detail: copy('Saving the script, candidate links, and generated order drafts.') },
+    { title: copy('Prepare graph view'), detail: copy('Packaging the generated workflow for the Causal Script page.') },
+  ]
+  return [{ title: copy('Waiting for backend update'), detail: copy('Causeway is waiting for the next status event.') }]
 }
 
 function inferenceLogStateLabel(state: InferenceLogState) {
@@ -9092,15 +9167,28 @@ function LogList({
   loading?: boolean
   runStatus?: BackendInferenceStatus | null
 }) {
-  const displayLogs = logs?.length ? logs.map((title) => ({
+  const [tick, setTick] = useState(0)
+  const logListRef = useRef<HTMLDivElement | null>(null)
+  const runtimeLoading = Boolean(loading && !logs?.length)
+  useEffect(() => {
+    if (!runtimeLoading) return
+    const interval = window.setInterval(() => setTick((value) => value + 1), 1400)
+    return () => window.clearInterval(interval)
+  }, [runtimeLoading])
+  useEffect(() => {
+    const node = logListRef.current
+    if (!node || !runtimeLoading) return
+    node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+  }, [runtimeLoading, tick])
+  const displayLogs: InferenceLogItem[] = logs?.length ? logs.map((title) => ({
     detail: copy('Persisted by the completed inference run.'),
     state: 'complete' as const,
     title,
-  })) : inferenceRuntimeLogs(runStatus, loading, error)
+  })) : inferenceRuntimeLogs(runStatus, loading, error, tick)
   return (
-    <div className="log-list">
+    <div className={runtimeLoading ? 'log-list live' : 'log-list'} ref={logListRef}>
       {displayLogs.map((item, index) => (
-        <div key={`${item.title}-${index}`}>
+        <div className={item.live ? 'live-log-row active' : 'live-log-row'} key={`${item.title}-${index}`}>
           <i className={`dot ${item.state === 'complete' ? 'green' : item.state === 'processing' ? 'cyan' : item.state === 'error' ? 'red' : 'blue'}`} />
           <span>{inferenceLogStateLabel(item.state)}</span>
           <b>{item.title}</b>
