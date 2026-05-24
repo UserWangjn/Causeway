@@ -20,6 +20,14 @@ export class CompleteDepositWalletFundingDto {
   amountMicroUsd!: number;
 
   @IsString()
+  @Matches(/^0x[0-9a-fA-F]{40}$/)
+  safeAddress!: string;
+
+  @IsString()
+  @Matches(/^0x[0-9a-fA-F]{40}$/)
+  depositWalletAddress!: string;
+
+  @IsString()
   @Matches(/^\d+$/)
   nonce!: string;
 

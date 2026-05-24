@@ -871,8 +871,12 @@ export class TradingService {
     const account = await this.requireDepositWalletAccount(user);
     const walletAddress = getAddress(user.walletAddress);
     const depositWalletAddress = getAddress(account.depositWalletAddress ?? this.deriveDepositWalletAddress(walletAddress, user.chainId));
+    const dtoDepositWalletAddress = getAddress(dto.depositWalletAddress);
+    if (dtoDepositWalletAddress !== depositWalletAddress) {
+      throw new ApiException(HttpStatus.CONFLICT, 'REQUEST_FAILED', 'Safe funding deposit wallet address changed; prepare the transfer again.');
+    }
     const amount = normalizeMicroUsd(dto.amountMicroUsd);
-    const safeAddress = await this.fetchRelayerFunderAddress(walletAddress, 'SAFE');
+    const safeAddress = getAddress(dto.safeAddress);
     const transaction = buildSafeTransferTransaction(depositWalletAddress, amount);
     const messageHash = buildSafeTransactionHash(user.chainId, safeAddress, transaction, dto.nonce);
     const prepared = {

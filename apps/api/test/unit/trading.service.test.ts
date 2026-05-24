@@ -272,6 +272,8 @@ describe('TradingService', () => {
     const signature = await owner.signMessage({ message: { raw: payload.messageHash as `0x${string}` } });
     const result = await service.completeSafeDepositWalletFunding(user, {
       amountMicroUsd: payload.amountMicroUsd,
+      safeAddress: payload.safeAddress,
+      depositWalletAddress: payload.depositWalletAddress,
       nonce: payload.nonce,
       messageHash: payload.messageHash,
       signature,
@@ -279,7 +281,7 @@ describe('TradingService', () => {
 
     expect(result.transaction).toMatchObject({ transactionId: 'tx_1', state: 'STATE_NEW' });
     const requestedPaths = fetchMock.mock.calls.map(([input]) => requestUrlFromMockInput(input).pathname);
-    expect(requestedPaths.slice(0, 4)).toEqual(['/relay-payload', '/nonce', '/relay-payload', '/submit']);
+    expect(requestedPaths.slice(0, 3)).toEqual(['/relay-payload', '/nonce', '/submit']);
     expect(requestedPaths.filter((path) => path === '/nonce')).toHaveLength(1);
   });
 

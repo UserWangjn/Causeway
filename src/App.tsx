@@ -2594,6 +2594,8 @@ async function completeSafeDepositWalletFunding(token: string, payload: DepositW
     headers: authHeaders(token),
     body: JSON.stringify({
       amountMicroUsd: payload.amountMicroUsd,
+      safeAddress: payload.safeAddress,
+      depositWalletAddress: payload.depositWalletAddress,
       nonce: payload.nonce,
       messageHash: payload.messageHash,
       signature,
@@ -4942,7 +4944,13 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     ? tradingOption(readiness, 'gnosis_safe') ?? tradingOption(readiness, 'proxy')
     : null
   const depositWalletBalance = withdrawAvailable
-  const displayedBalance = depositWalletBalance ?? safeOption?.cashAvailable ?? null
+  const safeBalance = safeOption?.cashAvailable ?? null
+  const displayedBalance = depositWalletBalance != null && depositWalletBalance > 0
+    ? depositWalletBalance
+    : safeBalance ?? depositWalletBalance ?? null
+  const displayedBalanceLabel = displayedBalance === safeBalance && safeOption
+    ? safeOption.label.replace(/^Polymarket\s+/i, '').replace(/\swallet$/i, '')
+    : null
   const walletLabel = bridgeWallet?.walletKind === 'safe'
     ? 'Safe'
     : bridgeWallet?.walletKind === 'proxy'
@@ -4954,7 +4962,7 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
   const statusText = !auth.isAuthenticated
     ? 'Sign in'
     : bridgeWallet
-      ? walletLabel
+      ? displayedBalanceLabel ?? walletLabel
       : 'Loading'
   const recentPending = activityItems.filter((item) => item.status === 'pending').length
   const openOrderCount = openOrders?.items.filter((order) => order.canCancel).length ?? 0
