@@ -1260,6 +1260,12 @@ function summarizeApiDetails(value: unknown): string | null {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   if (Array.isArray(value)) return value.slice(0, 3).map(summarizeApiDetails).filter(Boolean).join('; ') || null
   if (!isRecord(value)) return null
+  if ('body' in value) {
+    const endpoint = readStringField(value, 'endpoint')
+    const status = typeof value.status === 'number' || typeof value.status === 'string' ? `status ${value.status}` : null
+    const body = summarizeApiDetails(value.body)
+    return [endpoint, status, body].filter(Boolean).join(' ') || null
+  }
   for (const key of ['reason', 'message', 'error', 'status', 'endpoint']) {
     const text = readStringField(value, key)
     if (text) return text
@@ -2223,6 +2229,13 @@ function depositWalletFundingUnavailableMessage(readiness: TradingReadiness, req
 
 function orderFundingAmountMicroUsd(amountUsd: number) {
   return Math.max(1, Math.ceil(amountUsd * 1_000_000))
+}
+
+function depositWalletBalanceMicroUsd(readiness: TradingReadiness | null | undefined) {
+  const raw = readiness ? tradingOption(readiness, 'deposit_wallet')?.balance?.raw ?? readiness.balance.raw : null
+  if (!raw) return null
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
 function draftTickSize(draft: Pick<ScriptOrderCandidate, 'tickSize'>) {
@@ -4815,20 +4828,10 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
     setBridgeError(null)
     try {
       const token = await ensureTradingToken()
-      const withdrawal = await createBridgeWithdrawal(token, {
-        toChainId: asset.chainId,
-        toTokenAddress: asset.token.address,
-        recipientAddr: withdrawRecipient.trim(),
-      })
-      setBridgeWallet(withdrawal.wallet)
-      const bridgeAddress = evmBridgeAddressForDepositWalletTransfer(withdrawal.withdrawal.address)
-      if (!bridgeAddress) {
-        throw new Error(`Polymarket Bridge did not return an EVM receiving address for ${asset.chainName} ${asset.token.symbol}. Please choose another route or try again later.`)
-      }
-      setStatusAddress(bridgeAddress)
+      setStatusAddress(withdrawRecipient.trim())
       const payload = await prepareDepositWalletTransfer(token, {
         amountMicroUsd: orderFundingAmountMicroUsd(amountUsd),
-        recipientAddress: bridgeAddress,
+        recipientAddress: withdrawRecipient.trim(),
       })
       const signature = await signTypedDataWithFallback({
         variables: typedDataToSignVariables(payload.eip712),
@@ -4847,6 +4850,51 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
       setIsLoadingBridge(false)
     }
   }, [auth.walletAddress, ensureTradingToken, refreshWallet, signTypedDataAsync, supportedAssets, walletClient, withdrawAmount, withdrawAssetKey, withdrawAvailable, withdrawRecipient])
+
+  const handleReturnDepositWalletToSafe = useCallback(async () => {
+    const walletAddress = readStoredAuthSession()?.walletAddress ?? auth.walletAddress
+    const safeAddress = readiness ? tradingOption(readiness, 'gnosis_safe')?.funderAddress : null
+    const amountMicroUsd = depositWalletBalanceMicroUsd(readiness)
+    if (!safeAddress) {
+      setBridgeError('Polymarket Safe address is not available yet. Refresh wallet status and try again.')
+      return
+    }
+    if (!amountMicroUsd) {
+      setBridgeError('Deposit Wallet has no pUSD available to return.')
+      return
+    }
+    if (!walletAddress) {
+      setBridgeError('Connected wallet address is missing. Sign in again.')
+      return
+    }
+    setIsLoadingBridge(true)
+    setBridgeError(null)
+    try {
+      const token = await ensureTradingToken()
+      setStatusAddress(safeAddress)
+      setWithdrawRecipient(safeAddress)
+      setWithdrawAmount((amountMicroUsd / 1_000_000).toFixed(6).replace(/0+$/, '').replace(/\.$/, ''))
+      const payload = await prepareDepositWalletTransfer(token, {
+        amountMicroUsd,
+        recipientAddress: safeAddress,
+      })
+      const signature = await signTypedDataWithFallback({
+        variables: typedDataToSignVariables(payload.eip712),
+        walletAddress,
+        signTypedDataAsync,
+        walletClient: walletClient as TypedDataWalletClient | null | undefined,
+      })
+      const result = await completeDepositWalletTransfer(token, payload, signature)
+      await waitForRelayerTransaction(token, result.transaction.transactionId)
+      setReadiness(result.readiness)
+      setWithdrawAmount('')
+      void refreshWallet(token)
+    } catch (error) {
+      setBridgeError(errorMessage(error))
+    } finally {
+      setIsLoadingBridge(false)
+    }
+  }, [auth.walletAddress, ensureTradingToken, readiness, refreshWallet, signTypedDataAsync, walletClient])
 
   const handleCheckStatus = useCallback(async (address?: string | null) => {
     const target = address ?? statusAddress
@@ -5129,6 +5177,9 @@ function BridgeWalletControl({ auth }: { auth: CausewayAuth }) {
                       <button type="button" onClick={() => setWithdrawRecipient(auth.walletAddress ?? '')}>{copy('Use Connected Wallet', '使用关联钱包')}</button>
                     </div>
                   </label>
+                  <button className="outline-button" disabled={isLoadingBridge || !auth.isConnected || depositWalletBalanceMicroUsd(readiness) == null} type="button" onClick={() => void handleReturnDepositWalletToSafe()}>
+                    Return Deposit Wallet to Polymarket Safe
+                  </button>
                   <button className="primary-button" disabled={isLoadingBridge || !auth.isConnected || withdrawAvailable == null} type="button" onClick={() => void handleSubmitWithdrawTransfer()}>
                     {isLoadingBridge ? copy('Submitting...', '提交中...') : copy('Submit Transfer', '提交转账')}
                   </button>

@@ -857,7 +857,8 @@ export class OrdersService {
 
       return result;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorDetails = readApiExceptionDetails(error);
+      const errorMessage = formatSubmissionError(error);
       await this.prisma.$transaction(async (tx) => {
         await tx.orderIntent.update({
           where: { id: intent.id },
@@ -876,6 +877,7 @@ export class OrdersService {
               intentId: intent.id,
               executionMode: intent.executionMode,
               status: 'failed',
+              errorDetails,
               orders: intent.orders.map((order) => ({
                 orderId: order.id,
                 externalOrderId: order.externalOrderId,
@@ -1072,6 +1074,22 @@ function readApiExceptionDetails(error: unknown): unknown {
   const response = error.getResponse();
   if (!isRecord(response)) return null;
   return response.details ?? null;
+}
+
+function formatSubmissionError(error: unknown): string {
+  const baseMessage = error instanceof Error ? error.message : String(error);
+  const details = readApiExceptionDetails(error);
+  if (!details) return baseMessage;
+  return `${baseMessage} (${safeJsonSnippet(details)})`;
+}
+
+function safeJsonSnippet(value: unknown): string {
+  try {
+    const raw = JSON.stringify(value);
+    return raw.length > 1000 ? `${raw.slice(0, 1000)}...` : raw;
+  } catch {
+    return String(value);
+  }
 }
 
 type LoadedOrderIntent = Prisma.OrderIntentGetPayload<{
