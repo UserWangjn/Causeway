@@ -22,6 +22,17 @@ import {
 } from './inference-prompt';
 import type { InferencePromptRepairContext } from './inference-prompt';
 import type { AiInferenceOutput, AiMarketNode, InferenceMarketInput, InferencePromptInput } from './inference.types';
+import {
+  AUTO_INFERENCE_MODEL,
+  PUBLIC_FREE_INFERENCE_MODEL,
+  REAL_FREE_INFERENCE_MODEL,
+  isPublicFreeInferenceModel,
+  isRealInferenceModel,
+  publicModelForInferenceRun,
+  publicModelForRealModel,
+  publicModelsForRealModels,
+  realModelForPublicModel,
+} from './inference-models';
 
 const MIN_INFERENCE_CANDIDATE_MARKETS = 30;
 const MAX_INFERENCE_CANDIDATE_MARKETS = 120;
@@ -36,12 +47,9 @@ const MAX_AI_RAW_CONTENT_AUDIT_CHARS = 8_000;
 const SCRIPT_PERSIST_TRANSACTION_MAX_WAIT_MS = 5_000;
 const SCRIPT_PERSIST_TRANSACTION_TIMEOUT_MS = 20_000;
 const DEFAULT_SCRIPT_BUY_AMOUNT_USD = '10';
-const AUTO_INFERENCE_MODEL = 'auto';
-const FREE_INFERENCE_MODEL = 'deepseek-v4-flash';
 const FREE_INFERENCE_MAX_DEPTH = 1;
 const MAX_AI_OUTPUT_MARKETS_PER_LAYER = 4;
 const MAX_AI_OUTPUT_MARKETS_PER_LAYER_FOR_DEPTH_THREE = 3;
-const REAL_INFERENCE_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro'] as const;
 
 const CANDIDATE_MARKET_INCLUDE = {
   event: true,
@@ -79,13 +87,14 @@ export class InferenceService implements OnModuleDestroy {
     const defaultModel = capability.model && isRealInferenceModel(capability.model)
       ? capability.model
       : realModels[0] ?? null;
+    const publicModels = publicModelsForRealModels(realModels);
     if (capability.status === 'available' && !defaultModel) {
       return {
         status: 'unavailable',
         reason: 'No supported real AI inference model is configured',
         defaultModel: null,
         models: [],
-        freeModel: FREE_INFERENCE_MODEL,
+        freeModel: PUBLIC_FREE_INFERENCE_MODEL,
         freeMaxDepth: FREE_INFERENCE_MAX_DEPTH,
         premiumModels: [],
       };
@@ -93,11 +102,11 @@ export class InferenceService implements OnModuleDestroy {
     return {
       status: capability.status,
       reason: capability.reason,
-      defaultModel,
-      models: realModels,
-      freeModel: FREE_INFERENCE_MODEL,
+      defaultModel: defaultModel ? publicModelForRealModel(defaultModel) : null,
+      models: publicModels,
+      freeModel: PUBLIC_FREE_INFERENCE_MODEL,
       freeMaxDepth: FREE_INFERENCE_MAX_DEPTH,
-      premiumModels: realModels.filter((model) => model !== FREE_INFERENCE_MODEL),
+      premiumModels: publicModels.filter((model) => !isPublicFreeInferenceModel(model)),
     };
   }
 
@@ -182,20 +191,23 @@ export class InferenceService implements OnModuleDestroy {
 
     if (requestedModel === AUTO_INFERENCE_MODEL) return defaultModel;
 
-    if (!allowedModels.includes(requestedModel)) {
+    const resolvedModel = realModelForPublicModel(requestedModel) ?? (isRealInferenceModel(requestedModel) ? requestedModel : null);
+    const publicAllowedModels = publicModelsForRealModels(allowedModels);
+
+    if (!resolvedModel || !allowedModels.includes(resolvedModel)) {
       throw new ApiException(
         HttpStatus.SERVICE_UNAVAILABLE,
         'CAPABILITY_UNAVAILABLE',
         `AI model ${requestedModel} is not configured`,
-        { configuredModel: capability.model, allowedModels },
+        { configuredModel: publicModelForRealModel(defaultModel), allowedModels: publicAllowedModels },
       );
     }
 
-    return requestedModel;
+    return resolvedModel;
   }
 
   private async assertInferenceEntitlement(user: CurrentUser, dto: CreateInferenceRunDto): Promise<void> {
-    const requiresPremium = dto.depth > FREE_INFERENCE_MAX_DEPTH || dto.model !== FREE_INFERENCE_MODEL;
+    const requiresPremium = dto.depth > FREE_INFERENCE_MAX_DEPTH || dto.model !== REAL_FREE_INFERENCE_MODEL;
     if (!requiresPremium) return;
 
     if (await this.hasActivePremiumMembership(user.id)) return;
@@ -205,9 +217,9 @@ export class InferenceService implements OnModuleDestroy {
       'PREMIUM_MEMBERSHIP_REQUIRED',
       'Premium membership is required for advanced AI models or inference depth above 1',
       {
-        freeModel: FREE_INFERENCE_MODEL,
+        freeModel: PUBLIC_FREE_INFERENCE_MODEL,
         freeMaxDepth: FREE_INFERENCE_MAX_DEPTH,
-        requestedModel: dto.model,
+        requestedModel: publicModelForRealModel(dto.model),
         requestedDepth: dto.depth,
       },
     );
@@ -394,6 +406,7 @@ export class InferenceService implements OnModuleDestroy {
       cacheHit: run.cacheHit,
       scriptId: run.script?.id ?? null,
       errorMessage: run.errorMessage,
+      model: publicModelForInferenceRun(run.model, run.inputJson),
       createdAt: run.createdAt.toISOString(),
       completedAt: run.completedAt?.toISOString() ?? null,
     };
@@ -1494,10 +1507,6 @@ function readStringArray(value: unknown, path: string): string[] {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}
-
-function isRealInferenceModel(model: string): boolean {
-  return (REAL_INFERENCE_MODELS as readonly string[]).includes(model);
 }
 
 function storedInputError(message: string): ApiException {

@@ -679,8 +679,8 @@ type BackendInferenceCapability = {
   reason: string | null
   defaultModel: string | null
   models: string[]
-  freeModel: 'deepseek-v4-flash'
-  freeMaxDepth: 1
+  freeModel: string
+  freeMaxDepth: number
   premiumModels: string[]
 }
 
@@ -997,8 +997,25 @@ type ScriptStatusFilter = 'all' | 'draft' | 'active' | 'archived'
 
 type InferenceScope = 'markets' | 'all'
 type InferenceDepth = 1 | 2 | 3
-type InferenceModelPreference = 'deepseek-v4-pro' | 'deepseek-v4-flash'
+type InferenceModelPreference =
+  | 'gpt-5.5'
+  | 'gpt-5.4'
+  | 'claude-sonnet-4.7'
+  | 'claude-sonnet-4.6'
+  | 'claude-opus-4.7'
+  | 'claude-opus-4.6'
 type ConfidenceMode = 'broad' | 'balanced' | 'strict'
+
+const FREE_INFERENCE_MODEL = 'gpt-5.4' satisfies InferenceModelPreference
+const FREE_INFERENCE_MODELS: readonly InferenceModelPreference[] = ['gpt-5.4', 'claude-sonnet-4.6']
+const INFERENCE_MODEL_ORDER: readonly InferenceModelPreference[] = [
+  'gpt-5.5',
+  'gpt-5.4',
+  'claude-sonnet-4.7',
+  'claude-sonnet-4.6',
+  'claude-opus-4.7',
+  'claude-opus-4.6',
+]
 
 type InferenceSettingsState = {
   scope: InferenceScope
@@ -1014,7 +1031,7 @@ type InferenceSettingsState = {
 const defaultInferenceSettings: InferenceSettingsState = {
   scope: 'markets',
   timeRange: 'until_close',
-  modelPreference: 'deepseek-v4-flash',
+  modelPreference: FREE_INFERENCE_MODEL,
   confidenceMode: 'balanced',
   depth: 1,
   confidenceThreshold: 0.55,
@@ -1690,8 +1707,7 @@ function useCausewayAuth(): CausewayAuth {
 }
 
 function inferenceModel(settings: InferenceSettingsState) {
-  if (settings.modelPreference === 'deepseek-v4-pro') return 'deepseek-v4-pro'
-  return 'deepseek-v4-flash'
+  return settings.modelPreference
 }
 
 function authHeaders(token: string) {
@@ -4195,6 +4211,7 @@ function App({ showIntro = false }: AppProps) {
   const [inferenceSettings, setInferenceSettings] = useState<InferenceSettingsState>(defaultInferenceSettings)
   const [introVisible, setIntroVisible] = useState(showIntro)
   const [tradingWalletActivityItems, setTradingWalletActivityItems] = useState<TradingWalletActivityItem[]>([])
+  const [searchFocusRequest, setSearchFocusRequest] = useState(0)
   const activeNav = view === 'scripts' ? 'scripts' : view === 'account' ? 'account' : 'network'
 
   const addTradingWalletActivity = useCallback((label: string, detail: string, status: TradingWalletActivityStatus = 'pending') => {
@@ -4257,14 +4274,18 @@ function App({ showIntro = false }: AppProps) {
     setInferenceResult(result)
     setView('script')
   }, [])
+  const openNetworkSearch = useCallback(() => {
+    setView('network')
+    setSearchFocusRequest((request) => request + 1)
+  }, [])
 
   return (
     <TradingWalletActivityContext.Provider value={tradingWalletActivity}>
       <div className={introVisible ? 'app-shell app-intro-active' : 'app-shell'}>
         {introVisible ? <IntroLoader /> : null}
-        <Header activeNav={activeNav} auth={auth} membershipState={membershipState} onNavigate={setView} />
+        <Header activeNav={activeNav} auth={auth} membershipState={membershipState} onNavigate={setView} onSearch={openNetworkSearch} />
         <main className={view === 'network' ? 'app-main network-main' : 'app-main'}>
-          {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} />}
+          {view === 'network' && <MarketNetwork onConfirmMarket={openMarketDetail} searchFocusRequest={searchFocusRequest} />}
           {view === 'detail' && <MarketDetail market={selectedMarket} onBack={() => setView('network')} onInfer={openInferenceSettings} />}
           {view === 'infer' && <InferenceSettings auth={auth} initialSettings={inferenceSettings} market={selectedMarket} membershipState={membershipState} onBack={() => setView('detail')} onStart={startInference} />}
           {view === 'account' && <AccountPage auth={auth} />}
@@ -4313,11 +4334,13 @@ function Header({
   auth,
   membershipState,
   onNavigate,
+  onSearch,
 }: {
   activeNav: string
   auth: CausewayAuth
   membershipState: MembershipState
   onNavigate: (view: View) => void
+  onSearch: () => void
 }) {
   const navItems = [
     { id: 'network', label: copy('Market Network'), view: 'network' as View },
@@ -4349,7 +4372,7 @@ function Header({
         </button>
         <MembershipControl auth={auth} membershipState={membershipState} />
         <BridgeWalletControl auth={auth} />
-        <button className="icon-button" aria-label={copy('Search')} type="button">
+        <button className="icon-button" aria-label={copy('Search')} type="button" onClick={onSearch}>
           <Search size={20} />
         </button>
         <button className="icon-button has-dot" aria-label={copy('Notifications')} type="button">
@@ -4550,7 +4573,8 @@ function MembershipControl({ auth, membershipState }: { auth: CausewayAuth; memb
                     <b>Included</b>
                   </div>
                   <ul>
-                    <li><CheckCircle2 size={15} /> DeepSeek v4 Flash inference</li>
+                    <li><CheckCircle2 size={15} /> GPT-5.4 inference</li>
+                    <li><CheckCircle2 size={15} /> Claude Sonnet 4.6 inference</li>
                     <li><CheckCircle2 size={15} /> 1-layer causal market exploration</li>
                     <li><CheckCircle2 size={15} /> Market network, scripts, and trading flow</li>
                   </ul>
@@ -4561,7 +4585,8 @@ function MembershipControl({ auth, membershipState }: { auth: CausewayAuth; memb
                     <b>Arc USDC</b>
                   </div>
                   <ul>
-                    <li><CheckCircle2 size={15} /> DeepSeek v4 Pro inference</li>
+                    <li><CheckCircle2 size={15} /> GPT-5.5 inference</li>
+                    <li><CheckCircle2 size={15} /> Claude Sonnet/Opus 4.7 and 4.6 inference</li>
                     <li><CheckCircle2 size={15} /> 2-3 layer causal reasoning paths</li>
                     <li><CheckCircle2 size={15} /> Premium AI settings without changing trading custody</li>
                   </ul>
@@ -6022,8 +6047,50 @@ function uniqueBridgeChains(assets: BridgeSupportedAsset[]) {
   return chains
 }
 
-function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) => void }) {
+type ParsedMarketSearchInput = {
+  query: string
+  marketSlug: string | null
+  eventSlug: string | null
+}
+
+function parseMarketSearchInput(value: string): ParsedMarketSearchInput {
+  const trimmed = value.trim()
+  if (!trimmed) return { query: '', marketSlug: null, eventSlug: null }
+  const parsedUrl = parsePolymarketSearchUrl(trimmed)
+  if (parsedUrl) return parsedUrl
+  return { query: trimmed, marketSlug: null, eventSlug: null }
+}
+
+function parsePolymarketSearchUrl(value: string): ParsedMarketSearchInput | null {
+  const urlText = /^https?:\/\//i.test(value)
+    ? value
+    : /^(?:www\.)?polymarket\.com\//i.test(value)
+      ? `https://${value}`
+      : null
+  if (!urlText) return null
+  try {
+    const url = new URL(urlText)
+    if (!/(^|\.)polymarket\.com$/i.test(url.hostname)) return null
+    const segments = url.pathname
+      .split('/')
+      .map((segment) => decodeURIComponent(segment.trim()))
+      .filter(Boolean)
+    const route = segments[0]?.toLowerCase()
+    const slug = ((route === 'event' || route === 'market') ? segments[1] : segments.at(-1)) ?? ''
+    if (!slug) return { query: '', marketSlug: null, eventSlug: null }
+    return {
+      query: slug,
+      marketSlug: route === 'market' ? slug : null,
+      eventSlug: route === 'event' ? slug : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function MarketNetwork({ onConfirmMarket, searchFocusRequest }: { onConfirmMarket: (market: Market) => void; searchFocusRequest: number }) {
   const searchAreaRef = useRef<HTMLDivElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const [activeCategory, setActiveCategory] = useState('hot')
   const [categories, setCategories] = useState<ApiMarketCategory[]>([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -6032,6 +6099,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
   const [activeSearchType, setActiveSearchType] = useState<SearchResultType>('market')
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [networkMarkets, setNetworkMarkets] = useState<Market[]>([])
   const [networkEdges, setNetworkEdges] = useState<ApiMarketEdge[]>([])
   const [networkSummary, setNetworkSummary] = useState<NetworkSummary>({
@@ -6052,6 +6120,17 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
     () => categories.find((category) => category.key === activeCategory)?.label || activeCategory,
     [activeCategory, categories],
   )
+  const searchTarget = useMemo(() => parseMarketSearchInput(searchQuery), [searchQuery])
+
+  useEffect(() => {
+    if (!searchFocusRequest) return undefined
+    const timer = window.setTimeout(() => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+      if (searchResults.length || searchTarget.query.length >= 2) setSearchOpen(true)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [searchFocusRequest, searchResults.length, searchTarget.query.length])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -6078,8 +6157,8 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
   }, [])
 
   useEffect(() => {
-    const trimmedQuery = searchQuery.trim()
-    if (selectedSearch && trimmedQuery === selectedSearch.title) {
+    const trimmedQuery = searchTarget.query
+    if (selectedSearch && searchQuery.trim() === selectedSearch.title) {
       return
     }
     if (trimmedQuery.length < 2) {
@@ -6095,6 +6174,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
         })
         .then((data) => {
           setSearchResults(data.results)
+          setSearchError(null)
           setSearchOpen(true)
           if (!data.results.some((result) => result.type === activeSearchType)) {
             setActiveSearchType(data.results.find((result) => result.type)?.type ?? 'market')
@@ -6103,6 +6183,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
         .catch((fetchError: Error) => {
           if (fetchError.name !== 'AbortError') {
             setSearchResults([])
+            setSearchError(copy('Search is temporarily unavailable. The market network will still use your typed filter.'))
             setSearchOpen(true)
           }
         })
@@ -6114,7 +6195,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [activeSearchType, searchQuery, selectedSearch])
+  }, [activeSearchType, searchQuery, searchTarget.query, selectedSearch])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -6125,13 +6206,20 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       controller.abort()
     }, 12000)
     const params = new URLSearchParams({ limit: '25', nodeType: 'event' })
-    const trimmedQuery = searchQuery.trim()
+    const trimmedQuery = searchTarget.query
     if (selectedSearch?.type === 'market' && selectedSearch.marketId) {
-      params.set('q', selectedSearch.title)
+      params.set('marketId', selectedSearch.marketId)
+    } else if (selectedSearch?.type === 'market' && selectedSearch.slug) {
+      params.set('marketSlug', selectedSearch.slug)
     } else if (selectedSearch?.type === 'event' && (selectedSearch.eventId || selectedSearch.eventSlug)) {
-      params.set('q', selectedSearch.title)
-    } else if (selectedSearch?.type === 'topic' && (selectedSearch.topic || selectedSearch.categoryKey)) {
-      params.set('category', selectedSearch.topic || selectedSearch.categoryKey || '')
+      if (selectedSearch.eventId) params.set('eventId', selectedSearch.eventId)
+      if (selectedSearch.eventSlug) params.set('eventSlug', selectedSearch.eventSlug)
+    } else if (selectedSearch?.type === 'topic' && (selectedSearch.categoryKey || selectedSearch.topic)) {
+      params.set('category', selectedSearch.categoryKey || selectedSearch.topic || '')
+    } else if (searchTarget.marketSlug) {
+      params.set('marketSlug', searchTarget.marketSlug)
+    } else if (searchTarget.eventSlug) {
+      params.set('eventSlug', searchTarget.eventSlug)
     } else {
       if (activeCategory !== 'all') params.set('category', activeCategory)
       if (trimmedQuery) params.set('q', trimmedQuery)
@@ -6175,7 +6263,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
       window.clearTimeout(timeout)
       controller.abort()
     }
-  }, [activeCategory, searchQuery, selectedSearch])
+  }, [activeCategory, searchTarget.eventSlug, searchTarget.marketSlug, searchTarget.query, selectedSearch])
 
   const chooseSearchResult = useCallback((result: MarketSearchResult) => {
     setSelectedSearch(result)
@@ -6191,6 +6279,7 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
     setSearchResults([])
     setActiveSearchType('market')
     setSearchOpen(false)
+    setSearchError(null)
     setLoading(true)
   }, [])
 
@@ -6211,16 +6300,18 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
                   setSearchResults([])
                   setSearchOpen(false)
                   setSearchLoading(false)
+                  setSearchError(null)
                 }
               }}
               onFocus={() => {
-                if (searchResults.length || searchQuery.trim().length >= 2) setSearchOpen(true)
+                if (searchResults.length || searchTarget.query.length >= 2) setSearchOpen(true)
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && searchResults[0]) chooseSearchResult(searchResults[0])
                 if (event.key === 'Escape') setSearchOpen(false)
               }}
               placeholder={copy('Search markets, events, topics, or paste a Polymarket link...')}
+              ref={searchInputRef}
               type="text"
               value={searchQuery}
             />
@@ -6230,13 +6321,14 @@ function MarketNetwork({ onConfirmMarket }: { onConfirmMarket: (market: Market) 
               </button>
             ) : null}
           </div>
-          {searchOpen && (searchLoading || searchResults.length || searchQuery.trim().length >= 2) ? (
+          {searchOpen && (searchLoading || searchError || searchResults.length || searchTarget.query.length >= 2) ? (
             <SearchPopover
               activeType={activeSearchType}
+              error={searchError}
               loading={searchLoading}
               onTypeChange={setActiveSearchType}
               onSelect={chooseSearchResult}
-              query={searchQuery}
+              query={searchTarget.query || searchQuery}
               results={searchResults}
             />
           ) : null}
@@ -6489,17 +6581,23 @@ function timeRangeLabel(range: InferenceSettingsState['timeRange'], market: Mark
 }
 
 function modelPreferenceLabel(model: InferenceModelPreference) {
-  if (model === 'deepseek-v4-pro') return 'DeepSeek v4 Pro'
-  return 'DeepSeek v4 Flash'
+  return {
+    'gpt-5.5': 'GPT-5.5',
+    'gpt-5.4': 'GPT-5.4',
+    'claude-sonnet-4.7': 'Claude Sonnet 4.7',
+    'claude-sonnet-4.6': 'Claude Sonnet 4.6',
+    'claude-opus-4.7': 'Claude Opus 4.7',
+    'claude-opus-4.6': 'Claude Opus 4.6',
+  }[model]
 }
 
 function modelPreferenceHint(model: InferenceModelPreference) {
-  if (model === 'deepseek-v4-pro') return 'Premium model for higher quality reasoning.'
+  if (inferenceModelRequiresPremium(model)) return 'Premium model for higher quality reasoning.'
   return 'Free default model for standard inference.'
 }
 
 function modelPreferenceFromProviderModel(model: string): InferenceModelPreference | null {
-  if (model === 'deepseek-v4-pro' || model === 'deepseek-v4-flash') return model
+  if ((INFERENCE_MODEL_ORDER as readonly string[]).includes(model)) return model as InferenceModelPreference
   return null
 }
 
@@ -6509,16 +6607,21 @@ function inferenceModelOptions(capability: BackendInferenceCapability | null): I
     const preference = modelPreferenceFromProviderModel(model)
     if (preference && !options.includes(preference)) options.push(preference)
   }
-  if (!options.includes('deepseek-v4-flash')) options.unshift('deepseek-v4-flash')
+  if (!options.length) options.unshift(FREE_INFERENCE_MODEL)
   return options.sort((left, right) => modelSortWeight(left) - modelSortWeight(right))
 }
 
 function modelSortWeight(model: InferenceModelPreference) {
-  return model === 'deepseek-v4-flash' ? 0 : 1
+  return INFERENCE_MODEL_ORDER.indexOf(model)
 }
 
 function inferenceModelRequiresPremium(model: InferenceModelPreference) {
-  return model !== 'deepseek-v4-flash'
+  return !FREE_INFERENCE_MODELS.includes(model)
+}
+
+function displayInferenceModel(model?: string | null) {
+  const preference = model ? modelPreferenceFromProviderModel(model) : null
+  return preference ? modelPreferenceLabel(preference) : model || modelPreferenceLabel(FREE_INFERENCE_MODEL)
 }
 
 function confidenceModeLabel(mode: ConfidenceMode) {
@@ -6530,7 +6633,7 @@ function confidenceModeLabel(mode: ConfidenceMode) {
 }
 
 function estimateInference(settings: InferenceSettingsState) {
-  const minutes = settings.modelPreference === 'deepseek-v4-pro'
+  const minutes = inferenceModelRequiresPremium(settings.modelPreference)
     ? settings.depth === 3 ? '3-6 min' : '2-4 min'
     : settings.depth === 3 ? '2-5 min' : '1-3 min'
   return { minutes }
@@ -6566,7 +6669,7 @@ function InferenceSettings({
         setCapabilityError(null)
         setSettings((current) => {
           const options = inferenceModelOptions(nextCapability)
-          return options.includes(current.modelPreference) ? current : { ...current, modelPreference: 'deepseek-v4-flash' }
+          return options.includes(current.modelPreference) ? current : { ...current, modelPreference: FREE_INFERENCE_MODEL }
         })
       })
       .catch((error) => {
@@ -6610,7 +6713,7 @@ function InferenceSettings({
   const capabilityHint = capabilityError
     ? copy(`Model capability check failed: ${capabilityError}`)
     : capability?.status === 'available'
-      ? copy(`Default ${capability.defaultModel ?? 'Not configured'}`)
+      ? copy(`Default ${capability.defaultModel ? displayInferenceModel(capability.defaultModel) : 'Not configured'}`)
       : capability?.reason ?? modelPreferenceHint(settings.modelPreference)
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.outcomeId === settings.rootOutcomeId) ?? market.outcomes?.find((outcome) => outcome.outcomeId)
   const selectedOutcomePercent = outcomePriceToPercent(selectedOutcome?.price) ?? market.price
@@ -6748,7 +6851,7 @@ function InferenceSettings({
           {advancedSettingsLocked ? (
             <div className="soft-note auth-note">
               <Star size={18} />
-              Premium membership is required for Polymarket Context, High confidence, DeepSeek v4 Pro, or inference deeper than 1 layer.
+              Premium membership is required for Polymarket Context, High confidence, advanced GPT/Claude models, or inference deeper than 1 layer.
             </div>
           ) : null}
           {auth.isAuthenticated && membershipState.error ? (
@@ -6894,7 +6997,7 @@ function InferenceProgress({
       </div>
       <div className="progress-caption">
         <span>{hasCurrentResult ? copy('Inference complete') : error ? copy('Inference error') : copy('Inference running...')} <b>{progress}%</b></span>
-        <span>{result?.model ? copy(`Model: ${result.model}`) : copy('DeepSeek is verifying Polymarket candidate markets')}</span>
+        <span>{result?.model ? copy(`Model: ${displayInferenceModel(result.model)}`) : copy(`${modelPreferenceLabel(settings.modelPreference)} is verifying Polymarket candidate markets`)}</span>
       </div>
       {error ? <div className="status-note error">{copy(`Inference request failed: ${error}`)}</div> : null}
       <div className="content-grid progress-grid">
@@ -6918,7 +7021,7 @@ function InferenceProgress({
             [copy('Inference Depth'), copy(`${settings.depth} layer${settings.depth > 1 ? 's' : ''}`)],
             [copy('Time Range'), timeRangeLabel(settings.timeRange, market)],
             [copy('Analysis Scope'), scopeLabel(settings.scope)],
-            [copy('AI Model'), result?.model || 'DeepSeek v4 Pro'],
+            [copy('AI Model'), displayInferenceModel(result?.model ?? settings.modelPreference)],
           ].map(([label, value]) => (
             <div className="info-item" key={label}>
               <div className="info-icon">
@@ -7013,7 +7116,7 @@ function CausalScript({
       <ScriptOrderPanel auth={auth} result={result} selectedSelectionIds={selectedOrderSelectionIds} />
       <Card className="script-footer-card">
         <div className="footer-meta">
-          <span><BrainCircuit size={16} /> {copy(`Inference model: ${result?.model || 'DeepSeek'}`)}</span>
+          <span><BrainCircuit size={16} /> {copy(`Inference model: ${displayInferenceModel(result?.model)}`)}</span>
           <span><Globe2 size={16} /> {copy('Data source: Polymarket markets and order books')}</span>
           <span><Activity size={16} /> {copy(`Inference time: ${formatDateTime(result?.generatedAt)}`)}</span>
           <span><Bot size={16} /> {copy(`Confidence: ${formatConfidence(result?.confidence)}`)}</span>
@@ -8697,6 +8800,7 @@ function BackButton({ onClick }: { onClick: () => void }) {
 
 function SearchPopover({
   activeType,
+  error,
   loading,
   onTypeChange,
   onSelect,
@@ -8704,6 +8808,7 @@ function SearchPopover({
   results,
 }: {
   activeType: SearchResultType
+  error: string | null
   loading: boolean
   onTypeChange: (type: SearchResultType) => void
   onSelect: (result: MarketSearchResult) => void
@@ -8744,7 +8849,8 @@ function SearchPopover({
             </span>
           </button>
         ))}
-        {!loading && !filteredResults.length ? <div className="search-empty">{copy(`No ${searchTypeLabel(activeType)} results found for "${query}"`)}</div> : null}
+        {error ? <div className="search-empty error">{error}</div> : null}
+        {!loading && !error && !filteredResults.length ? <div className="search-empty">{copy(`No ${searchTypeLabel(activeType)} results found for "${query}"`)}</div> : null}
         {loading ? <div className="search-empty">{copy('Searching Polymarket markets...')}</div> : null}
       </div>
     </div>
@@ -9264,7 +9370,7 @@ function LogList({ logs, loading }: { logs?: string[]; loading?: boolean }) {
         copy('Retrieving directly related markets for the root node...'),
         copy('Expanding second-order related markets...'),
         copy('Collecting Polymarket market context...'),
-        copy('Requesting the DeepSeek inference model...'),
+        copy('Requesting the selected GPT or Claude inference model...'),
       ]
   return (
     <div className="log-list">

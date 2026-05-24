@@ -5,6 +5,7 @@ import { ApiException } from '../../common/errors/api.exception';
 import type { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { hashJson } from '../../common/utils/hash.util';
 import { PrismaService } from '../../database/prisma.service';
+import { publicModelForInferenceRun } from '../inference/inference-models';
 import { CompleteArcProofDto } from './dto/complete-arc-proof.dto';
 
 const ARC_TESTNET_CHAIN_ID = 5_042_002;
@@ -214,7 +215,7 @@ function buildScriptProof(script: ArcScriptRecord) {
     rootOutcomeId: script.rootOutcomeId,
     graph: script.graphJson,
     inference: {
-      model: script.inferenceRun.model,
+      model: publicModelForInferenceRun(script.inferenceRun.model, script.inferenceRun.inputJson) ?? script.inferenceRun.model,
       promptVersion: script.inferenceRun.promptVersion,
       outputSchemaVersion: script.inferenceRun.outputSchemaVersion,
       inputHash: `0x${hashJson(script.inferenceRun.inputJson)}`,

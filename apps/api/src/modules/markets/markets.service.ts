@@ -398,8 +398,15 @@ export class MarketsService {
   }
 
   async searchMarkets(query: MarketSearchQueryDto) {
-    const q = query.q.trim();
+    const q = normalizeMarketLookupText(query.q);
     const limit = query.limit ?? 8;
+    if (q.length < 2) {
+      return {
+        results: [],
+        generatedAt: new Date().toISOString(),
+        source: 'causeway_market_cache',
+      };
+    }
     try {
       const payload = await this.gammaClient.searchV2({ q, limitPerType: Math.max(6, Math.min(limit, 12)) });
       const results = formatGammaSearchResults(payload, limit);
@@ -434,6 +441,7 @@ export class MarketsService {
         OR: [
           { question: { contains: q, mode: 'insensitive' } },
           { slug: { contains: q, mode: 'insensitive' } },
+          { description: { contains: q, mode: 'insensitive' } },
           { event: { is: { title: { contains: q, mode: 'insensitive' } } } },
           { event: { is: { slug: { contains: q, mode: 'insensitive' } } } },
         ],
@@ -850,12 +858,18 @@ export class MarketsService {
     const closed = parseBoolean(query.closed);
     const active = parseBoolean(query.active);
     const filters: Prisma.PolymarketMarketWhereInput[] = [];
+    const identityFilters = marketIdentityFilters(query);
+    if (identityFilters.length) {
+      filters.push(identityFilters.length === 1 ? identityFilters[0] : { OR: identityFilters });
+    }
     if (search) {
       filters.push({
         OR: [
           { question: { contains: search, mode: 'insensitive' } },
           { slug: { contains: search, mode: 'insensitive' } },
           { description: { contains: search, mode: 'insensitive' } },
+          { event: { is: { title: { contains: search, mode: 'insensitive' } } } },
+          { event: { is: { slug: { contains: search, mode: 'insensitive' } } } },
         ],
       });
     }
@@ -1417,6 +1431,57 @@ function trimToUndefined(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeMarketLookupText(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const polymarketSlug = extractPolymarketSlug(trimmed);
+  return (polymarketSlug ?? trimmed).slice(0, 200);
+}
+
+function extractPolymarketSlug(value: string): string | null {
+  const urlText = /^https?:\/\//i.test(value)
+    ? value
+    : /^(?:www\.)?polymarket\.com\//i.test(value)
+      ? `https://${value}`
+      : null;
+  if (!urlText) return null;
+  try {
+    const url = new URL(urlText);
+    if (!/(^|\.)polymarket\.com$/i.test(url.hostname)) return null;
+    const segments = url.pathname
+      .split('/')
+      .map((segment) => decodeURIComponent(segment.trim()))
+      .filter(Boolean);
+    const route = segments[0]?.toLowerCase();
+    if ((route === 'event' || route === 'market') && segments[1]) return segments[1];
+    return segments.at(-1) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function marketIdentityFilters(query: MarketQueryDto): Prisma.PolymarketMarketWhereInput[] {
+  const marketId = trimToUndefined(query.marketId);
+  const marketSlug = normalizeOptionalSlug(query.marketSlug);
+  const eventId = trimToUndefined(query.eventId);
+  const eventSlug = normalizeOptionalSlug(query.eventSlug);
+  const filters: Prisma.PolymarketMarketWhereInput[] = [];
+  if (marketId) filters.push({ id: marketId });
+  if (marketSlug) filters.push({ slug: marketSlug });
+  if (eventId) filters.push({ eventId });
+  if (eventSlug) filters.push({ event: { is: { slug: eventSlug } } });
+  return filters;
+}
+
+function hasMarketIdentityFilter(query: MarketQueryDto): boolean {
+  return marketIdentityFilters(query).length > 0;
+}
+
+function normalizeOptionalSlug(value: string | undefined): string | undefined {
+  const normalized = value ? normalizeMarketLookupText(value) : '';
+  return trimToUndefined(normalized);
+}
+
 function firstNonBlankText(...values: Array<string | null | undefined>): string | null {
   for (const value of values) {
     const trimmed = value?.trim();
@@ -1484,7 +1549,11 @@ function marketNetworkCacheKey(query: MarketQueryDto): string {
     active: query.active ?? null,
     category: query.category ?? null,
     closed: query.closed ?? null,
+    eventId: query.eventId ?? null,
+    eventSlug: normalizeOptionalSlug(query.eventSlug) ?? null,
     limit: query.limit ?? 100,
+    marketId: query.marketId ?? null,
+    marketSlug: normalizeOptionalSlug(query.marketSlug) ?? null,
     nodeType: normalizeNetworkNodeType(query.nodeType),
     q: trimToUndefined(query.q) ?? null,
   });
@@ -1507,7 +1576,7 @@ function selectNetworkCandidates(
   const selectedIds = new Set<string>();
   const eventCounts = new Map<string, number>();
   const categoryCounts = new Map<string, number>();
-  const focusedSearch = Boolean(trimToUndefined(query.q));
+  const focusedSearch = Boolean(trimToUndefined(query.q) || hasMarketIdentityFilter(query));
   const categoryFilter = normalizeCategoryFilter(query.category);
   const diversifyEvents = !focusedSearch;
   const diversifyCategories = !focusedSearch && !categoryFilter;
@@ -1575,7 +1644,7 @@ function selectNetworkEventGroups(
   const selected: NetworkEventGroup[] = [];
   const selectedIds = new Set<string>();
   const categoryCounts = new Map<string, number>();
-  const focusedSearch = Boolean(trimToUndefined(query.q));
+  const focusedSearch = Boolean(trimToUndefined(query.q) || hasMarketIdentityFilter(query));
   const categoryFilter = normalizeCategoryFilter(query.category);
   const diversifyCategories = !focusedSearch && !categoryFilter;
   const maxPerCategory = Math.max(3, Math.ceil(limit * 0.36));

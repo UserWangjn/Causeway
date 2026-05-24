@@ -9,6 +9,26 @@ export class MarketQueryDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(128)
+  marketId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  marketSlug?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  eventId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  eventSlug?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(64)
   category?: string;
 

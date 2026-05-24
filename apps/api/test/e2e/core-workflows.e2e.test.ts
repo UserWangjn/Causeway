@@ -183,7 +183,7 @@ describe('core backend workflows e2e', () => {
     expect(detailBody.data.outcomes.map((outcome) => outcome.tokenId)).toEqual(['token_binary_yes', 'token_binary_no']);
   });
 
-  it('runs real-model inference and exposes the generated script contract', async () => {
+  it('runs public-model inference and exposes the generated script contract', async () => {
     const createResponse = await request(httpServer)
       .post('/api/v1/inference-runs')
       .set('authorization', `Bearer ${accessToken}`)
@@ -193,7 +193,7 @@ describe('core backend workflows e2e', () => {
         depth: 1,
         maxMarketsPerLayer: 2,
         confidenceThreshold: 0.5,
-        model: 'deepseek-v4-flash',
+        model: 'gpt-5.4',
         cacheEnabled: true,
       })
       .expect(201);

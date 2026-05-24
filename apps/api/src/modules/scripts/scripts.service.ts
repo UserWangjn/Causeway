@@ -10,6 +10,7 @@ import {
 } from '../../common/pagination/opaque-cursor';
 import { toNullableNumber } from '../../common/utils/number.util';
 import { PrismaService } from '../../database/prisma.service';
+import { publicModelForInferenceRun } from '../inference/inference-models';
 import { CreateDirectOrderScriptDto } from './dto/create-direct-order-script.dto';
 import { ListScriptsQueryDto } from './dto/list-scripts-query.dto';
 import { UpdateOutcomeSelectionDto } from './dto/update-outcome-selection.dto';
@@ -102,6 +103,7 @@ const SCRIPT_SELECT = Prisma.validator<Prisma.CausalScriptSelect>()({
       progress: true,
       cacheHit: true,
       model: true,
+      inputJson: true,
       errorMessage: true,
       createdAt: true,
       completedAt: true,
@@ -242,7 +244,7 @@ export class ScriptsService {
         stage: script.inferenceRun.stage,
         progress: script.inferenceRun.progress,
         cacheHit: script.inferenceRun.cacheHit,
-        model: script.inferenceRun.model,
+        model: publicModelForInferenceRun(script.inferenceRun.model, script.inferenceRun.inputJson) ?? script.inferenceRun.model,
         errorMessage: script.inferenceRun.errorMessage,
         createdAt: script.inferenceRun.createdAt.toISOString(),
         completedAt: script.inferenceRun.completedAt?.toISOString() ?? null,

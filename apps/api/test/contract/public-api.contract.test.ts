@@ -309,7 +309,7 @@ describe('documented public API contracts', () => {
           depth: 1,
           maxMarketsPerLayer: 2,
           confidenceThreshold: 0.5,
-          model: 'deepseek-v4-flash',
+          model: 'gpt-5.4',
           cacheEnabled: true,
         })
         .expect(201),
@@ -320,7 +320,8 @@ describe('documented public API contracts', () => {
 
     const runId = readString(createdRun, 'runId');
     const runData = await waitForInferenceRun(httpServer, accessToken, runId);
-    expectKeys(runData, ['id', 'status', 'stage', 'progress', 'cacheHit', 'scriptId', 'errorMessage', 'createdAt', 'completedAt']);
+    expectKeys(runData, ['id', 'status', 'stage', 'progress', 'cacheHit', 'scriptId', 'errorMessage', 'model', 'createdAt', 'completedAt']);
+    expect(readString(runData, 'model')).toBe('gpt-5.4');
     const scriptId = readString(runData, 'scriptId');
 
     const scriptListData = apiData<Page<Record<string, unknown>>>(
@@ -358,6 +359,7 @@ describe('documented public API contracts', () => {
     expectKeys(readRecord(scriptData, 'root'), ['marketId', 'outcomeId', 'outcomeLabel']);
     expectKeys(readRecord(scriptData, 'graph'), ['nodes', 'edges']);
     expectKeys(readRecord(scriptData, 'inferenceRun'), ['id', 'status', 'stage', 'progress', 'cacheHit', 'model', 'errorMessage', 'createdAt', 'completedAt']);
+    expect(readString(readRecord(scriptData, 'inferenceRun'), 'model')).toBe('gpt-5.4');
     expectKeys(readRecordArray(readRecord(scriptData, 'graph'), 'nodes')[0], [
       'nodeId',
       'marketId',

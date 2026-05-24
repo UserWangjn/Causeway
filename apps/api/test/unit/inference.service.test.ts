@@ -7,6 +7,37 @@ import type { InferencePromptInput } from '../../src/modules/inference/inference
 import { buildFixtureInferenceOutput } from '../support/inference-output.fixture';
 
 describe('InferenceService', () => {
+  it('exposes public GPT and Claude model aliases while keeping provider models internal', () => {
+    const aiClient = {
+      getCapability: vi.fn().mockReturnValue({
+        status: 'available',
+        reason: null,
+        model: 'deepseek-v4-flash',
+        models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+      }),
+      runStructuredInference: vi.fn(),
+      runStructuredInferenceContent: vi.fn(),
+    };
+    const service = createService({}, aiClient);
+
+    expect(service.getCapability()).toEqual({
+      status: 'available',
+      reason: null,
+      defaultModel: 'gpt-5.4',
+      models: [
+        'gpt-5.5',
+        'gpt-5.4',
+        'claude-sonnet-4.7',
+        'claude-sonnet-4.6',
+        'claude-opus-4.7',
+        'claude-opus-4.6',
+      ],
+      freeModel: 'gpt-5.4',
+      freeMaxDepth: 1,
+      premiumModels: ['gpt-5.5', 'claude-sonnet-4.7', 'claude-opus-4.7', 'claude-opus-4.6'],
+    });
+  });
+
   it('rejects inference when the AI provider is unavailable', async () => {
     const aiClient = {
       getCapability: vi.fn().mockReturnValue({
@@ -28,7 +59,7 @@ describe('InferenceService', () => {
       },
     }, aiClient);
 
-    await expect(service.createRun(currentUser(), createRunDto('deepseek-v4-flash'))).rejects.toThrow(
+    await expect(service.createRun(currentUser(), createRunDto('gpt-5.4'))).rejects.toThrow(
       'AI inference client is not configured',
     );
     expect(polymarketMarketFindUnique).not.toHaveBeenCalled();
@@ -37,7 +68,7 @@ describe('InferenceService', () => {
     expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
   });
 
-  it('uses the configured AI provider for real models', async () => {
+  it('maps public model requests to the configured AI provider model', async () => {
     const tx = createPersistTransactionClient();
     const aiClient = {
       getCapability: vi.fn().mockReturnValue({
@@ -92,13 +123,16 @@ describe('InferenceService', () => {
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
     }, aiClient);
 
-    const result = await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
+    const result = await service.createRun(currentUser(), createRunDto('gpt-5.4'));
 
     expect(result).toMatchObject({
       runId: 'run_1',
       status: 'queued',
       scriptId: null,
     });
+    expect(inferenceRunCreate.mock.calls[0]?.[0].data.model).toBe('deepseek-v4-flash');
+    const storedInput = readRecord(createdInputJson, 'createdInputJson');
+    expect(readStringProperty(storedInput, 'requestedModel')).toBe('gpt-5.4');
     expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
 
     const completed = await service.processQueuedRun('run_1');
@@ -179,7 +213,7 @@ describe('InferenceService', () => {
     }, aiClient);
 
     await service.createRun(currentUser(), {
-      ...createRunDto('deepseek-v4-pro'),
+      ...createRunDto('claude-opus-4.7'),
       depth: 3,
       maxMarketsPerLayer: 8,
     });
@@ -251,7 +285,7 @@ describe('InferenceService', () => {
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
     }, aiClient);
 
-    await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
+    await service.createRun(currentUser(), createRunDto('gpt-5.4'));
     const completed = await service.processQueuedRun('run_1');
 
     expect(completed).toMatchObject({ status: 'completed', scriptId: 'script_1' });
@@ -320,7 +354,7 @@ describe('InferenceService', () => {
       $transaction: vi.fn((callback: (transactionClient: unknown) => Promise<unknown>) => callback(tx)),
     }, aiClient);
 
-    await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
+    await service.createRun(currentUser(), createRunDto('gpt-5.4'));
     const completed = await service.processQueuedRun('run_1');
 
     expect(completed).toMatchObject({ status: 'completed', scriptId: 'script_1' });
@@ -383,7 +417,7 @@ describe('InferenceService', () => {
       },
     }, aiClient);
 
-    await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
+    await service.createRun(currentUser(), createRunDto('gpt-5.4'));
     await expect(service.processQueuedRun('run_1')).resolves.toBeNull();
 
     expect(aiClient.runStructuredInferenceContent).toHaveBeenCalledTimes(2);
@@ -453,7 +487,7 @@ describe('InferenceService', () => {
       },
     }, aiClient);
 
-    await service.createRun(currentUser(), createRunDto('deepseek-v4-flash'));
+    await service.createRun(currentUser(), createRunDto('gpt-5.4'));
 
     const input = readRecord(createdInputJson, 'inputJson');
     expect(readArrayProperty(input, 'candidateMarkets')).toHaveLength(0);
@@ -477,7 +511,7 @@ describe('InferenceService', () => {
       },
     }, aiClient);
 
-    await expect(service.createRun(currentUser(), createRunDto('deepseek-v4-pro'))).rejects.toThrow(
+    await expect(service.createRun(currentUser(), createRunDto('claude-opus-4.7'))).rejects.toThrow(
       'Premium membership is required',
     );
     expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
@@ -501,7 +535,7 @@ describe('InferenceService', () => {
     }, aiClient);
 
     await expect(service.createRun(currentUser(), {
-      ...createRunDto('deepseek-v4-flash'),
+      ...createRunDto('gpt-5.4'),
       depth: 2,
     })).rejects.toThrow('Premium membership is required');
     expect(aiClient.runStructuredInferenceContent).not.toHaveBeenCalled();
@@ -567,7 +601,7 @@ describe('InferenceService', () => {
     }, aiClient);
 
     const result = await service.createRun(currentUser(), {
-      ...createRunDto('deepseek-v4-pro'),
+      ...createRunDto('claude-opus-4.7'),
       depth: 2,
     });
 

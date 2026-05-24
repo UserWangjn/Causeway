@@ -7,7 +7,7 @@ export class MarketSearchQueryDto {
   @IsString()
   @IsNotEmpty()
   @MinLength(2)
-  @MaxLength(200)
+  @MaxLength(2048)
   q!: string;
 
   @IsOptional()

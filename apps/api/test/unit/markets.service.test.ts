@@ -147,6 +147,8 @@ describe('MarketsService', () => {
                   { question: { contains: 'Election', mode: 'insensitive' } },
                   { slug: { contains: 'Election', mode: 'insensitive' } },
                   { description: { contains: 'Election', mode: 'insensitive' } },
+                  { event: { is: { title: { contains: 'Election', mode: 'insensitive' } } } },
+                  { event: { is: { slug: { contains: 'Election', mode: 'insensitive' } } } },
                 ],
               },
               {
@@ -306,6 +308,7 @@ describe('MarketsService', () => {
         OR: [
           { question: { contains: 'fixture', mode: 'insensitive' } },
           { slug: { contains: 'fixture', mode: 'insensitive' } },
+          { description: { contains: 'fixture', mode: 'insensitive' } },
           { event: { is: { title: { contains: 'fixture', mode: 'insensitive' } } } },
           { event: { is: { slug: { contains: 'fixture', mode: 'insensitive' } } } },
         ],
@@ -325,6 +328,38 @@ describe('MarketsService', () => {
       category: 'Politics',
       categoryKey: 'politics',
       matchedBy: 'market',
+    });
+  });
+
+  it('normalizes Polymarket links before searching Gamma and the local cache', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const searchV2 = vi.fn().mockResolvedValue({ events: [], tags: [] });
+    const service = createService({
+      polymarketMarket: {
+        findMany,
+      },
+    }, {}, { searchV2 });
+
+    await service.searchMarkets({ q: 'https://polymarket.com/event/fixture-event?tid=123', limit: 5 });
+
+    expect(searchV2).toHaveBeenCalledWith({ q: 'fixture-event', limitPerType: 6 });
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        active: true,
+        closed: false,
+        archived: false,
+        staleDetectedAt: null,
+        OR: [
+          { question: { contains: 'fixture-event', mode: 'insensitive' } },
+          { slug: { contains: 'fixture-event', mode: 'insensitive' } },
+          { description: { contains: 'fixture-event', mode: 'insensitive' } },
+          { event: { is: { title: { contains: 'fixture-event', mode: 'insensitive' } } } },
+          { event: { is: { slug: { contains: 'fixture-event', mode: 'insensitive' } } } },
+        ],
+      },
+      orderBy: [{ volume24hr: { sort: 'desc', nulls: 'last' } }, { volume: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+      take: 5,
+      select: expect.any(Object) as object,
     });
   });
 
@@ -755,6 +790,63 @@ describe('MarketsService', () => {
     });
   });
 
+  it('uses exact event identity filters for selected search results', async () => {
+    const networkNodeFindMany = vi.fn().mockResolvedValue([]);
+    const marketCount = vi.fn()
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(1);
+    const marketGroupBy = vi.fn().mockResolvedValue([{ eventId: 'event_1' }]);
+    const marketFindMany = vi.fn().mockResolvedValue([
+      networkMarket('market_1', 'event_1', 'First event market', '0.55', ['sports'], {
+        eventTitle: 'Fixture Event',
+        eventSlug: 'fixture-event',
+      }),
+    ]);
+    const service = createService({
+      marketNetworkNode: {
+        findMany: networkNodeFindMany,
+      },
+      polymarketMarket: {
+        count: marketCount,
+        groupBy: marketGroupBy,
+        findMany: marketFindMany,
+      },
+    });
+
+    const result = await service.getMarketNetwork({ eventSlug: 'fixture-event', limit: 10 });
+
+    const eventWhere = {
+      active: true,
+      closed: false,
+      archived: false,
+      staleDetectedAt: null,
+      AND: [
+        {
+          event: {
+            is: {
+              slug: 'fixture-event',
+            },
+          },
+        },
+      ],
+    };
+    expect(networkNodeFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        market: eventWhere,
+        OR: undefined,
+      },
+    }));
+    expect(marketFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: eventWhere,
+    }));
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0]).toMatchObject({
+      id: 'event_1',
+      eventSlug: 'fixture-event',
+      title: 'Fixture Event',
+    });
+  });
+
   it('serves repeated market network requests from the in-memory cache', async () => {
     const networkNodeFindMany = vi.fn().mockResolvedValue([]);
     const marketCount = vi.fn().mockResolvedValue(0);
@@ -1142,6 +1234,7 @@ function networkMarket(
     description?: string | null;
     rules?: string | null;
     eventTitle?: string;
+    eventSlug?: string;
     eventDescription?: string | null;
     eventMarketsCount?: number;
   } = {},
@@ -1169,7 +1262,7 @@ function networkMarket(
     syncedAt: new Date('2026-05-18T00:00:00.000Z'),
     event: {
       id: eventId,
-      slug: eventId,
+      slug: options.eventSlug ?? eventId,
       title: eventTitle,
       description: options.eventDescription ?? `${eventTitle} description`,
       icon: null,

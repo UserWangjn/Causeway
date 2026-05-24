@@ -75,7 +75,7 @@ describe('DTO validation boundaries', () => {
       depth: 1,
       maxMarketsPerLayer: 2,
       confidenceThreshold: 0.5,
-      model: 'deepseek-v4-flash',
+      model: 'gpt-5.4',
     });
     await expectInvalid(UpdateOutcomeSelectionDto, {
       reason: 'x'.repeat(501),
@@ -181,7 +181,7 @@ describe('DTO validation boundaries', () => {
       depth: 1,
       maxMarketsPerLayer: 2,
       confidenceThreshold: 0.5,
-      model: 'deepseek-v4-flash',
+      model: 'gpt-5.4',
     });
     await expectInvalid(OrderPreviewDto, {
       scriptId: 'script_1',
