@@ -1,0 +1,874 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Causeway Technical & Economic Whitepaper v1.1 ZH</title>
+    <style>
+      @page {
+        size: A4;
+        margin: 18mm 16mm 18mm 16mm;
+      }
+
+      :root {
+        --ink: #081b33;
+        --ink-2: #0a2a52;
+        --blue: #1677ff;
+        --cyan: #22c7e8;
+        --green: #14b87a;
+        --muted: #53657d;
+        --line: #d8e6f5;
+        --soft: #f5faff;
+        --paper: #ffffff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+        font-size: 11.2pt;
+        line-height: 1.72;
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin: 0 0 18px;
+        font-size: 42pt;
+        line-height: 0.96;
+        letter-spacing: -0.02em;
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        color: var(--ink);
+        font-size: 22pt;
+        line-height: 1.12;
+        break-after: avoid;
+      }
+
+      h3 {
+        margin: 22px 0 8px;
+        color: var(--ink-2);
+        font-size: 14.5pt;
+        line-height: 1.25;
+        break-after: avoid;
+      }
+
+      h4 {
+        margin: 16px 0 6px;
+        color: var(--ink);
+        font-size: 11.6pt;
+        line-height: 1.28;
+      }
+
+      p {
+        margin-bottom: 9px;
+      }
+
+      ul,
+      ol {
+        margin: 8px 0 12px 22px;
+        padding: 0;
+      }
+
+      li {
+        margin: 4px 0;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 12px 0 16px;
+        break-inside: avoid;
+      }
+
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 8px 9px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: var(--soft);
+        color: var(--ink);
+        font-weight: 800;
+      }
+
+      .cover {
+        min-height: 255mm;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        break-after: page;
+        position: relative;
+      }
+
+      .cover::before {
+        content: "";
+        position: absolute;
+        inset: -18mm -16mm;
+        z-index: -1;
+        background:
+          linear-gradient(rgba(8, 27, 51, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(8, 27, 51, 0.035) 1px, transparent 1px),
+          radial-gradient(circle at 78% 18%, rgba(22, 119, 255, 0.16), transparent 32%),
+          #fff;
+        background-size: 26px 26px, 26px 26px, auto, auto;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 48px;
+      }
+
+      .brand img {
+        width: 168px;
+        height: auto;
+      }
+
+      .eyebrow {
+        margin: 0 0 14px;
+        color: var(--blue);
+        font-size: 9.5pt;
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .subtitle {
+        max-width: 620px;
+        color: var(--text, #273b57);
+        font-size: 15.5pt;
+        line-height: 1.55;
+      }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 28px;
+      }
+
+      .meta-grid div,
+      .callout,
+      .principle,
+      .phase-card,
+      .note {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(245, 250, 255, 0.78);
+        padding: 12px;
+      }
+
+      .meta-grid span,
+      .small-label {
+        display: block;
+        color: var(--muted);
+        font-size: 8.5pt;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .meta-grid b {
+        display: block;
+        margin-top: 4px;
+        font-size: 11pt;
+      }
+
+      .page {
+        break-after: page;
+      }
+
+      .section {
+        margin-bottom: 22px;
+      }
+
+      .toc {
+        columns: 2;
+        column-gap: 28px;
+      }
+
+      .toc p {
+        break-inside: avoid;
+        border-bottom: 1px solid var(--line);
+        margin: 0 0 8px;
+        padding-bottom: 7px;
+        font-weight: 720;
+      }
+
+      .callout {
+        margin: 14px 0 18px;
+        border-left: 5px solid var(--blue);
+        background: #f5faff;
+      }
+
+      .callout strong {
+        color: var(--blue);
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+
+      .principle {
+        min-height: 118px;
+      }
+
+      .principle b {
+        display: block;
+        margin: 4px 0 6px;
+        color: var(--ink);
+        font-size: 12pt;
+      }
+
+      .principle p,
+      .phase-card p,
+      .note p {
+        margin-bottom: 0;
+        color: #273b57;
+        font-size: 10pt;
+        line-height: 1.58;
+      }
+
+      .phase-card {
+        break-inside: avoid;
+        margin-bottom: 10px;
+      }
+
+      .phase-card h3 {
+        margin-top: 4px;
+      }
+
+      .phase-card .tag {
+        display: inline-block;
+        margin-right: 6px;
+        border: 1px solid #bcd7ff;
+        border-radius: 999px;
+        background: #eef6ff;
+        color: var(--blue);
+        padding: 2px 8px;
+        font-size: 8.5pt;
+        font-weight: 800;
+      }
+
+      .hero-image {
+        overflow: hidden;
+        border: 1px solid rgba(22, 119, 255, 0.22);
+        border-radius: 10px;
+        height: 108mm;
+        margin: 16px 0;
+        background: #06162b;
+      }
+
+      .hero-image img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .caption {
+        color: var(--muted);
+        font-size: 8.5pt;
+      }
+
+      .disclaimer {
+        border-top: 1px solid var(--line);
+        margin-top: 20px;
+        padding-top: 12px;
+        color: var(--muted);
+        font-size: 8.6pt;
+        line-height: 1.55;
+      }
+
+      .pill {
+        display: inline-block;
+        border-radius: 999px;
+        background: var(--ink);
+        color: white;
+        padding: 2px 8px;
+        font-size: 8.5pt;
+        font-weight: 800;
+      }
+
+      .no-break {
+        break-inside: avoid;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="cover">
+      <div>
+        <div class="brand">
+          <img src="../../public/assets/causeway-lockup-primary.svg" alt="Causeway" />
+        </div>
+        <p class="eyebrow">Technical & Economic Whitepaper</p>
+        <h1>Causeway<br />技术经济白皮书</h1>
+        <p class="subtitle">
+          一个面向预测市场的市场智能层：从市场数据推理，走向信息源求证、群体智能模拟与用户治理下的决策执行。
+        </p>
+        <div class="meta-grid">
+          <div><span>Version</span><b>v1.1</b></div>
+          <div><span>Date</span><b>2026-05</b></div>
+          <div><span>Status</span><b>Professional Draft</b></div>
+        </div>
+      </div>
+      <div class="disclaimer">
+        本白皮书用于阐述 Causeway 的产品愿景、系统架构、技术路线、经济模型与治理边界。本文不构成投资建议、法律意见、经纪服务说明或收益承诺。预测市场具有风险，任何真实交易均应由用户基于自身判断主动确认。
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">Table of Contents</p>
+      <h2>目录</h2>
+      <div class="toc">
+        <p>01. 执行摘要</p>
+        <p>02. 市场问题与产品论点</p>
+        <p>03. Causeway 的产品定义</p>
+        <p>04. 系统架构总览</p>
+        <p>05. AI 推理与市场影子</p>
+        <p>06. Source Object 与权威信息源求证</p>
+        <p>07. 群体智能预测引擎愿景</p>
+        <p>08. 五阶段实施路线图</p>
+        <p>09. 执行边界、风控与用户治理</p>
+        <p>10. 经济模型与价值捕获</p>
+        <p>11. 数据、审计与合规边界</p>
+        <p>12. 风险、限制与结论</p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">01 / Executive Summary</p>
+      <h2>执行摘要</h2>
+      <p>
+        Causeway 是一个面向预测市场的市场智能层。它的核心判断是：预测市场不是一组孤立页面，而是现实事件在市场结构中投下的连续影子。一个新闻事件、政策信号、体育结果、公司公告或链上变化，往往不会只影响一个市场，而会沿着叙事、资金、风险偏好、参与者预期和信息确认路径，传导到多个相关市场。
+      </p>
+      <p>
+        当前预测市场的主要瓶颈并不只是交易入口，而是“从事件到可审查判断”的中间层缺失。用户面对的是标题、盘口和价格，但真正需要的是结构化推理：这个事件可能影响什么、通过什么路径影响、可信度有多高、哪些假设尚未被验证、哪些动作应当先预览而不是立即执行。
+      </p>
+      <div class="callout">
+        <strong>Causeway 的定位：</strong>
+        它不是一个自动下注机器人，而是一个从市场数据、事件语义、信息源求证和群体智能模拟中生成决策情报的系统。它帮助用户理解市场如何联动，并把任何真实行动保留在用户治理边界之内。
+      </div>
+      <p>
+        v1.1 白皮书在 v1.0 的技术经济框架基础上，加入了三项关键升级：第一，明确提出“每个事件都有市场影子”的市场智能层叙事；第二，将路线图扩展为从市场数据底座到可选 AI 委托执行的五阶段体系；第三，引入“群体智能预测引擎”的长期愿景，即通过多智能体模拟、平行市场世界和预测报告，逐步从单一路径推理演化为对复杂世界变化的结构化预测。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">02 / Market Thesis</p>
+      <h2>市场问题与产品论点</h2>
+      <h3>2.1 预测市场的界面问题</h3>
+      <p>
+        预测市场的价格能够反映群体预期，但普通界面往往只展示单个市场的标题、价格、成交量和规则。对于复杂事件，用户真正面对的是一个跨市场的问题：某个事件是否改变其他市场的概率分布？市场是否已经定价？哪些相关市场存在滞后？哪些联动只是叙事噪音？
+      </p>
+      <p>
+        当市场数量增加、事件传播速度提升、信息源碎片化加剧时，人工逐页浏览和通用聊天式 AI 都难以形成可审查、可复盘、可执行边界清楚的市场推理流程。
+      </p>
+      <h3>2.2 Causeway 的核心论点</h3>
+      <div class="grid-3">
+        <div class="principle">
+          <span class="small-label">Principle 01</span>
+          <b>事件会投下市场影子</b>
+          <p>单一事件可能影响政策、宏观、体育、加密、选举和公司叙事。Causeway 要识别这种影子，而不是只处理一个市场标题。</p>
+        </div>
+        <div class="principle">
+          <span class="small-label">Principle 02</span>
+          <b>推理必须可见</b>
+          <p>有用的 AI 不只给答案，还应显示假设、置信度、不确定性和连接理由，让用户能够审查路径。</p>
+        </div>
+        <div class="principle">
+          <span class="small-label">Principle 03</span>
+          <b>速度需要治理边界</b>
+          <p>市场反应速度重要，但用户控制更重要。预览、确认、审计和权限边界必须先于自动化。</p>
+        </div>
+      </div>
+      <h3>2.3 目标结果</h3>
+      <p>
+        Causeway 希望把“事件感知、市场映射、推理生成、信息求证、动作预览和用户确认”组织成一个连续系统。短期目标是提高预测市场分析和预览效率；中期目标是形成可验证的市场智能层；长期目标是演化为群体智能引擎，能够模拟复杂事件在多市场中的传播，并输出专业预测报告。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">03 / Product Definition</p>
+      <h2>Causeway 的产品定义</h2>
+      <p>
+        Causeway 是一个预测市场智能与工作流系统。它以 Polymarket 等预测市场数据为初始底座，将用户选择的市场论点或现实事件转化为结构化市场响应计划。这个计划包含相关市场、影响路径、推理理由、置信度、风险提示、信息源状态、动作预览和审计记录。
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>层级</th>
+            <th>功能</th>
+            <th>用户价值</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>市场数据层</td>
+            <td>同步市场结构、价格、流动性、规则和订单簿状态。</td>
+            <td>先理解市场，再理解外部世界。</td>
+          </tr>
+          <tr>
+            <td>市场影子层</td>
+            <td>把事件或论点映射到可能受影响的相关市场。</td>
+            <td>看见跨市场联动，而不是孤立页面。</td>
+          </tr>
+          <tr>
+            <td>AI 推理层</td>
+            <td>生成影响路径、假设、置信度、风险和建议审查状态。</td>
+            <td>让 AI 推理可解释、可复核。</td>
+          </tr>
+          <tr>
+            <td>求证层</td>
+            <td>对底层新闻、公告、链上或官方数据进行源头验证。</td>
+            <td>减少错误信息和幻觉带来的误判。</td>
+          </tr>
+          <tr>
+            <td>预览与治理层</td>
+            <td>在任何真实动作前提供预览、限制、审计和用户确认。</td>
+            <td>速度和控制并存。</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <strong>边界声明：</strong>
+        Causeway v1.x 不以默认自动交易为目标。系统可以推理、模拟、评分和预览，但托管、确认与最终行动应保留在用户侧。未来委托执行必须是可选、有限、可撤销、可审计的。
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">04 / Architecture</p>
+      <h2>系统架构总览</h2>
+      <h3>4.1 六层架构</h3>
+      <ol>
+        <li><strong>Market Data Foundation：</strong>同步和规范化预测市场数据，形成可查询、可缓存、可审计的市场底座。</li>
+        <li><strong>Market Graph：</strong>基于类别、语义、历史相关性、流动性和 AI 推理结果构建市场关系图。</li>
+        <li><strong>Reasoning Engine：</strong>从根事件或市场论点出发，生成多层影响路径、评分和解释。</li>
+        <li><strong>Source Object Layer：</strong>把新闻、公告、链上数据、体育数据和官方文件标准化为可验证对象。</li>
+        <li><strong>Verification Layer：</strong>使用权威数据源库进行事实求证、冲突检测和新鲜度校验。</li>
+        <li><strong>Governed Preview & Execution：</strong>把推理结果转化为预览、限制、审计记录和用户确认流程。</li>
+      </ol>
+      <h3>4.2 数据对象</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>对象</th>
+            <th>含义</th>
+            <th>关键字段</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Market</td>
+            <td>可交易或可观察的预测市场单元。</td>
+            <td>marketId、question、category、rules、volume、liquidity、status。</td>
+          </tr>
+          <tr>
+            <td>Thesis</td>
+            <td>用户想要理解的事件、假设或市场想法。</td>
+            <td>title、scope、timeWindow、riskMode、rootContext。</td>
+          </tr>
+          <tr>
+            <td>Market Shadow</td>
+            <td>一个事件可能影响的市场集合和路径。</td>
+            <td>nodes、edges、impactDirection、confidence、reason。</td>
+          </tr>
+          <tr>
+            <td>Source Object</td>
+            <td>可追踪、可验证的信息来源对象。</td>
+            <td>origin、timestamp、entity、claim、rawPayload、confidence。</td>
+          </tr>
+          <tr>
+            <td>Preview</td>
+            <td>真实行动前的可审查计划。</td>
+            <td>actionType、limits、checks、expiresAt、auditTrail。</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3>4.3 关键工程原则</h3>
+      <ul>
+        <li>AI 只能引用系统提供的候选市场、数据源和可验证输入，不能凭空发明市场或事实。</li>
+        <li>所有推理输出必须结构化，便于前端展示、后端校验和后续审计。</li>
+        <li>价格、流动性、订单簿、可交易状态和信息新鲜度必须在预览前刷新。</li>
+        <li>所有用户修改、AI 默认建议、预览版本和确认动作都应写入审计记录。</li>
+      </ul>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">05 / AI Reasoning</p>
+      <h2>AI 推理与市场影子</h2>
+      <p>
+        Causeway 的 AI 推理目标不是“给出一个买或不买的答案”，而是建立一张可审查的市场影子图。这个图描述一个事件可能通过哪些路径影响哪些市场、每条连接的假设是什么、置信度有多高、哪些风险尚未被确认。
+      </p>
+      <h3>5.1 推理输出结构</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>字段</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>summary</td>
+            <td>对本次推理的自然语言摘要，必须包含主要假设和风险。</td>
+          </tr>
+          <tr>
+            <td>nodes</td>
+            <td>被选中的相关市场或观察对象。</td>
+          </tr>
+          <tr>
+            <td>edges</td>
+            <td>影响路径，包含 relation、impactDirection、confidence 和 reason。</td>
+          </tr>
+          <tr>
+            <td>warnings</td>
+            <td>低置信度、缺少信息源、市场流动性不足或规则不明确等提醒。</td>
+          </tr>
+          <tr>
+            <td>reviewState</td>
+            <td>monitor、verify、preview、avoid、delegate-disabled 等审查状态。</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3>5.2 评分维度</h3>
+      <div class="grid-2">
+        <div class="note">
+          <span class="small-label">Relevance</span>
+          <p>事件与市场之间是否存在明确主题、实体或经济传导关系。</p>
+        </div>
+        <div class="note">
+          <span class="small-label">Direction</span>
+          <p>事件更可能支持、反对、对冲还是仅相关于该市场路径。</p>
+        </div>
+        <div class="note">
+          <span class="small-label">Confidence</span>
+          <p>推理路径的证据强度、历史可比性和信息源质量。</p>
+        </div>
+        <div class="note">
+          <span class="small-label">Tradability</span>
+          <p>市场是否仍活跃、是否具备足够流动性和可预览条件。</p>
+        </div>
+      </div>
+      <h3>5.3 从单模型到多智能体</h3>
+      <p>
+        在早期版本中，Causeway 可以使用单一模型生成结构化推理。随着系统演进，推理层将逐步引入多智能体机制：分析师智能体负责路径扩展，怀疑者智能体寻找反例，验证者智能体检查信息源，风险智能体评估边界条件，报告智能体整合结论。最终输出不再是一个模型的一次回答，而是一组有冲突、有共识、有审计轨迹的集体推理结果。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">06 / Source Verification</p>
+      <h2>Source Object 与权威信息源求证</h2>
+      <p>
+        在预测市场中，速度和真实性之间存在天然张力。错误新闻、二手转述、社交媒体误读、过期数据和被更正的信息，都可能导致错误推理。Causeway 的第四阶段将构建 Source Object 与权威数据源库，在真实行动前尽可能回到最底层事实。
+      </p>
+      <h3>6.1 Source Object 标准</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>字段</th>
+            <th>含义</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>origin</td>
+            <td>信息来源，例如官方公告、监管文件、体育联盟数据、法院文件、链上记录。</td>
+          </tr>
+          <tr>
+            <td>claim</td>
+            <td>可被验证的具体事实主张。</td>
+          </tr>
+          <tr>
+            <td>timestamp</td>
+            <td>发布时间、抓取时间和最后更新时间。</td>
+          </tr>
+          <tr>
+            <td>entities</td>
+            <td>涉及的人、组织、市场、球队、资产、地区或合约地址。</td>
+          </tr>
+          <tr>
+            <td>confidence</td>
+            <td>来源可信度、新鲜度和冲突状态综合评分。</td>
+          </tr>
+          <tr>
+            <td>rawPayload</td>
+            <td>保留原始数据，便于复核和审计。</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3>6.2 权威数据源库</h3>
+      <p>
+        权威数据源库不是简单 RSS 列表，而是按类别、可信层级、更新频率、可机器读取程度、历史错误率和可回放性组织的信息源系统。不同领域应使用不同的一手来源：宏观使用政府统计、央行和监管文件；体育使用联盟和赛事官方数据；链上使用节点、区块浏览器和合约事件；公司事件使用交易所公告、监管披露和公司发布。
+      </p>
+      <h3>6.3 求证结果进入治理层</h3>
+      <p>
+        信息源求证不应只生成一个“真或假”的标签，而应影响整个工作流：低可信来源进入 verify 状态，冲突来源触发 warning，高价值但未确认事件只能进入 dry-run preview，关键来源过期则要求重新抓取。这样，验证层成为用户治理的一部分，而不是事后附注。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">07 / Swarm Intelligence</p>
+      <h2>群体智能预测引擎愿景</h2>
+      <div class="hero-image">
+        <img src="../../public/assets/swarm-intelligence-bg.png" alt="Swarm intelligence background" />
+      </div>
+      <p class="caption">图：群体智能预测引擎概念视觉。多智能体在并行市场世界中模拟事件传播、形成冲突与共识，并输出预测报告。</p>
+      <p>
+        Causeway 的长期目标不是更快的交易按钮，而是一层能够预测世界如何变化的活体智能层。它借鉴多智能体模拟的思想：从一个现实种子事件出发，构建并行市场世界，让具有不同角色、记忆、偏好和策略的智能体互动演化，观察共识、分歧、风险和隐藏路径，然后生成可审查的预测报告。
+      </p>
+      <div class="grid-3">
+        <div class="principle">
+          <span class="small-label">Simulate</span>
+          <b>构建并行市场世界</b>
+          <p>不只推理一条路径，而是模拟事件、参与者、叙事和激励如何在多个市场环境中互动。</p>
+        </div>
+        <div class="principle">
+          <span class="small-label">Evolve</span>
+          <b>让多智能体共同推理</b>
+          <p>分析师、怀疑者、验证者、风险官和预测者形成多视角推演，暴露共识与冲突。</p>
+        </div>
+        <div class="principle">
+          <span class="small-label">Predict</span>
+          <b>把模拟转化为决策情报</b>
+          <p>输出可能未来、概率变化、关键假设、信息源可信度和建议审查路径。</p>
+        </div>
+      </div>
+      <h3>7.1 与传统自动交易的区别</h3>
+      <p>
+        群体智能引擎不等于默认自动下单。它的首要产物是 prediction report，而不是 order submit。系统应先提供多情景推演、反事实路径、关键变量、风险边界和信息源状态，再由用户决定是否进入预览或真实行动。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">08 / Roadmap</p>
+      <h2>五阶段实施路线图</h2>
+      <div class="phase-card">
+        <span class="tag">Phase 01</span><span class="tag">Now</span>
+        <h3>Market Data Foundation：先理解市场，再理解世界</h3>
+        <p>
+          第一阶段专注于预测市场数据本身。系统需要可靠同步市场结构、价格、流动性、订单簿、规则和状态，形成可查询的市场底座。外部新闻和社交数据暂不进入核心推理层，避免在底座不稳时引入更高噪音。
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag">Phase 02</span><span class="tag">Reasoning</span>
+        <h3>Reasoning Model：从一个事件推演所有关联市场</h3>
+        <p>
+          构建更完善的推理模型，让系统能够识别一个新闻事件可能映射到的全部相关市场，并给出相关性、方向、置信度、风险和建议审查动作。核心目标是“一个事件 -> 一张市场影子图”。
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag">Phase 03</span><span class="tag">Real-time</span>
+        <h3>Real-Time Scenario Generation：把新闻流转化为全市场响应剧本</h3>
+        <p>
+          接入实时新闻流和事件抓取，自动生成跨市场剧本。系统需要识别事件实体、涉及主题、可能影响路径、缺失确认信号和建议观察市场，快速形成全市场响应计划。
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag">Phase 04</span><span class="tag">Verification</span>
+        <h3>Source Verification Layer：下注前回到最底层事实</h3>
+        <p>
+          构建权威数据源库和自动求证机制。在任何真实行动前，系统应尽量追溯一手信息源，检查发布时间、修正状态、冲突来源和事实可信度，减少错误新闻、幻觉和误读带来的风险。
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag">Phase 05</span><span class="tag">Future</span>
+        <h3>Delegated AI Execution：用户可选地委托有限执行</h3>
+        <p>
+          在未来阶段，用户可以选择脱离人工确认层，将有限账户权限委托给 AI 进行智能执行。该能力必须是可选、有限、可撤销、可过期和可审计的，并受到市场范围、单笔上限、损失预算、信息源条件和紧急停止机制约束。
+        </p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">09 / Governance</p>
+      <h2>执行边界、风控与用户治理</h2>
+      <h3>9.1 核心边界</h3>
+      <ul>
+        <li>AI 可以推理、排序、模拟和预览，但不应绕过用户进行真实行动。</li>
+        <li>任何真实行动前必须展示预览，包括影响路径、风险检查、限制条件和审计摘要。</li>
+        <li>系统必须区分 dry-run、guarded preview、user-confirmed action 和 delegated execution。</li>
+        <li>可选委托执行必须具备范围限制、时间限制、预算限制、撤销机制和完整日志。</li>
+      </ul>
+      <h3>9.2 风控维度</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>控制方式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>信息风险</td>
+            <td>Source Object、权威源求证、冲突检测和新鲜度检查。</td>
+          </tr>
+          <tr>
+            <td>推理风险</td>
+            <td>置信度阈值、反例智能体、人工审查状态和路径解释。</td>
+          </tr>
+          <tr>
+            <td>市场风险</td>
+            <td>流动性检查、价格滑点、市场状态、规则和有效期校验。</td>
+          </tr>
+          <tr>
+            <td>执行风险</td>
+            <td>用户确认、权限边界、预算限制、过期预览和撤销机制。</td>
+          </tr>
+          <tr>
+            <td>系统风险</td>
+            <td>结构化输出校验、幂等提交、审计日志和 capability 降级。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">10 / Economic Model</p>
+      <h2>经济模型与价值捕获</h2>
+      <h3>10.1 目标用户</h3>
+      <ul>
+        <li><strong>高级预测市场用户：</strong>需要快速理解事件对多个市场的影响。</li>
+        <li><strong>研究员和策略构建者：</strong>需要把市场推理、信息源和审计记录组织成可复盘流程。</li>
+        <li><strong>小型基金和交易团队：</strong>需要多人协作、风险限制、预览和报告。</li>
+        <li><strong>数据和 AI 开发者：</strong>需要预测市场结构化数据、市场图谱和智能体推演 API。</li>
+      </ul>
+      <h3>10.2 收入模型</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>模型</th>
+            <th>说明</th>
+            <th>适用阶段</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>订阅</td>
+            <td>面向个人和专业用户提供市场影子图、推理次数、报告和监控能力。</td>
+            <td>Phase 1-3</td>
+          </tr>
+          <tr>
+            <td>API / Data</td>
+            <td>提供市场图谱、Source Object、验证结果和预测报告 API。</td>
+            <td>Phase 2-4</td>
+          </tr>
+          <tr>
+            <td>团队工作区</td>
+            <td>为研究团队提供协作、审计、权限管理和报告导出。</td>
+            <td>Phase 3-5</td>
+          </tr>
+          <tr>
+            <td>策略与金库基础设施</td>
+            <td>把重复剧本组织为结构化策略，包含授权范围、准入规则和风险预算。</td>
+            <td>Phase 4-5</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3>10.3 经济飞轮</h3>
+      <p>
+        更多市场数据带来更完整的市场图谱；更完整的市场图谱提高推理质量；更高质量的推理吸引更多用户和反馈；更多用户反馈改进评分、验证和报告；更强的验证能力提升信任；信任推动团队、API 和结构化策略收入。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">11 / Compliance Boundary</p>
+      <h2>数据、审计与合规边界</h2>
+      <p>
+        Causeway 应当以“工作流软件、市场智能系统和用户治理工具”的方式设计，而不是以“收益承诺系统”或“默认自动交易系统”的方式设计。产品文案、界面和 API 都应避免承诺结果、保证收益或诱导用户绕过审查。
+      </p>
+      <h3>11.1 审计记录</h3>
+      <ul>
+        <li>每一次 AI 推理的输入、模型版本、prompt 版本、输出和校验结果。</li>
+        <li>每一次 Source Object 抓取、验证、冲突检测和刷新时间。</li>
+        <li>每一次预览的风险检查、限制、过期时间和用户确认状态。</li>
+        <li>每一次用户修改、拒绝、确认或撤销动作。</li>
+      </ul>
+      <h3>11.2 合规表达原则</h3>
+      <ul>
+        <li>不将 AI 输出表述为投资建议。</li>
+        <li>不保证任何预测、策略或市场结果。</li>
+        <li>不默认启用自动执行。</li>
+        <li>清晰区分模拟、预览和真实行动。</li>
+        <li>在涉及委托执行时，必须展示权限、范围、预算和撤销方式。</li>
+      </ul>
+    </section>
+
+    <section>
+      <p class="eyebrow">12 / Risks & Conclusion</p>
+      <h2>风险、限制与结论</h2>
+      <h3>12.1 主要风险</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>风险</th>
+            <th>说明</th>
+            <th>缓解方式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>信息源错误</td>
+            <td>新闻可能错误、过期或被误读。</td>
+            <td>权威源求证、冲突检测、source trail。</td>
+          </tr>
+          <tr>
+            <td>AI 幻觉</td>
+            <td>模型可能生成不存在的市场或错误路径。</td>
+            <td>候选集约束、结构化校验、人工审查。</td>
+          </tr>
+          <tr>
+            <td>流动性不足</td>
+            <td>市场价格可能无法承载预期动作。</td>
+            <td>预览前刷新订单簿、滑点和容量检查。</td>
+          </tr>
+          <tr>
+            <td>过度自动化</td>
+            <td>用户可能希望跳过确认以追求速度。</td>
+            <td>默认人工确认，委托执行必须有限且可撤销。</td>
+          </tr>
+          <tr>
+            <td>监管不确定性</td>
+            <td>预测市场和自动化工具在不同地区规则不同。</td>
+            <td>地域合规策略、清晰免责声明、可配置能力边界。</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3>12.2 结论</h3>
+      <p>
+        Causeway 的长期价值不在于把交易按钮做得更快，而在于为预测市场建立一层可信的智能基础设施。它从市场数据开始，逐步扩展到事件推理、实时剧本、权威信息源求证、多智能体模拟和可选委托执行。每一步都应保持可解释、可验证、可审计和用户治理。
+      </p>
+      <div class="callout">
+        <strong>最终愿景：</strong>
+        Causeway 将从市场推理工具演化为群体智能预测引擎。用户输入一个事件，系统模拟多个可能世界，组织智能体形成共识与冲突，并输出关于世界如何移动的专业预测报告。
+      </div>
+      <div class="disclaimer">
+        Copyright © 2026 Causeway. 本文档为产品和技术经济白皮书草案，不构成投资建议、法律建议、经纪服务或收益承诺。所有预测市场活动均存在风险，用户应独立判断并自行承担后果。
+      </div>
+    </section>
+  </body>
+</html>

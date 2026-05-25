@@ -1,0 +1,786 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Livre blanc technique et économique de Causeway v0.6 ZH</title>
+    <style>
+      @page { size: A4; margin: 13mm 12mm; }
+      :root {
+        --ink: #081b33;
+        --ink-2: #0a2a52;
+        --blue: #1677ff;
+        --cyan: #22c7e8;
+        --green: #14b87a;
+        --amber: #f59e0b;
+        --red: #ef4444;
+        --muted: #53657d;
+        --line: #d8e6f5;
+        --soft: #f5faff;
+        --paper: #ffffff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 1.56;
+      }
+      h1, h2, h3, h4, p { margin-top: 0; }
+      h1 { margin: 0 0 18px; font-size: 42pt; line-height: .96; letter-spacing: 0; }
+      h2 { margin: 0 0 9px; color: var(--ink); font-size: 18pt; line-height: 1.12; break-after: avoid; }
+      h3 { margin: 13px 0 5px; color: var(--ink-2); font-size: 11.8pt; line-height: 1.22; break-after: avoid; }
+      h4 { margin: 10px 0 4px; color: var(--ink); font-size: 10.6pt; line-height: 1.25; }
+      p { margin-bottom: 6px; }
+      ul, ol { margin: 5px 0 8px 18px; padding: 0; }
+      li { margin: 2px 0; }
+      table { width: 100%; border-collapse: collapse; margin: 8px 0 10px; break-inside: avoid; }
+      th, td { border: 1px solid var(--line); padding: 5px 6px; text-align: left; vertical-align: top; }
+      th { background: var(--soft); color: var(--ink); font-weight: 800; }
+      code { font-family: Consolas, "SFMono-Regular", monospace; font-size: 9.3pt; color: var(--ink-2); }
+      .cover { min-height: 255mm; display: flex; flex-direction: column; justify-content: space-between; break-after: page; position: relative; }
+      .cover::before {
+        content: "";
+        position: absolute;
+        inset: -13mm -12mm;
+        z-index: -1;
+        background:
+          linear-gradient(rgba(8, 27, 51, .035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(8, 27, 51, .035) 1px, transparent 1px),
+          radial-gradient(circle at 76% 16%, rgba(22, 119, 255, .17), transparent 34%),
+          radial-gradient(circle at 22% 82%, rgba(34, 199, 232, .12), transparent 30%),
+          #fff;
+        background-size: 26px 26px, 26px 26px, auto, auto, auto;
+      }
+      .brand img { width: 168px; height: auto; margin-bottom: 46px; }
+      .eyebrow { margin: 0 0 13px; color: var(--blue); font-size: 8.8pt; font-weight: 900; letter-spacing: .11em; text-transform: uppercase; }
+      .subtitle { max-width: 650px; color: #273b57; font-size: 15.2pt; line-height: 1.56; }
+      .meta-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-top: 28px; }
+      .meta-grid div, .callout, .principle, .phase-card, .note, .metric-card, .source-card {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: rgba(245, 250, 255, .82);
+        padding: 8px;
+      }
+      .meta-grid span, .small-label { display: block; color: var(--muted); font-size: 8pt; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+      .meta-grid b { display: block; margin-top: 4px; font-size: 10.5pt; }
+      .page { break-after: auto; margin-bottom: 8mm; }
+      .toc { columns: 2; column-gap: 26px; }
+      .toc p { break-inside: avoid; border-bottom: 1px solid var(--line); margin: 0 0 7px; padding-bottom: 6px; font-weight: 720; }
+      .callout { margin: 8px 0 10px; border-left: 4px solid var(--blue); background: #f5faff; }
+      .callout strong { color: var(--blue); }
+      .warning { border-left-color: var(--amber); background: #fff8ed; }
+      .warning strong { color: #a15c00; }
+      .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+      .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+      .principle, .metric-card { min-height: 88px; break-inside: avoid; }
+      .principle b, .metric-card b, .note b { display: block; margin: 4px 0 6px; color: var(--ink); font-size: 11.2pt; }
+      .principle p, .phase-card p, .note p, .metric-card p, .source-card p { margin-bottom: 0; color: #273b57; font-size: 8.9pt; line-height: 1.45; }
+      .phase-card { break-inside: avoid; margin-bottom: 6px; }
+      .phase-card h3 { margin-top: 4px; }
+      .tag {
+        display: inline-block;
+        margin: 0 5px 5px 0;
+        border: 1px solid #bcd7ff;
+        border-radius: 999px;
+        background: #eef6ff;
+        color: var(--blue);
+        padding: 2px 8px;
+        font-size: 8pt;
+        font-weight: 800;
+      }
+      .tag.dark { border-color: var(--ink); background: var(--ink); color: #fff; }
+      .hero-image { overflow: hidden; border: 1px solid rgba(22,119,255,.22); border-radius: 10px; height: 96mm; margin: 14px 0; background: #06162b; }
+      .hero-image img { width: 100%; height: 100%; object-fit: cover; }
+      .concept-figure { break-inside: avoid; width: 72%; margin: 9px auto 12px; }
+      .concept-figure-frame { overflow: hidden; border: 1px solid rgba(22,119,255,.2); border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(8,27,51,.08); }
+      .concept-figure img { display: block; width: 100%; max-height: 82mm; object-fit: contain; }
+      .concept-figure .caption { margin: 5px 0 0; line-height: 1.42; }
+      .caption { color: var(--muted); font-size: 8pt; }
+      .disclaimer, .footnotes { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 11px; color: var(--muted); font-size: 8.2pt; line-height: 1.52; }
+      .no-break { break-inside: avoid; }
+      .source-list p { margin-bottom: 5px; word-break: break-all; }
+      .kpi td:first-child { width: 24%; font-weight: 800; color: var(--ink-2); }
+      .formula {
+        border: 1px solid var(--line);
+        border-left: 5px solid var(--green);
+        border-radius: 8px;
+        background: #f3fff9;
+        margin: 6px 0 8px;
+        padding: 7px 9px;
+        break-inside: avoid;
+      }
+      .formula code { display: block; margin: 2px 0; color: #07513a; font-size: 8.8pt; }
+      .formula p { margin: 4px 0 0; color: #244a3d; font-size: 8.6pt; line-height: 1.42; }
+    </style>
+  </head>
+  <body>
+    <section class="cover">
+      <div>
+        <div class="brand"><img src="../../public/assets/causeway-lockup-primary.svg" alt="Causeway" /></div>
+        <p class="eyebrow">Livre blanc technique et économique</p>
+        <h1>Chaussée<br />Livre blanc sur la technologie et l’économie</h1>
+        <p class="subtitle">
+          Intelligence commerciale IA et couche de raisonnement vérifiable pour les marchés de prédiction : des données de marché Polymarket, déduction causale, aperçu des risques, au raisonnement vérifiable Arc, à l'économie d'agent natif de l'USDC et au moteur de prédiction d'intelligence en essaim.
+        </p>
+        <div class="meta-grid">
+          <div><span>Version</span><b>v0.6</b></div>
+          <div><span>Date</span><b>2026-05</b></div>
+          <div><span>Statut</span><b>Projet détaillé</b></div>
+          <div><span>Portée</span><b>Marché + Arc</b></div>
+        </div>
+      </div>
+      <div class="disclaimer">
+        Ce livre blanc est utilisé pour expliquer le jugement de Causeway sur le marché, le positionnement du produit, l'architecture technique, l'intégration d'Arc, le modèle économique, les limites des risques et la future feuille de route. Cet article ne constitue pas des conseils en investissement, des conseils juridiques, des descriptions de services de courtage, des engagements de revenus ou toute forme de sollicitation de trading automatisée. Prédire le marché implique des risques importants et toute transaction réelle doit être activement confirmée par les utilisateurs sur la base de leur propre jugement.
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">Table des matières</p>
+      <h2>Table des matières</h2>
+      <div class="toc">
+        <p>01. Résumé exécutif</p>
+        <p>02. Contexte du marché : le marché de la prédiction entre sur la scène grand public</p>
+        <p>03. Question centrale : pourquoi les marchés de prédiction existants manquent-ils encore d'une couche intelligente ?</p>
+        <p>04. Fondation académique et cadre de calcul de la valeur</p>
+        <p>05. Définition du produit Causeway</p>
+        <p>06. Quels problèmes avons-nous résolus ?</p>
+        <p>07. Architecture du système et modèle de données</p>
+        <p>08. AI Trader Intelligence : de la probabilité à l'aperçu de l'action</p>
+        <p>09. Arc Proof : enregistrement de raisonnement vérifiable de l'IA</p>
+        <p>10. Arc USDC Premium : économie intelligente et capacité de paiement</p>
+        <p>11. Couche de service d'agent x402 : future couche de protocole de service d'agent</p>
+        <p>12. Moteur de prédiction Swarm : du monde du marché parallèle à tout prédire</p>
+        <p>13. Flux de travail utilisateur et expérience produit</p>
+        <p>14. Limites du contrôle des risques, de la gouvernance et de la conformité</p>
+        <p>15. Problèmes qui doivent être résolus à l'avenir</p>
+        <p>16. Feuille de route technologique en cinq étapes</p>
+        <p>17. Modèle économique et capture de valeur</p>
+        <p>18. Fossés, indicateurs et conclusions</p>
+        <p>19. Références</p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">01 / Résumé exécutif</p>
+      <h2>Résumé exécutif</h2>
+      <p>
+        Causeway est une couche d'intelligence commerciale IA et de raisonnement vérifiable pour les marchés de prédiction. Son jugement fondamental est que les marchés de prédiction évoluent d'« une interface de paris événementiels avec la participation d'un petit nombre d'utilisateurs de crypto » à « une infrastructure probabiliste pour les événements réels, les risques macroéconomiques, les sports, la politique, les événements d'entreprise et les activités en chaîne ». Lorsque le nombre de marchés, le volume des transactions et la complexité des participants augmentent, les utilisateurs n'ont plus seulement besoin d'une page de handicap plus esthétique, mais d'un système intelligent capable de transformer les événements en jugements de marché révisables.
+      </p>
+      <p>
+        Les principales lacunes de l'interface de prévision actuelle du marché sont les suivantes : la relation entre les marchés n'est pas structurée, les jugements émis par l'IA manquent de raisonnements vérifiables et les recommandations de trading manquent de contraintes de risque et de position. Il est difficile pour les utilisateurs de comprendre pourquoi un signal a été généré, quelle en était la base et s'il était correct par la suite. Causeway tente de combler cette lacune : à partir des données de marché de Polymarket, il construit un réseau de marché, génère des scripts causals, génère des probabilités, des limites, des risques et des aperçus, et ancre la trace du raisonnement de l'IA dans Arc Testnet afin que le "raisonnement pré-événement" et les "résultats post-événement" puissent être audités.
+      </p>
+      <div class="callout">
+        <strong>Positionnement en une phrase :</strong>
+        Causeway transforme les marchés de prédiction en une couche d'intelligence commerciale lisible par l'IA, raisonnée par l'IA, exécutée par l'utilisateur et vérifiable par Arc.
+      </div>
+      <p>
+        Différent des assistants de discussion IA ordinaires, le produit principal de Causeway n'est pas une réponse en langage naturel qui ne peut pas être examinée, mais un objet d'intelligence de marché structuré : marché racine, jeton de résultat racine, marché candidat, avantage causal, estimation de probabilité, probabilité implicite du marché, avantage, recommandations ACHETER/REGARDER/ÉVITER, explication du risque, aperçu de la commande, statut de confirmation de l'utilisateur, hachage de preuve Arc et enregistrements de performances ultérieurs. Par défaut, le système n'héberge pas de fonds pour les utilisateurs, ne contourne pas les signatures des utilisateurs et n'intègre pas les résultats de l'IA dans des conseils d'investissement ; il fournit un ensemble de flux de travail de prédiction du marché explicables, vérifiables et gouvernables.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">02 / Contexte du marché</p>
+      <h2>Contexte du marché : le marché de la prédiction entre sur la scène grand public</h2>
+      <h3>2.1 Le volume des échanges et l’attention institutionnelle augmentent rapidement</h3>
+      <p>
+        Le marché des prédictions a réalisé sa première sortie à grande échelle au cours du cycle électoral américain de 2024. CoinDesk a rapporté que le volume du contrat de Polymarket pour l’élection présidentielle américaine de 2024 dépassait 3,6 milliards de dollars. Le marché a également attiré pour la première fois le marché des prédictions à l’attention des grands médias et des utilisateurs ordinaires. D’ici 2025, la croissance de l’industrie s’étendra d’événements politiques uniques à davantage de catégories telles que les sports, la macro, la cryptographie, les données économiques, les événements d’entreprise et les événements culturels.
+      </p>
+      <p>
+        Dans un rapport de 2026 sur les prévisions d’entrée sur le marché, KPMG a noté que le volume combiné des transactions de Kalshi et Polymarket dépassera 40 milliards de dollars en 2025, contre environ 9 milliards de dollars en 2024, ce qui représente une croissance annuelle de plus de 400 %. Le rapport mentionne également que le volume mensuel des échanges de Polymarket a dépassé 3 milliards de dollars en octobre 2025. Bien que le calibre des différentes sources de données varie en fonction de la plateforme, de la définition du volume et du calendrier, la direction est la même : le marché de la prédiction est passé de produits expérimentaux à une étape de forte croissance, de forte attention réglementaire et de participation institutionnelle.
+      </p>
+      <h3>2.2 Le marché des prédictions passe d’un « lieu de négociation » à une « couche de données probabilistes »</h3>
+      <p>
+        L'investissement stratégique dans Polymarket par ICE (la société mère de la Bourse de New York) est une preuve supplémentaire que le marché se concentre non seulement sur les frais de transaction, mais aussi sur les données événementielles elles-mêmes. Axios rapporte qu'ICE a accepté d'investir jusqu'à 2 milliards de dollars dans Polymarket et deviendra un distributeur mondial des données événementielles de Polymarket. Cela signifie que la valeur des marchés de prédiction ne réside pas seulement dans le trading, mais aussi dans leur capacité à convertir l’incertitude du monde réel en données de probabilité observables en temps réel.
+      </p>
+      <div class="grid-3">
+        <div class="metric-card">
+          <span class="small-label">Signal du marché</span>
+          <b>Le volume des échanges augmente</b>
+          <p>Le volume des échanges de la plateforme s'est étendu depuis le sommet du cycle électoral jusqu'aux transactions normales multicatégories, et la profondeur du marché et la structure des utilisateurs sont devenues plus complexes.</p>
+        </div>
+        <div class="metric-card">
+          <span class="small-label">Signal institutionnel</span>
+          <b>Entrée institutionnelle</b>
+          <p>Les bourses, les maisons de courtage, les plateformes sportives et les sociétés de technologie financière cherchent à entrer sur les marchés de prédiction.</p>
+        </div>
+        <div class="metric-card">
+          <span class="small-label">Signal de données</span>
+          <b>Numérisation des probabilités</b>
+          <p>La prévision des prix du marché est aujourd’hui réinterprétée comme des données événementielles, et non seulement comme les résultats des paris des utilisateurs.</p>
+        </div>
+      </div>
+      <h3>2.3 Nouvelles contradictions induites par la croissance</h3>
+      <p>
+        Après l'expansion du marché, les utilisateurs ne sont plus confrontés à « l'impossibilité de trouver le marché », mais à « l'impossibilité de déterminer quels marchés méritent d'être étudiés, quels prix reflètent l'information, quels marchés connexes sont en retard et quels signaux sont du bruit ». Plus le volume des transactions augmente rapidement, plus des couches intelligentes sont nécessaires pour organiser les relations de marché, interpréter les changements de probabilité, identifier les erreurs de prix, contrôler les risques et constituer des enregistrements reproductibles.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">03 / Problème</p>
+      <h2>Question centrale : pourquoi les marchés de prédiction existants manquent encore d'une couche d'intelligence</h2>
+      <h3>3.1 Problème 1 : Le marché est un réseau, mais l'interface est toujours une liste</h3>
+      <p>
+        Un événement réel affecte rarement un seul marché. Par exemple, une déclaration de la Réserve fédérale peut affecter simultanément les taux d’intérêt, l’inflation, le dollar américain, les actifs cryptographiques, les indices boursiers, l’or, les récits électoraux et les événements d’entreprise connexes ; une nouvelle sur une blessure sportive peut affecter le résultat, le championnat, les données des joueurs et la probabilité de se qualifier pour le même groupe. Les interfaces traditionnelles sont généralement présentées sous forme de listes de marchés, de pages d'événements et de résultats de recherche, sans représentation structurée de la manière dont les événements se propagent sur les marchés.
+      </p>
+      <h3>3.2 Problème 2 : La structure des données du marché est complexe et l'objet de la transaction n'est pas le titre</h3>
+      <p>
+        L'objet commercial de Polymarket n'est pas le titre du marché, mais le jeton de résultat. Dans l'API Gamma officielle <code>outcomes</code>、<code>outcomePrices</code> Il existe une relation de mappage d'index avec l'ID de jeton CLOB ; il peut y avoir plusieurs marchés dans le cadre du même événement. Pour les utilisateurs et les systèmes d’IA, si seul le titre ou la copie Oui/Non est compris, il est facile de produire des cartographies incorrectes sur les marchés à résultats multiples, les marchés sportifs, les marchés de gamme et les événements mutuellement exclusifs.
+      </p>
+      <h3>3.3 Problème 3 : les recommandations de l'IA manquent de possibilité d'audit</h3>
+      <p>
+        Les systèmes d'IA ordinaires peuvent générer des réponses telles que « Il est recommandé d'acheter Oui », mais cette réponse manque souvent d'instantanés d'entrée, de portée du marché candidat, de version d'invite, de version de modèle, de schéma de sortie, de chemin de raisonnement, de contre-exemples et de traçabilité post-événement. La particularité des marchés de prédiction est que les résultats seront vérifiés dans le futur. Si le système ne peut pas prouver qu’un jugement a été émis avant que le résultat ne se produise ou que le raisonnement n’a pas été modifié par la suite, alors la performance du signal manque de base crédible.
+      </p>
+      <h3>3.4 Problème 4 : Il existe un conflit entre rapidité et gouvernance</h3>
+      <p>
+        L’avantage des marchés événementiels est qu’ils peuvent réagir rapidement, mais être trop rapide peut aussi amplifier les risques de désinformation, d’hallucinations, d’illiquidité et de sur-négociation. Un système professionnel ne peut pas seulement poursuivre l'exécution automatique, mais doit intégrer l'aperçu, le budget, le statut négociable, l'actualisation du carnet d'ordres, la confirmation de l'utilisateur, les enregistrements d'audit et la révocation des autorisations dans le même processus.
+      </p>
+      <div class="callout warning">
+        <strong>Jugement produit :</strong>
+        La principale concurrence dans la prochaine étape du marché des prédictions n'est pas « qui a plus de pages de marché », mais « qui peut organiser les prix du marché, le raisonnement de l'IA, l'exécution réelle et les enregistrements vérifiables dans une boucle fermée intelligente complète ».
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">04 / Fondation Académique</p>
+      <h2>Fondation académique et cadre de calcul de la valeur</h2>
+      <p>
+        La valeur théorique des marchés de prédiction vient d'un mécanisme simple mais puissant : lorsqu'un contrat paie un montant fixe basé sur le résultat d'un événement, le prix de transaction peut exprimer approximativement le jugement collectif du marché sur la probabilité qu'un événement se produise dans certaines conditions. L'examen des marchés de prédiction par Wolfers et Zitzewitz a souligné que les marchés de prédiction peuvent regrouper des informations dispersées à travers les prix en signaux lisibles ; Snowberg, Wolfers et Zitzewitz ont ensuite appliqué ce mécanisme à des scénarios de prévision économique, expliquant que les prix des contrats événementiels peuvent devenir des expressions probabilistes en temps réel de l'incertitude macro et politique. La valeur de Causeway n'est pas de réinventer le marché de la prédiction, mais d'y ajouter le raisonnement de l'IA, la détection de la cohérence entre les marchés, la correction des frictions d'exécution, la budgétisation des risques et des enregistrements de performances vérifiables basés sur « le prix comme signal probabiliste ».
+      </p>
+      <h3>4.1 Le prix est une probabilité, mais pas une vérité inconditionnelle</h3>
+      <p>
+        Pour un contrat d'événement binaire, si le contrat rapporte 1 $ lorsque l'événement se produit et 0 $ lorsqu'il ne se produit pas, dans des conditions idéales de neutralité du risque, de faibles coûts de transaction, de liquidité suffisante et de participants pouvant négocier librement, le prix du marché <code>p</code> Cela peut être compris comme une probabilité implicite du marché. Les marchés de prédiction réalistes ne remplissent pas toujours ces conditions : les spreads, les frais, les dérapages, les limites, le bruit de l'information, les tentatives de manipulation, les restrictions réglementaires et les préférences de risque des participants feront s'écarter les prix de la « vraie probabilité ». Par conséquent, Causeway ne considère pas le prix du marché comme une conclusion, mais comme la première couche de signaux observables, qui sont ensuite expliqués conjointement par les cotes équitables de l'IA, la vérification de la source, le contrôle de liquidité et le modèle de risque.
+      </p>
+      <div class="formula">
+        <code>p_mid = (bestBid + bestAsk) / 2</code>
+        <code>p_exec_yes = ask_yes, p_exec_no = ask_no</code>
+        <code>q_ai = calibratedForecast(event | marketSnapshot, sourceObjects, reasoningTrace)</code>
+        <code>rawEdge_mid = q_ai - p_mid</code>
+        <p><code>p_mid</code> Convient pour afficher les probabilités implicites du marché,<code>p_exec_yes</code> Il s’agit du véritable seuil de probabilité d’exécution pour acheter OUI. Causeway devrait faire la distinction entre la « probabilité de recherche » et la « probabilité de commercialisation » afin d'éviter d'utiliser le prix moyen pour exagérer l'avantage.</p>
+      </div>
+      <h3>4.2 La valeur transactionnelle provient des « attentes positives après friction »</h3>
+      <p>
+        Ce qui est vraiment précieux pour les utilisateurs, ce n'est pas "l'IA pense que la probabilité est plus élevée", mais "il existe toujours des attentes positives après le prix négociable actuel, les frais de traitement, le dérapage, la profondeur du handicap et la réduction de l'incertitude". C’est également l’élément central sur lequel les recherches sur l’arbitrage de marché prédictif soulignent à plusieurs reprises : les incohérences théoriques des prix ne constituent de véritables opportunités que lorsqu’elles sont exécutables, réglables et toujours positives après déduction des coûts. Causeway divise donc les opportunités en trois niveaux : signal brut, signal négociable et aperçu de l'ordre exécutable.
+      </p>
+      <div class="formula">
+        <code>EV_token_yes = q_ai * 1 + (1 - q_ai) * 0 - ask_yes - cost_per_token</code>
+        <code>ROI_yes = EV_token_yes / ask_yes</code>
+        <code>edgeNet = q_ai - ask_yes - feeRate - slippageBps - ruleRiskHaircut - sourceRiskHaircut</code>
+        <code>BUY only if edgeNet &gt; minEdge, depthAtLimit &gt; targetSize, timeToClose &gt; minWindow</code>
+        <p>L’avantage net doit être simultanément limité par la probabilité, le coût, la profondeur et les fenêtres temporelles. Si l’une des contraintes est insuffisante, le système doit rétrograder vers WATCH, VERIFY FIRST ou AVOID.</p>
+      </div>
+      <h3>4.3 Suggestion de position : utilisez Kelly conservatrice au lieu de parier impulsivement</h3>
+      <p>
+        Dans un contrat événementiel, le prix d’achat lui-même est proche de la perte maximale ; la valeur du contrat s'approche de 1 lorsque l'événement se produit et s'approche de 0 lorsqu'il ne se produit pas. La formule de Kelly peut être utilisée comme point de départ théorique pour les recommandations de positions, mais les marchés de prédiction contiennent des erreurs de modèle, des discontinuités de liquidité, des différences d'interprétation des règles et des risques de règlement des événements. Une version actualisée doit donc être utilisée, superposant la capacité du marché, la corrélation du portefeuille et les plafonds budgétaires des utilisateurs. Causeway produit des recommandations budgétaires à risque, et non des engagements en matière de revenus.
+      </p>
+      <div class="formula">
+        <code>q_adj = clamp(0.5 + confidence * (q_ai - 0.5), 0.01, 0.99)</code>
+        <code>b = (1 - p_exec) / p_exec</code>
+        <code>kellyFull = (b * q_adj - (1 - q_adj)) / b = (q_adj - p_exec) / (1 - p_exec)</code>
+        <code>sizeUsd = bankroll * min(max(0, lambda * kellyFull), capMarket, capPortfolio, capCorrelation)</code>
+        <p><code>q_adj</code> Utiliser la confiance pour réduire la probabilité du modèle à 50 %,<code>lambda</code> Remise pour Kelly fractionnée. Les positions doivent alors être limitées par la capacité du marché, la corrélation du portefeuille, les plafonds de pertes quotidiennes et les budgets des utilisateurs.</p>
+      </div>
+      <h3>4.4 Marché complet mutuellement exclusif : identification de l’arbitrage et des risques à partir de la somme des prix</h3>
+      <p>
+        Dans un marché à résultats multiples mutuellement exclusif et complet, tel que le vainqueur d'une présidentielle, la propriété d'un championnat, le résultat d'un intervalle, etc., la somme des probabilités réelles de tous les résultats devrait être proche de 1. Les documents d'arbitrage utilisent souvent cette structure pour détecter les incohérences de prix : si la demande totale d'achat de tous les résultats est inférieure à 1, il existe théoriquement une marge bénéficiaire pour « acheter le panier entier » ; si l'offre totale pouvant être vendue est supérieure à 1, il peut y avoir un signal d'arbitrage inversé ou de surévaluation. Cependant, le trading réel doit déterminer si les transactions peuvent être effectuées en même temps, si les ventes à découvert sont autorisées, s'il existe un risque d'annulation/de règlement et si la profondeur du marché est suffisante.
+      </p>
+      <div class="formula">
+        <code>Underround: Σ ask_i + fees + slippage &lt; 1</code>
+        <code>profitFloor_buyBasket = 1 - Σ ask_i - fees - slippage - settlementRisk</code>
+        <code>Overround: Σ bid_i - fees - slippage &gt; 1, if sell/short/redeem path exists</code>
+        <code>executable = profitFloor &gt; 0 and min(depth_i) &gt; targetSize and rules_i are consistent</code>
+        <p>Causeway ne réduit pas l'arbitrage complet mutuellement exclusif à un problème mathématique, mais l'utilise comme contrôle de cohérence pour le graphique du marché : recherchez d'abord les anomalies de prix, puis vérifiez la profondeur, les règles, les chemins de règlement et d'exécution.</p>
+      </div>
+      <h3>4.5 Cohérence sémantique cross-market : du « même événement » à la « carte complète du marché »</h3>
+      <p>
+        Modern Polymarket n'est pas un ensemble de marchés isolés, mais un réseau sémantique composé d'événements, d'entités, de fenêtres horaires, de textes de règles et de conditions de résultats. Un marché peut logiquement impliquer un autre marché : par exemple, « le candidat remporte l'élection présidentielle » implique « le candidat a encore une chance de participer aux élections générales après avoir remporté l'investiture de son parti », et une certaine équipe « remporte le championnat » implique que sa probabilité « d'accéder aux finales/éliminatoires » ne devrait pas être inférieure. Si le prix sur le marché sous-jacent est trop supérieur à celui du marché contenu, le système doit le signaler comme étant sémantiquement incohérent ou potentiellement mal évalué. La littérature sur l'arbitrage sémantique et l'arbitrage de marché prédictif fournie par les utilisateurs de Polymarket soutient l'orientation du Market Graph de Causeway : l'avantage de l'IA est de lire le texte des règles, d'identifier les relations implicites et de les transformer en contraintes calculables.
+      </p>
+      <div class="formula">
+        <code>If event B implies event A, then P(B) ≤ P(A)</code>
+        <code>violation = max(0, p_exec(B) - p_exec(A) - costMargin - ruleRiskMargin)</code>
+        <code>semanticEdge = violation * relationConfidence * min(liquidityScore_A, liquidityScore_B)</code>
+        <code>tradeableSemanticEdge = semanticEdge only if both markets share compatible resolution rules</code>
+        <p>La clé ici n'est pas de laisser le modèle « deviner », mais de faire en sorte que le modèle génère un type de relation vérifiable : implique, mutuellement exclusif, lié, causal, de même source ou sans rapport.</p>
+      </div>
+      <h3>4.6 Cas : Comment Causeway transfère la valeur du papier au produit</h3>
+      <table>
+        <thead><tr><th>Cas académiques/de marché</th><th>valeur traditionnelle</th><th>L’approche de Causeway en matière de production</th></tr></thead>
+        <tbody>
+          <tr><td>marché électoral</td><td>Price regroupe les sondages, les actualités, le jugement des traders et l'appétit pour le risque en cotes en temps réel.</td><td>Cartographiez les candidats, les États, les partis, les nominations, la participation et les événements macroéconomiques dans un graphique de marché pour identifier quels marchés ont déjà reflété l'actualité et quels marchés associés sont à la traîne.</td></tr>
+          <tr><td>Publications macroéconomiques</td><td>Des événements tels que l'IPC, les taux d'intérêt, l'emploi, la récession, etc. peuvent utiliser les prix contractuels pour former des attentes en temps réel.</td><td>Écrivez l'heure de publication des données, les attentes du consensus, les révisions historiques, les déclarations de la Fed et les réactions des actifs dans l'objet source pour générer une liste d'observations stratégiques « avant les données/après les données ».</td></tr>
+          <tr><td>Champion sportif/gagnant de l'événement</td><td>La somme des prix des résultats complets mutuellement exclusifs peut être utilisée pour détecter les anomalies de sur-tour, de sous-tour et de handicap.</td><td>Calculez automatiquement les règles sumAsk, sumBid, de profondeur et de règlement pour le même groupe de résultats, offrant ainsi une mise en œuvre plutôt qu'un simple arbitrage théorique.</td></tr>
+          <tr><td>Arbitrage sémantique polymarché</td><td>Plusieurs marchés portant des titres différents mais des résultats mutuellement implicites peuvent avoir des probabilités incohérentes.</td><td>Utilisez l'IA pour analyser le texte de la règle, établir des bords impliquant/mutuellement exclusifs/corrélés, puis utilisez violationScore pour trier les opportunités potentielles.</td></tr>
+          <tr><td>Liquidité faible et marchés bruyants</td><td>Les prix peuvent s'écarter des vraies probabilités en raison de petites transactions, de spreads ou d'informations insuffisantes.</td><td>Mettez liquidScore, spreadRisk, sourceRisk et confiance dans signalScore et les opportunités de faible qualité sont automatiquement rétrogradées à WATCH ou AVOID.</td></tr>
+        </tbody>
+      </table>
+      <h3>4.7 Évaluation des performances : ne vous contentez pas de regarder PnL</h3>
+      <p>
+        Les signaux de l’IA peuvent facilement devenir des examens post-hoc si seuls des cas lucratifs sont présentés. Causeway doit évaluer le modèle avec des mesures d'étalonnage et des fonctions de notation couramment utilisées dans les études de marché prédictives, et pas seulement dans les comptes de résultat. Le score Brier mesure l'erreur quadratique d'une prédiction de probabilité par rapport au résultat réel ; Log Loss pénalise fortement les erreurs de haute confiance ; et le seau d'étalonnage vérifie si "l'IA dit que 70 % des événements se produisent réellement environ 70 % du temps". L’importance d’Arc Proof devient ici très simple : elle permet de verrouiller à l’avance chaque jugement de probabilité, rendant ainsi les évaluations de performances plus crédibles.
+      </p>
+      <div class="formula">
+        <code>Brier_mean = mean((q_ai - y)^2)</code>
+        <code>LogLoss_mean = mean(-[y * ln(q_ai + eps) + (1 - y) * ln(1 - q_ai + eps)])</code>
+        <code>CalibrationError = Σ_k n_k / N * |mean(q_ai in bucket k) - mean(y in bucket k)|</code>
+        <code>signalScore = z(edgeNet) + z(confidence) + z(liquidity) - z(spreadRisk) - z(sourceRisk) - z(correlationRisk)</code>
+        <p>La valeur à long terme provient d’étalonnages stables et reproductibles, et non d’une seule prédiction. L'enregistrement des signaux de Causeway doit simultanément montrer les performances post-événement en termes de précision, d'étalonnage, de PnL, de retrait, de taux d'exécution et d'opportunités manquées.</p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">05 / Définition du produit</p>
+      <h2>Définitions des produits Causeway</h2>
+      <p>
+        Causeway est une couche d'intelligence commerciale pour le marché de prédiction. Il s'adresse aux utilisateurs qui souhaitent comprendre, rechercher et exécuter des opportunités de marché de prévision, en fournissant un flux de travail complet allant des données complètes du marché au raisonnement de l'IA, de l'identification des opportunités de trading à l'exécution de la confirmation de l'utilisateur, de la trace du raisonnement à la preuve d'Arc, du signal unique au suivi des performances.
+      </p>
+      <table>
+        <thead>
+          <tr><th>Hiérarchie</th><th>Fonction</th><th>valeur utilisateur</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Base de données du marché</td><td>Synchronisez les événements, les marchés, les résultats, les jetons, les prix, la liquidité, les règles et le statut de Polymarket.</td><td>Laissez l’IA et les utilisateurs comprendre d’abord les véritables objets échangeables.</td></tr>
+          <tr><td>réseau de marché</td><td>Créez un graphique de marché basé sur des événements, des balises, la sémantique, la corrélation des prix et l'inférence de l'IA.</td><td>Transformez les marchés des listes en réseaux probabilistes consultables.</td></tr>
+          <tr><td>Moteur d'inférence IA</td><td>Générez des marchés pertinents, des chemins de causalité, des niveaux de confiance et des actions par défaut à partir du résultat racine.</td><td>Convertissez les « idées de marché » en scripts révisables.</td></tr>
+          <tr><td>Couche d'intelligence transactionnelle</td><td>Calculez les cotes du marché, les cotes équitables de l'IA, l'avantage, le risque, les recommandations de position et ACHETER/REGARDER/ÉVITER.</td><td>Laissez l’IA participer réellement au jugement des transactions au lieu de simplement interpréter le texte.</td></tr>
+          <tr><td>Couche d’aperçu de commande</td><td>Générez des aperçus d'ordres secs ou réels CLOB, actualisez les marchés, vérifiez les limites et attendez les signatures des utilisateurs.</td><td>Connectez l’inférence à l’exécution réelle tout en préservant les limites de contrôle.</td></tr>
+          <tr><td>Couche vérifiable d'arc</td><td>Écrivez le hachage de trace de raisonnement dans Arc Testnet et vérifiez que les données d'appel sont cohérentes avec la trace d'origine.</td><td>Prouvez que le dossier de raisonnement existe au préalable, réduisant ainsi les risques de falsification ultérieure.</td></tr>
+          <tr><td>couche de suivi des performances</td><td>Suivez les signaux, les commandes, les positions, les changements de prix, le PnL et les résultats finaux.</td><td>Un système qui fait passer les capacités de l’IA de la démonstration à l’évaluation durable.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Les limites de la chaussée sont tout aussi importantes. Par défaut, le système ne conserve pas les clés privées des utilisateurs, ne contourne pas les signatures des utilisateurs et n'intègre pas les résultats de l'IA dans les conseils d'investissement. L’IA est chargée d’élargir les arguments du marché, d’identifier les voies, de proposer des risques et de générer des aperçus ; les utilisateurs sont responsables de confirmer s'ils doivent agir, dans quelle mesure agir, quand s'arrêter et s'ils doivent ouvrir des ordres limités à l'avenir.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">06 / Ce que nous avons résolu</p>
+      <h2>Quels problèmes avons-nous résolus ?</h2>
+      <h3>6.1 Cartographie des données de marché et des jetons de résultats</h3>
+      <p>
+        Causeway a clairement fait la distinction entre les « titres de marché » et les « jetons de résultats réels négociables ». Le modèle de données système contient <code>PolymarketEvent</code>、<code>PolymarketMarket</code>、<code>PolymarketOutcome</code>、<code>clobTokenId</code>, prix, meilleure offre, meilleure demande, dernière transaction, spread, volume, liquidité, taille minimale de l'ordre et taille du tick. Cela résout le problème de l'IA ou du marketing frontal qui confond le marketing avec une simple copie Oui/Non.
+      </p>
+      <h3>6.2 Du résultat racine au script causal</h3>
+      <p>
+        Les utilisateurs peuvent sélectionner un marché racine et un résultat racine, et le système génère une exécution d'inférence d'IA basée sur le marché candidat. Le résultat n’est pas une recommandation d’une seule phrase, mais un résultat structuré contenant des nœuds, des bords, des avertissements, impactDirection, une recommandation de confiance, de raison et de résultat. Le backend le convertit ensuite en script causal, en marché de script et en sélection de résultats de script, permettant aux utilisateurs de les examiner et de les modifier un par un.
+      </p>
+      <h3>6.3 Boucle fermée de prévisualisation de la commande et de confirmation de l'utilisateur</h3>
+      <p>
+        Distinction des couches d'ordre de Causeway <code>dry_run</code> et <code>real</code> mode d'exécution. Le système peut générer des aperçus de commandes, actualiser les carnets de commandes, vérifier les soldes et les capacités de négociation, préparer les charges utiles de signature EIP-712 et soumettre des commandes réelles via Polymarket CLOB. Lorsque les fonctionnalités réelles ne sont pas disponibles, les protocoles front-end et back-end restent cohérents, empêchant le produit d'interrompre la démonstration et le développement en raison d'une seule dépendance externe.
+      </p>
+      <h3>6.4 Attribution du constructeur Polymarket</h3>
+      <p>
+        Le programme Polymarket Builder permet aux applications d'ajouter du code de constructeur aux structures de commande afin d'obtenir l'attribution des commandes et les statistiques du classement des constructeurs. La boucle fermée de l'activité de Causeway peut être construite sur « l'IA découvre et explique les opportunités, les utilisateurs conservent le contrôle du portefeuille et confirment personnellement les transactions, et les transactions réelles sont attribuées via le code du constructeur. » Ceci est plus adapté aux scénarios de trading de prédiction sur le marché qu’à un modèle d’abonnement pur.
+      </p>
+      <h3>6.5 Preuve de trace du raisonnement sur l'arc</h3>
+      <p>
+        L'implémentation actuelle de Causeway inclut déjà le module Arc Proof. Le système peut lire un certain script causal et construire <code>causeway.reasoning_trace.v1</code> La capsule regroupe le hachage d'entrée d'inférence, le hachage de sortie, la version du modèle, la version d'invite, l'instantané du marché, la sélection des résultats et le graphique de script, génère un hachage de trace et l'ancre via les données d'appel de transaction Arc Testnet. Le backend vérifiera le signataire de la transaction, le chainId et les données d'appel pour garantir que les enregistrements de la chaîne sont cohérents avec la trace d'origine.
+      </p>
+      <h3>6.6 Paiements des primes Arc USDC</h3>
+      <p>
+        Causeway met également en œuvre l'intention de paiement Arc USDC et le droit d'adhésion. Les utilisateurs peuvent payer Arc USDC pour une fonctionnalité premium, et le backend vérifie le montant du paiement, le payeur, le bénéficiaire, l'état de la transaction et la fenêtre horaire en lisant le reçu de transaction Arc et le journal de transfert USDC avant d'activer l'adhésion premium. Ce mécanisme peut être utilisé pour des fonctionnalités telles que des modèles avancés, un raisonnement plus approfondi, des traces de raisonnement plus complètes et la preuve Arc ; à l'avenir, il pourra également être combiné avec les appels de service x402 réglés sur Arc, de sorte que les abonnements des membres, les rapports à la carte, les appels API et le déverrouillage des capacités des agents partagent le même ensemble d'enregistrements de paiement vérifiables.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">07 / Architecture</p>
+      <h2>Architecture du système et modèle de données</h2>
+      <h3>7.1 Pile technologique</h3>
+      <table>
+        <thead><tr><th>module</th><th>Orientation actuelle de la mise en œuvre</th><th>effet</th></tr></thead>
+        <tbody>
+          <tr><td>L'extrémité avant</td><td>React + Vite + RainbowKit + wagmi + viem + React Flow</td><td>Réseau de marché, connexion au portefeuille, graphique d'inférence, aperçu des commandes, panneau Arc Proof.</td></tr>
+          <tr><td>API</td><td>NestJS + Prisma + PostgreSQL</td><td>Synchronisation du marché, inférence IA, scripts, commandes, portefeuilles, paiements, preuve Arc.</td></tr>
+          <tr><td>Polymarché</td><td>API Gamma + API CLOB/Data + Relais Builder</td><td>Données de marché, jetons de résultat, carnets de commandes, commandes de signature et attribution du constructeur.</td></tr>
+          <tr><td>AI</td><td>Invite structurée + schéma de sortie + cache</td><td>Générez des diagrammes de cause à effet, des résultats recommandés, des niveaux de confiance, des risques et des scripts.</td></tr>
+          <tr><td>Arc</td><td>Arc Testnet + client public/portefeuille viem + vérification des paiements USDC</td><td>Preuve de trace du raisonnement, paiement de la prime, base économique de l'agent.</td></tr>
+        </tbody>
+      </table>
+      <h3>7.2 Objets de données</h3>
+      <p>
+        Les objets de données de base de Causeway sont conçus autour des « marchés échangeables » et du « raisonnement vérifiable ». L'objet marché est chargé d'exprimer avec précision la structure de Polymarket, l'objet de raisonnement est responsable de l'enregistrement des entrées et des sorties de l'IA, l'objet de script est responsable de la conversion du raisonnement en un plan d'action modifiable par l'utilisateur, l'objet de commande est responsable de la connexion des transactions réelles et l'objet de preuve Arc est chargé de prouver que l'enregistrement de raisonnement existe à un moment précis.
+      </p>
+      <div class="grid-2">
+        <div class="note"><span class="small-label">Objet de marché</span><b>véritable structure du marché</b><p>Contient l'événement, le marché, le résultat, le conditionId, le questionId, le clobTokenId, le prix, la liquidité et les règles.</p></div>
+        <div class="note"><span class="small-label">Objet d'inférence</span><b>Enregistrement d'inférence IA</b><p>Il s'agit du résultat racine, de l'ensemble des candidats, de la version rapide, du modèle, d'inputJson, de sortieJson, de cacheKey.</p></div>
+        <div class="note"><span class="small-label">Script causal</span><b>Script d'action modifiable</b><p>Contient graphJson, les marchés de scripts, les sélections de résultats, userAction, orderMode et justification.</p></div>
+        <div class="note"><span class="small-label">Capsule résistante aux arcs</span><b>preuve d'inférence vérifiable</b><p>Contient le hachage de trace, les données d'appel, le chainId, le txHash, l'URL ArcScan et l'horodatage de l'ancre.</p></div>
+      </div>
+      <h3>7.3 Principes architecturaux</h3>
+      <ul>
+        <li><strong>Le marché d'abord :</strong>Assurez-vous que la structure du marché, les jetons de résultats et les carnets de commandes sont fiables avant de développer des sources d'informations externes.</li>
+        <li><strong>IA structurée :</strong>La sortie de l’IA doit être conforme au schéma et ne peut pas simplement renvoyer le langage naturel.</li>
+        <li><strong>Gouverné par l'homme :</strong>L'IA peut générer des scripts par défaut, mais les utilisateurs peuvent les modifier, les ignorer, les prévisualiser ou les rejeter.</li>
+        <li><strong>Prêt à l'épreuve :</strong>Les enregistrements de raisonnement clés doivent être hachés, examinés et ancrés pour soutenir l'évaluation des performances après l'événement.</li>
+        <li><strong>Capacité de repli :</strong>Lorsque les transactions, soldes, paiements ou API externes réels ne sont pas disponibles, le système doit renvoyer un statut de capacité structurée au lieu de planter.</li>
+      </ul>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">08 / Intelligence des traders</p>
+      <h2>AI Trader Intelligence : de la probabilité à l'aperçu de l'action</h2>
+      <h3>8.1 Les signaux ne doivent pas être simplement « acheter » ou « ne pas acheter »</h3>
+      <p>
+        Un système d’intelligence de marché prédictif mature ne devrait pas donner de recommandations commerciales pour tous les marchés. De nombreux marchés devraient faire attention ou éviter : par exemple, il n'y a pas assez d'avantages, une liquidité insuffisante, les spreads sont trop larges, les règles ne sont pas claires, les sources d'informations ne sont pas vérifiées, les utilisateurs ont déjà des expositions fortement corrélées, le marché est sur le point de prendre fin ou la confiance dans l'IA est insuffisante. Aucun commerce recommandé est une compétence en soi car elle démontre un système faisant preuve de retenue et de sensibilisation aux risques.
+      </p>
+      <h3>8.2 Objet signal</h3>
+      <table>
+        <thead><tr><th>Champ</th><th>illustrer</th></tr></thead>
+        <tbody>
+          <tr><td>identifiant du signal</td><td>ID de signal unique pour le suivi et l’évaluation des performances.</td></tr>
+          <tr><td>cotes du marché</td><td>Le prix du marché implique des probabilités.</td></tr>
+          <tr><td>aiFairOdds</td><td>L'IA fournit des probabilités équitables basées sur les données du marché, les cheminements de raisonnement et la vérification des sources d'informations.</td></tr>
+          <tr><td>bord</td><td>La différence entre les cotes équitables de l’IA et les cotes du marché.</td></tr>
+          <tr><td>confiance</td><td>La confiance du modèle dans le chemin d'inférence et la qualité des données.</td></tr>
+          <tr><td>recommandation</td><td>ACHETER, REGARDER, ÉVITER et VÉRIFIER D'ABORD.</td></tr>
+          <tr><td>Niveau de risque</td><td>Faible, Moyen, Élevé, soumis à la liquidité, aux règles, aux sources, à la volatilité et aux expositions associées.</td></tr>
+          <tr><td>Taille suggérée</td><td>Montant recommandé basé sur un Kelly conservateur, le plafond budgétaire et la capacité du marché.</td></tr>
+          <tr><td>changerMonesprit</td><td>Quels changements factuels annuleraient les recommandations actuelles.</td></tr>
+        </tbody>
+      </table>
+      <h3>8.3 Du diagramme de cause à effet à la recommandation de position</h3>
+      <p>
+        Les recommandations de position de Causeway ne doivent pas être des montants fixes, mais doivent être déterminées par une combinaison de facteurs : taille de l'avantage, confiance, profondeur du marché, spread, appétit pour le risque des utilisateurs, corrélation du marché, capitalisation boursière unique et budget global. Le modèle conservateur Kelly peut être utilisé comme cadre de base, mais des facteurs d'actualisation et des limites supérieures doivent être ajoutés pour éviter que le modèle ne parie trop dans des scénarios de forte incertitude.
+      </p>
+      <div class="callout">
+        <strong>Principes conservateurs :</strong>
+        Les positions recommandées doivent être des « budgets de risque explicables », et non des promesses de rendement. Le système doit clairement afficher la perte maximale, le prix de la transaction, le dérapage, le délai d'expiration et les conditions qui déclenchent la réévaluation.
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">09 / Preuve d'arc</p>
+      <h2>Arc Proof : enregistrements vérifiables du raisonnement de l'IA</h2>
+      <h3>9.1 Pourquoi le raisonnement nécessite une preuve en chaîne</h3>
+      <p>
+        Le cœur des marchés de prédiction est que l’avenir vérifiera les jugements d’aujourd’hui. Par conséquent, la crédibilité d’un signal d’IA ne vient pas seulement du modèle lui-même, mais aussi de « s’il peut prouver qu’il a porté ce jugement avant que le résultat ne se produise ». Si un système peut modifier les traces de raisonnement historiques après la publication des résultats, alors tout enregistrement de précision du signal, de PnL ou de performances manque de base de confiance.
+      </p>
+      <p>
+        Le rôle d'Arc Proof n'est pas de remplacer le lien de trading Polymarket, ni de déplacer les commandes des utilisateurs vers Arc. Polymarket est toujours responsable des transactions de marché et CLOB ; Arc est chargé d'enregistrer le hachage des traces de raisonnement de l'IA en tant que couche d'audit peu coûteuse, rapide et native pour les pièces stables.
+      </p>
+      <h3>9.2 Causeway 的 Capsule résistante aux arcs</h3>
+      <table>
+        <thead><tr><th>Champ</th><th>signification</th></tr></thead>
+        <tbody>
+          <tr><td>schéma</td><td><code>causeway.reasoning_trace.v1</code></td></tr>
+          <tr><td>scriptId / inferenceRunId</td><td>Scripts et exécutions d'inférence correspondants.</td></tr>
+          <tr><td>rootMarketId/rootOutcomeId</td><td>Marché racine et résultat racine sélectionnés par l'utilisateur.</td></tr>
+          <tr><td>inputHash / sortieHash</td><td>Hachage JSON stable des entrées et sorties AI.</td></tr>
+          <tr><td>modèle / promptVersion / sortieSchemaVersion</td><td>Versions du modèle, de l'invite et du format de sortie.</td></tr>
+          <tr><td>instantanés du marché</td><td>价格、meilleure offre、meilleure demande、dernière transaction、volume、liquidité、syncedAt。</td></tr>
+          <tr><td>sélections</td><td>Action IA, action utilisateur, mode de commande, prix limite, taille, montant en USD et raison.</td></tr>
+          <tr><td>traceHash</td><td>Le hachage de la capsule entière, utilisé comme données d'appel de transaction Arc.</td></tr>
+        </tbody>
+      </table>
+      <h3>9.3 Processus de vérification</h3>
+      <ol>
+        <li>Le backend lit les scripts utilisateur et les enregistrements d'inférence pour créer une capsule de preuve.</li>
+        <li>Générer à l'aide d'un hachage JSON stable <code>traceHash</code>。</li>
+        <li>Le frontal demande à l'utilisateur de passer à Arc Testnet et envoie une transaction avec les données d'appel étant traceHash.</li>
+        <li>Le backend attend le reçu de la transaction et lit l'entrée de la transaction.</li>
+        <li>Vérifiez que le signataire est cohérent avec le portefeuille connecté, que le chainId est Arc Testnet et que les données d'appel sont cohérentes avec traceHash.</li>
+        <li>Écrivez txHash, traceHash, ArcScan URL et AnchoredAt pour auditer les enregistrements.</li>
+      </ol>
+      <div class="callout">
+        <strong>Signification du produit :</strong>
+        Arc Proof permet à Causeway de montrer que « cet enregistrement d'inférence d'IA existait à un moment donné et n'a pas été réécrit silencieusement par la suite ». C’est la base pour faire confiance aux performances des signaux d’IA sur les marchés de prédiction.
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">10/Arc USDC Économie</p>
+      <h2>Arc USDC Premium : abonnements des membres, paiements vérifiables et économie intelligente</h2>
+      <p>
+        La conception native du stablecoin d'Arc convient aux activités économiques intelligentes peu coûteuses, vérifiables et fréquentes. Causeway a actuellement implémenté l'intention de paiement Arc USDC : une fois que l'utilisateur a sélectionné le plan premium, le système génère l'intention de paiement, en spécifiant le chainId, le jeton USDC, le récepteurAddress, le montantMicroUsd et l'heure d'expiration ; une fois que l'utilisateur a terminé le transfert USDC sur Arc, le backend lit le reçu de transaction et le journal de transfert ERC-20 pour vérification, et mappe le résultat du paiement aux droits du membre. Au stade actuel, les abonnements sont principalement utilisés pour débloquer des signaux avancés, des traces d'inférence complètes, des preuves d'arc et des capacités d'analyse de niveau supérieur ; à l'avenir, Causeway pourra également utiliser les appels de service x402 réglés sur Arc pour unifier les abonnements, le paiement à la séance, le déverrouillage de rapports, les appels API et les achats de capacités d'agent dans un cadre de paiement plus précis.
+      </p>
+      <h3>10.1 Fonctionnalités Premium actuellement prises en charge</h3>
+      <div class="grid-2">
+        <div class="note"><span class="small-label">Signal Premium</span><b>signalisation avancée</b><p>Bénéficiez d’inférences plus approfondies, de modèles de meilleure qualité, d’une confiance plus étroite et d’une portée complète du marché candidat.</p></div>
+        <div class="note"><span class="small-label">Trace de raisonnement complète</span><b>Piste de raisonnement complète</b><p>Affichez les entrées, les sorties, les marchés candidats, les risques, les contre-exemples et ce qui pourrait me faire changer d'avis.</p></div>
+        <div class="note"><span class="small-label">Preuve d'arc</span><b>Preuve en chaîne</b><p>Ancrez le hachage de trace de raisonnement à Arc Testnet et affichez les transactions via ArcScan.</p></div>
+        <div class="note"><span class="small-label">Futur x402</span><b>Appel de service d'agent</b><p>Accès futur au processus x402 facturé sur Arc pour les achats de données, le déverrouillage de rapports, les appels API et les abonnements aux politiques.</p></div>
+      </div>
+      <h3>Arc 10.2 : Raisonnement vérifiable et couche de règlement de l’économie des agents</h3>
+      <p>
+        La valeur d'Arc pour Causeway n'est pas de remplacer le lien de transaction de Polymarket, mais de fournir une couche économique et d'audit à faible coût, vérifiable et stable, pour les systèmes d'IA de prédiction du marché. Polymarket est responsable de l'appariement du marché, du carnet d'ordres, du règlement des résultats et de l'exécution réelle des transactions ; Causeway est responsable de la compréhension du marché, du raisonnement de l'IA, de la prévisualisation des risques, de la confirmation des utilisateurs et du suivi des signaux ; Arc est adapté pour effectuer des actions auxiliaires qui sont élevées en fréquence, de faible montant, doivent être enregistrées, doivent être vérifiées et sont naturellement tarifées en dollars américains, telles que le dépôt de trace de raisonnement, l'abonnement premium, le déverrouillage de rapports, l'appel API, le règlement du service d'agent intelligent et le paiement futur de la source de données.
+      </p>
+      <p>
+        Pour sa version actuelle, Arc répond d’abord à deux problématiques clés. Premièrement, l’inférence de l’IA nécessite des horodatages vérifiables. Le jugement du marché des prédictions sera vérifié par les résultats futurs. Si le système ne peut pas prouver qu'un certain enregistrement d'inférence a été généré avant que le résultat ne se produise, la crédibilité de l'historique du signal sera considérablement réduite. Causeway écrit le hachage de la trace de raisonnement dans Arc, afin que chaque jugement de l'IA puisse former une capsule de preuve légère. Deuxièmement, les capacités de l’IA nécessitent un chemin de paiement natif pour les pièces stables. Le raisonnement avancé, les pistes de raisonnement complètes, l'analyse des graphiques de marché, les appels API et les services de reporting sont tous adaptés au règlement de petits montants, en temps réel et vérifiable avec l'USDC.
+      </p>
+      <p>
+        À moyen terme, Arc peut aider Causeway à constituer une économie du signal plus complète. Chaque inférence de l'IA peut être considérée comme un actif de signal traçable : elle comprend le temps de génération, l'instantané d'entrée, la version du modèle, le prix du marché, les cotes équitables de l'IA, les bords, les explications des risques, les actions de l'utilisateur et les résultats finaux. Si ces signaux s'accumulent au fil du temps et que les hachages de clés sont ancrés à Arc, Causeway peut établir un enregistrement de suivi de signal fiable. À l’avenir, les utilisateurs n’achèteront pas une seule fois une réponse IA, mais s’abonneront à des stratégies, des rapports, des cartes de marché, des sources de données et des capacités d’agents professionnels éprouvés.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">Couche de service d'agent 11/x402</p>
+      <h2>Couche de service d'agent x402 : future couche de protocole de service d'agent</h2>
+      <p>
+        x402 ne doit pas être positionné comme un protocole d'exécution de transactions dans Causeway, mais comme un protocole d'invocation de service d'agent et de micropaiement. Sa valeur réside dans le fait de permettre aux agents d'IA, aux API externes, aux sources de données et aux services d'analyse professionnels d'effectuer des règlements à la carte via des demandes de paiement lisibles par machine. Pour Causeway, x402 peut devenir la future couche de service d'agent : Arc fournit des enregistrements vérifiables et un environnement de règlement stable, x402 fournit des processus d'accès et de paiement de l'agent au service, et Causeway est responsable de l'orchestration de la carte du marché, de la gouvernance des autorités, du contrôle des risques, de la prévisualisation des commandes et du suivi des performances.
+      </p>
+      <h3>11.1 Sources de données payantes, validation et reporting</h3>
+      <p>
+        Causeway aura besoin à l'avenir de flux d'actualités, de données sportives, de données macro, de données en chaîne, d'annonces réglementaires, d'annonces d'entreprises, de données de cotes et de vérification de la source originale. De nombreuses données ne conviennent pas aux abonnements mensuels fixes, mais conviennent mieux aux appels à la demande lorsque l'inférence de l'IA en a besoin : vérification d'une publication de l'IPC, achat de données sur les blessures de l'équipe, demande d'analyse des flux de capitaux en chaîne, vérification de la source d'origine des informations et génération d'un rapport sur les différences entre les règles du marché. x402 peut transformer ces appels en comportements de paiement instantanés, précis et vérifiables, plutôt que de s'appuyer sur des clés API manuelles, des points centralisés ou un règlement hors ligne.
+      </p>
+      <h3>11.2 Marché de l’intelligence professionnelle</h3>
+      <p>
+        Lorsque Causeway évolue d'un outil de raisonnement d'IA unique à un système de prédiction multi-agents, le système peut introduire des agents professionnels externes : agent de recherche macro, agent de blessures sportives, agent de presse politique, agent de flux de capitaux en chaîne, agent d'arbitrage de handicap, agent de vérification de source, agent de risque et gardien d'exécution. Chaque agent peut se forger une réputation grâce à des antécédents à long terme, des capacités d'étalonnage, des performances historiques en termes de rendement et de risque, une vitesse de réponse, une couverture de sources de données et des enregistrements à l'épreuve des arcs. x402 peut être responsable du contrôle d'accès et du paiement au temps de chaque appel de service.
+      </p>
+      <h3>11.3 Marché des signaux et monétisation des API</h3>
+      <p>
+        À l'avenir, Causeway pourra exposer des signaux de haute qualité, des graphiques de marché, des rapports sur les risques, des marchés associés, des analyses d'arbitrage sémantique et le statut de preuve Arc en tant qu'API payantes pour des applications ou des agents externes. Les appelants ne sont pas tenus d’être membres à part entière et peuvent acheter des fonctionnalités spécifiques sur demande. Arc enregistre la preuve, le paiement et la réputation, x402 gère l'accès payant et Causeway affiche les performances du signal et les résultats d'étalonnage. Ainsi, les revenus de Causeway ne proviennent pas uniquement des abonnements, mais également d'un réseau de services intelligents composables.
+      </p>
+      <h3>11.4 La forme à long terme du trading limité sur commission de l’IA</h3>
+      <p>
+        À un stade plus avancé, les utilisateurs peuvent désigner des agents éprouvés et matures pour participer au processus automatisé de transaction commandé par l’IA. Cependant, x402 lui-même n'assume pas de responsabilités en matière de conservation des actifs, d'autorisation des transactions ou de contrôle des risques ; il est responsable de l’invocation du service d’agent intelligent et de la couche de micropaiement. Les véritables transactions commandées doivent être superposées par Causeway avec des limites d'autorité : catégories de marché autorisées pour la négociation, montant maximum d'une transaction unique, limite de perte quotidienne, exposition pertinente maximale, EdgeNet minimum, liquidité minimale, glissement maximum, étapes de vérification nécessaires, délai d'expiration, arrêt d'urgence et autorisation révocable. Chaque appel de données, génération d'inférence, demande de vérification, aperçu d'ordre ou exécution de transaction doit laisser une preuve d'arc et un enregistrement de suivi de signal.
+      </p>
+      <div class="callout">
+        <strong>Positionnement futur :</strong>
+        Arc est une preuve, un enregistrement de paiement et un substrat de réputation ;
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">12/ Moteur de prédiction d’essaims</p>
+      <h2>Moteur de prédiction Swarm : d'un monde de marché parallèle à tout prédire</h2>
+      <p>
+        L’objectif à long terme de Causeway n’est pas de laisser une seule IA porter un jugement unique sur un marché, mais de créer un moteur de prédiction intelligent de groupe pour les marchés de prédiction. Notre jugement est que la prédiction d’événements complexes ne devrait pas s’appuyer sur un raisonnement à chemin unique, mais devrait partir des informations initiales du monde réel et construire un monde de marché parallèle évolutif, permettant à plusieurs agents intelligents avec des rôles, des mémoires, des positions et une logique comportementale différents d’interagir, de diverger, de réfuter, de réviser et de générer des prédictions. Causeway limitera cette déduction de l'intelligence en essaim à un « réseau de marché de prédiction négociable, vérifiable et réglable » afin que les résultats de simulation puissent non seulement former des rapports narratifs, mais également être convertis en cotes de marché, cotes équitables de l'IA, edgeNet, budgets de risque, aperçus de commandes, preuve d'arc et enregistrement de signal.
+      </p>
+      <h3>12.1 De l'inférence d'un modèle unique à la prédiction de l'intelligence en essaim</h3>
+      <p>
+        Un modèle unique convient pour générer des jugements initiaux, mais le monde complexe est souvent déterminé par de multiples agents, de multiples motivations, de multiples retards d’information et de multiples réactions du marché. Des données macro, une blessure sportive, une annonce réglementaire, un événement en chaîne ou une actualité politique peuvent affecter simultanément plusieurs entités, plusieurs fenêtres temporelles et plusieurs marchés de prédiction interconnectés. L’intérêt du moteur de prédiction de l’intelligence par essaim est de permettre à plusieurs agents de jouer les rôles de recherche, de suspicion, de vérification, de tarification, de contrôle des risques et d’exécution, et d’effectuer plusieurs séries de déductions sur la même carte du marché, réduisant ainsi les biais à chemin unique et l’excès de confiance.
+      </p>
+      <figure class="concept-figure">
+        <div class="concept-figure-frame">
+          <img src="../../public/assets/causeway-swarm-prediction-engine-concept.png" alt="Schéma conceptuel du moteur de prédiction par intelligence collective de Causeway" />
+        </div>
+        <figcaption class="caption">Figure 12-1 : Diagramme conceptuel du moteur de prédiction de l’intelligence des essaims de Causeway. Une fois que les événements du monde réel sont entrés dans le monde du marché parallèle, les agents multi-rôles, les cartes de marché, Arc Proof, le service d'agent x402 et Signal Track Record forment conjointement une boucle fermée de prédiction vérifiable.</figcaption>
+      </figure>
+      <h3>12.2 Monde de marché parallèle</h3>
+      <p>
+        Causeway peut transformer un événement réel en plusieurs mondes de marché parallèles. Chaque monde contient des hypothèses différentes : si l'événement est réel, si la source est fiable, à quelle vitesse il se propage, si le marché l'a reflété, si le marché concerné est en retard, si la liquidité est suffisante et s'il y a une ambiguïté dans les règles. Le système ne se contente pas de demander « cet événement se produira-t-il ? mais demande "si cet événement se produit, comment passera-t-il à travers le réseau de marché, quelles cotes seront modifiées, quels bords seront créés, quels risques seront déclenchés et quels enregistrements vérifiables seront laissés derrière". Ce monde de marché parallèle est le jugement principal de Causeway sur les futurs systèmes de prévision : la prévision ne doit pas seulement répondre « si quelque chose va se produire », mais doit simuler la façon dont les événements se propagent sur plusieurs marchés, plusieurs participants, plusieurs sources d'informations et plusieurs fenêtres temporelles, et transformer ce processus de propagation en objets d'intelligence de marché auditables, calculables et vérifiables.
+      </p>
+      <h3>12.3 Société d'agents : collaboration d'agents multi-rôles</h3>
+      <table>
+        <thead><tr><th>rôle d'agent</th><th>Responsabilités</th><th>objet de sortie</th></tr></thead>
+        <tbody>
+          <tr><td>Agent de recherche</td><td>Recueillez les événements, les marchés, les cas historiques et le contexte.</td><td>sourceObjects、résumé de l'événement、candidats du marché。</td></tr>
+          <tr><td>Agent de graphique de marché</td><td>Recherchez les marchés connexes, les implications sémantiques, les relations mutuellement exclusives et les expositions associées.</td><td>graphique du marché, type de relation, direction de l'impact.</td></tr>
+          <tr><td>Agent de probabilité</td><td>Les estimations de probabilité sont données sur la base de scénarios et de preuves.</td><td>AI cotes équitables, changement de probabilité, confiance.</td></tr>
+          <tr><td>Agent sceptique</td><td>Recherchez des contre-exemples, des ambiguïtés dans les règles, de fausses sources et des inférences excessives.</td><td>contre-arguments、changeMyMind、indicateurs de risque。</td></tr>
+          <tr><td>Agent de vérification</td><td>Remontez aux faits sous-jacents et aux sources faisant autorité.</td><td>état de vérification, confiance de la source, rapport de conflit.</td></tr>
+          <tr><td>Agent de risque</td><td>Calculez la liquidité, les spreads, le slippage, les corrélations et les limites de position.</td><td>edgeNet, budget de risque, plafond de position.</td></tr>
+          <tr><td>Garde d'exécution</td><td>Déterminez s’il faut autoriser la prévisualisation des ordres ou l’exécution des commissions.</td><td>ACHETER/REGARDER/ÉVITER、porte d'aperçu de la commande、arrêt d'urgence。</td></tr>
+          <tr><td>Agent de signalement</td><td>Convertissez les désaccords et les conclusions multi-agents en rapports lisibles.</td><td>rapport de prédiction, arbre de scénario, résumé d'audit.</td></tr>
+        </tbody>
+      </table>
+      <h3>12.4 Des rapports de simulation au trading d'objets intelligents</h3>
+      <p>
+        Les résultats de l’intelligence en essaim ne peuvent pas s’arrêter aux rapports en langage naturel. Causeway doit compresser les résultats de la simulation en objets intelligents de trading structurés : arbre de scénarios, marchés concernés, bords de relation, changement de probabilité, cotes équitables de l'IA, cotes du marché, edgeNet, action recommandée, indicateurs de risque, taille suggérée, hachage de preuve d'arc et entrée d'historique. De cette manière, l’intelligence par essaim peut servir à la fois à la recherche et à l’examen, à la vérification et à la confirmation des utilisateurs avant les transactions réelles.
+      </p>
+      <div class="formula">
+        <code>scenarioValue_s = Σ_i edgeNet_i,s * tradability_i,s * confidence_s - portfolioRisk_s</code>
+        <code>swarmConsensus = weightedMedian(q_agent_1, q_agent_2, ..., q_agent_n; weights = reputation * calibration)</code>
+        <code>disagreementRisk = variance(q_agent_1 ... q_agent_n) + sourceConflict + ruleAmbiguity</code>
+        <code>finalAction = gate(swarmConsensus, edgeNet, disagreementRisk, liquidity, userPolicy)</code>
+        <p>Plutôt que de simplement voter, l'intelligence par essaim combine les enregistrements d'étalonnage, la qualité de la source, le degré de désaccord et l'applicabilité sur le marché des différents agents en recommandations d'action soumises au contrôle des risques.</p>
+      </div>
+      <h3>12.5 Relation avec Arc et x402</h3>
+      <p>
+        Le moteur de prédiction Swarm nécessite des enregistrements vérifiables et des paiements composables. Arc peut enregistrer le hachage de chaque simulation, inférence, signal et résultat, de sorte que l'intelligence en essaim ne soit pas une histoire emballée après coup ; x402 peut fournir un paiement par appel et un micro-paiement pour des sources de données externes, des services de vérification, des agents professionnels et des rapports approfondis ; Causeway est responsable de l'orchestration de ces capacités, de la cartographie des résultats des agents avec les objets de marché de prédiction, les limites de contrôle des risques, les aperçus des commandes et les processus de gouvernance des utilisateurs. À long terme, Arc est la base d'enregistrement et de règlement fiable, x402 est le protocole d'invocation de service d'agent intelligent et Swarm Prediction Engine est la couche intelligente permettant de déduire les changements mondiaux.
+      </p>
+      <h3>12.6 Vision à long terme : tout prévoir mais maintenir la gouvernance des utilisateurs</h3>
+      <p>
+        Ce que Causeway appelle « tout prédire » n'est pas pour permettre à l'IA de placer des paris automatiques illimités, mais pour permettre aux utilisateurs de saisir un événement réel. Le système peut comprendre le marché, organiser les agents, construire un monde de marché parallèle, vérifier les faits, simuler les chemins de propagation, générer des signaux négociables, conserver des preuves et laisser l'utilisateur décider d'agir ou non. À l’avenir, lorsque les capacités des agents, le système de réputation et le mécanisme d’autorisation seront suffisamment matures, les utilisateurs pourront choisir de déléguer une partie du processus à des agents vérifiés ; mais les limites par défaut devraient toujours être la gouvernance des utilisateurs, les autorisations révocables, des budgets clairs et un audit complet.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">13 / Flux de travail</p>
+      <h2>Flux de travail utilisateur et expérience produit</h2>
+      <h3>13.1 Procédures standards</h3>
+      <ol>
+        <li>Les utilisateurs connectent le portefeuille et entrent dans le réseau de marché.</li>
+        <li>Le système affiche les événements, les marchés, les résultats, les prix, les volumes et les marchés associés de Polymarket.</li>
+        <li>L'utilisateur sélectionne un résultat racine comme point de départ de l'inférence.</li>
+        <li>Le système rappelle les marchés candidats et construit une saisie rapide par l'IA.</li>
+        <li>L'IA génère des diagrammes de cause à effet, des recommandations de résultats, des avertissements et de la confiance.</li>
+        <li>Le système génère des scripts causals et les utilisateurs les examinent, les modifient ou les ignorent un par un.</li>
+        <li>Les utilisateurs accèdent à l'aperçu de la commande et vérifient le carnet de commandes, le montant, la perte maximale, le bénéfice estimé et l'état de la capacité.</li>
+        <li>Soumission d’un essai à sec ou d’une véritable signature CLOB après confirmation de l’utilisateur.</li>
+        <li>Les utilisateurs peuvent ancrer les traces de raisonnement à Arc Testnet.</li>
+        <li>Le système suit les modifications de prix, l'état des commandes, le PnL et les résultats finaux dans le Signal Track Record.</li>
+      </ol>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">14/ Gouvernance</p>
+      <h2>Limites du contrôle des risques, de la gouvernance et de la conformité</h2>
+      <h3>14.1 Matrice de contrôle des risques</h3>
+      <table>
+        <thead><tr><th>catégorie de risque</th><th>questions spécifiques</th><th>Méthode de contrôle</th></tr></thead>
+        <tbody>
+          <tr><td>Risque lié aux données</td><td>Retards dans les données de marché, erreurs de cartographie des résultats, indisponibilité du carnet d’ordres.</td><td>Temps de synchronisation, vérification du tokenId, actualisation en temps réel, repli des capacités.</td></tr>
+          <tr><td>risque informationnel</td><td>Erreurs journalistiques, rumeurs sur les réseaux sociaux, interprétation erronée de sources secondaires.</td><td>Objet source, bibliothèque source faisant autorité, détection de conflits, score de fraîcheur.</td></tr>
+          <tr><td>risque de raisonnement</td><td>Hallucinations de l’IA, excès de confiance, contre-exemples manquants.</td><td>Contraintes définies par le candidat, vérification structurée, agent sceptique, seuil de confiance.</td></tr>
+          <tr><td>risque de marché</td><td>Spreads excessifs, liquidité insuffisante et expositions liées au marché mutuellement exclusives.</td><td>Profondeur du handicap, positions conservatrices, contrôle des risques du portefeuille au niveau des événements et statut No Trade.</td></tr>
+          <tr><td>risque d'exécution</td><td>Les utilisateurs se connectent par erreur, soumettent des commandes en double et les commandes expirent.</td><td>Expiration de l'aperçu, clé d'idempotence, confirmation avant signature, réécriture du statut de soumission.</td></tr>
+          <tr><td>risque d'audit</td><td>Les enregistrements de signaux ne peuvent pas prouver une existence antérieure.</td><td>Preuve d'arc, hachage, événement d'audit, enregistrement du signal.</td></tr>
+        </tbody>
+      </table>
+      <h3>14.2 Limites par défaut</h3>
+      <ul>
+        <li>Les résultats de l’IA ne constituent pas un conseil en investissement.</li>
+        <li>Le système ne garantit pas l'exactitude des prévisions, des bénéfices ou des résultats du marché.</li>
+        <li>Le mode par défaut est la confirmation de l'utilisateur plutôt que le placement automatique de la commande.</li>
+        <li>L’exécution déléguée devra être mise en œuvre à l’avenir avec une autorisation explicite, des budgets clairs, des limites de portée et des mécanismes de révocation.</li>
+        <li>Le trading en direct, le trading simulé et les signaux non exécutés doivent être clairement distingués dans l'interface utilisateur et les données.</li>
+      </ul>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">15 / Problèmes futurs</p>
+      <h2>Problèmes qui doivent être résolus à l'avenir et comment nous pouvons les résoudre</h2>
+      <h3>15.1 Problème : temps réel et authenticité insuffisants des sources d'informations externes</h3>
+      <p>
+        L’étape actuelle repose en grande partie sur les données du marché et sur des ensembles de candidats contrôlés. Dans la phase suivante, Causeway doit accéder aux flux d'informations en temps réel, aux annonces officielles, aux événements en chaîne, aux données sportives et aux documents réglementaires. Mais plus il y a de sources d’informations externes, plus le bruit est grand. La solution est la standardisation de l'objet source : divisez chaque élément d'information en revendication, origine, horodatage, entités, rawPayload et confiance, et entrez dans le flux de travail via une bibliothèque source faisant autorité et la détection des conflits.
+      </p>
+      <h3>15.2 Problème : le raisonnement sur un modèle unique ne peut pas couvrir le monde complexe</h3>
+      <p>
+        Un modèle unique est sujet à une voie unique et à une surdétermination. La solution à long terme de Causeway est le raisonnement multi-agents et le moteur de prédiction Swarm : l'agent de recherche est responsable de la collecte du contexte du marché et des événements, l'agent de probabilité donne des estimations de probabilité, l'agent sceptique recherche des contre-exemples, l'agent de vérification vérifie les sources, l'agent de risque détermine la liquidité et les positions, et Execution Guard détermine s'il convient d'autoriser l'accès à l'aperçu. Le multi-agent ne consiste pas à montrer des compétences, mais à rendre explicites les désaccords, les hypothèses, la qualité des preuves et les risques, et à cartographier l'évolution multivoie d'un monde complexe en plans de réponse du marché révisables.
+      </p>
+      <h3>15.3 Problème : la performance du signal ne peut pas être prouvée en permanence</h3>
+      <p>
+        Sans antécédents à long terme, les recommandations de l’IA peuvent facilement rester affichées à court terme. Causeway doit enregistrer le temps de génération, le prix du marché, les cotes équitables de l'IA, l'avantage, la direction recommandée, si l'utilisateur exécute, le prix d'exécution, le prix actuel, les profits et pertes non réalisés, le résultat final et la preuve d'arc pour chaque signal. Ce n’est qu’à ce moment-là que le système pourra répondre « si l’IA fonctionne vraiment ? »
+      </p>
+      <h3>15.4 Problème : L'exécution automatisée nécessite une gouvernance plus forte</h3>
+      <p>
+        La cinquième étape de l’exécution déléguée ne consiste pas à permettre à l’IA de contrôler les comptes sans restrictions, mais à permettre aux utilisateurs d’autoriser de manière sélective selon des règles claires. L'autorisation doit contenir la catégorie de marché, le montant unique maximum, la limite de perte quotidienne, l'exposition maximale pertinente, les sources de données acceptables, la fenêtre temporelle, les conditions de révocation et l'arrêt d'urgence. À l'avenir, si les utilisateurs désignent des agents matures pour participer au processus automatisé, x402 pourra être responsable de l'appel de service d'agent et du micropaiement, Arc pourra être responsable de la certification et de l'enregistrement, et Causeway pourra être responsable de la gouvernance des autorités et du contrôle des risques. Les transactions réelles doivent toujours être conformes à l'autorisation de l'utilisateur et aux limites révocables.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">16 / Feuille de route</p>
+      <h2>Feuille de route technologique en cinq étapes</h2>
+      <div class="phase-card">
+        <span class="tag dark">Phase 01</span><span class="tag">Fondation de données de marché</span>
+        <h3>Comprendre le marché d'abord, puis comprendre le monde</h3>
+        <p>
+          La première phase se concentre sur les données du marché Polymarket : événement, marché, résultat, tokenId, prix, volume, liquidité, carnet d'ordres, règles et statut. L'objectif est de permettre au système d'exprimer de manière stable des structures négociables réelles et d'aider les utilisateurs à sélectionner le résultat racine sur la page de détails du marché pour saisir l'inférence.
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag dark">Phase 02</span><span class="tag">Modèle de raisonnement</span>
+        <h3>Cartographier un événement sur tous les marchés pertinents</h3>
+        <p>
+          Créez des modèles d'inférence plus solides pour fournir pertinence, orientation, confiance, négociabilité et recommandations pour les marchés pertinents. Présentation de BUY / WATCH / AVOID, What Could Change My Mind, des recommandations de position conservatrices et une vérification des divergences multi-agents pour que l'IA ressemble davantage à une équipe de recherche commerciale et moins à un chatbot.
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag dark">Phase 03</span><span class="tag">Génération de scénarios en temps réel</span>
+        <h3>Transformez les flux d’informations en manuels de réponse à l’échelle du marché</h3>
+        <p>
+          Accédez aux flux d'événements en temps réel, extrayez automatiquement les entités, les sujets, les types d'événements et les chemins d'impact, et générez des scripts de réponse sur l'ensemble du marché. Le système devrait afficher les marchés concernés, les signaux de confirmation manquants, le statut de risque et les flux de travail recommandés, et étendre progressivement la déduction des événements à des simulations de marchés parallèles plutôt qu'à des ordres directs.
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag dark">Phase 04</span><span class="tag">Vérification et preuve d'arc</span>
+        <h3>Demandez des preuves avant de placer un pari et conservez les preuves après raisonnement.</h3>
+        <p>
+          Créez une bibliothèque de sources de données faisant autorité pour retracer automatiquement les faits sous-jacents ; en même temps, écrivez les hachages de traces de raisonnement clés dans Arc pour former un enregistrement historique vérifiable. L’objectif de cette phase est d’unifier rapidité, authenticité et auditabilité.
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag dark">Phase 05</span><span class="tag">Exécution déléguée de l'IA</span>
+        <h3>L'utilisateur délègue éventuellement une exécution limitée</h3>
+        <p>
+          Une fois que les autorisations, le budget, le temps, la portée du marché et les mécanismes de révocation sont arrivés à maturité, les utilisateurs peuvent choisir de faire fonctionner l'IA dans des conditions limitées. À l'avenir, les utilisateurs pourront également désigner des agents expérimentés et expérimentés pour participer au processus de délégation afin de compléter la vérification des données, l'évaluation des risques et le règlement au paiement au temps assisté par exécution via x402 ; cette fonctionnalité doit être désactivée par défaut et régie par des mécanismes de preuve Arc, d'audit complet, d'arrêt d'urgence et d'expiration des autorisations.
+        </p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">17/ Modèle économique</p>
+      <h2>Modèle économique et capture de valeur</h2>
+      <h3>17.1 Modèle de revenus</h3>
+      <table>
+        <thead><tr><th>modèle</th><th>illustrer</th><th>Étape applicable</th></tr></thead>
+        <tbody>
+          <tr><td>Abonnement Premium</td><td>Déverrouillage actuel de modèles avancés, d'un raisonnement plus approfondi, d'une trace complète du raisonnement, de capacités de preuve et de surveillance Arc avec l'intention de paiement Arc USDC ; extensible au paiement par appel x402 et aux packages de fonctionnalités basés sur le règlement Arc à l'avenir.</td><td>Phases 1 à 3</td></tr>
+          <tr><td>Attribution du constructeur</td><td>Les utilisateurs confirment les commandes réelles de Polymarket via Causeway et les transactions sont attribuées via le code du constructeur.</td><td>Phases 1 à 5</td></tr>
+          <tr><td>API de signaux</td><td>Fournit des API de signaux structurés, de graphiques de marché et d’historique aux chercheurs, aux points finaux et aux systèmes politiques.</td><td>Phases 2-4</td></tr>
+          <tr><td>Espace de travail d'équipe</td><td>Fournit des bibliothèques de collaboration, d'autorisations, d'audit, de reporting, de budgétisation des risques et de politiques aux équipes.</td><td>Phases 3 à 5</td></tr>
+          <tr><td>Couche de service de l'agent x402</td><td>L’avenir permettra des sources de données externes, des services de validation, des agents professionnels et des rapports approfondis via x402 pour un paiement par accès et des micropaiements lisibles par machine.</td><td>Phases 3 à 5</td></tr>
+          <tr><td>Rapports de prévision d’essaims</td><td>Générez des rapports prévisionnels professionnels basés sur des mondes de marché parallèles et des débats multi-agents, vendus par marché, événement ou thème.</td><td>Phases 3 à 5</td></tr>
+          <tr><td>Marché des agents</td><td>L'avenir permettra aux agents professionnels, aux sources de vérification, aux modèles de reporting et aux modules de politique de s'installer avec x402 via Arc USDC et de bâtir une réputation basée sur des antécédents vérifiables.</td><td>Phases 4-5</td></tr>
+        </tbody>
+      </table>
+      <h3>17.2 Volant de valeur</h3>
+      <p>
+        Plus de données de marché apportent une carte de marché plus complète ; une carte plus complète améliore la qualité du raisonnement de l’IA ; un raisonnement de meilleure qualité attire davantage d’utilisateurs pour générer de véritables commentaires ; plus de retours constituent un historique de signal ; des antécédents vérifiables améliorent la confiance ; la confiance apporte des services premium, API, d'équipe, d'agent x402, des rapports de prévision d'essaim et des revenus d'attribution de constructeur ; les revenus soutiennent à leur tour de meilleures sources de données, modèles, agents de vérification, systèmes de simulation d’essaims et systèmes de contrôle des risques.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">18 / Douves & KPI</p>
+      <h2>Fossés, indicateurs et conclusions</h2>
+      <h3>18.1 Douves</h3>
+      <ul>
+        <li><strong>Compréhension de la structure du marché :</strong>Modélisation approfondie des événements, des marchés, des jetons de résultat, des CLOB et des limites d'ordres.</li>
+        <li><strong>Boucle fermée de données d'inférence :</strong>Lien complet entre l'exécution d'inférence et le script causal, l'intention de commande, la preuve Arc et les antécédents.</li>
+        <li><strong>Capacités de prédiction de l’intelligence en essaim :</strong>Combinez la division du travail multi-agents, le monde du marché parallèle, l’arbre de scénarios et la carte du marché pour former un rapport prévisionnel professionnel vérifiable.</li>
+        <li><strong>Historique vérifiable :</strong>La preuve d'arc fait de la performance du signal non seulement un enregistrement de fond, mais un objet vérifiable.</li>
+        <li><strong>Limites de gouvernance des utilisateurs :</strong>Il ne prend pas comme noyau le trading automatique par boîte noire, mais prend comme direction une exécution intelligente contrôlable par l'utilisateur.</li>
+        <li><strong>Entrée économique intelligente :</strong>Arc USDC premium et la future couche de service d'agent x402 constituent la base d'un règlement restreint, fréquent et vérifiable des capacités d'IA.</li>
+      </ul>
+      <h3>18.2 Indicateurs de base</h3>
+      <table class="kpi">
+        <tbody>
+          <tr><td>Couverture du marché</td><td>Nombre de marchés synchronisés, couverture active du marché et précision de la cartographie des jetons de résultats.</td></tr>
+          <tr><td>Qualité d'inférence</td><td>Taux de réussite de l'inférence, taux de réussite de la vérification du schéma, rapport de signal effectif, ratio de non-échange.</td></tr>
+          <tr><td>Qualité de l'essaim</td><td>Divergence des agents, consensus pondéré par calibrage, couverture de scène, taux de réussite des contre-exemples, performances d'examen des rapports de prédiction.</td></tr>
+          <tr><td>Entonnoir utilisateur</td><td>Visualisation du marché, démarrage de l'inférence, enregistrement du script, aperçu des commandes, confirmation de l'utilisateur et transaction réelle.</td></tr>
+          <tr><td>Adoption de la preuve d’arc</td><td>Nombre de générations de preuves, nombre d'ancres, taux de réussite de la vérification, taux de clics ArcScan.</td></tr>
+          <tr><td>Historique des signaux</td><td>Changement de prix après signal, précision finale, PnL, taux d'exécution des utilisateurs, taux de réussite des recommandations de sortie.</td></tr>
+          <tr><td>Économie</td><td>Taux de conversion premium, taux de réussite des paiements USDC, durées d'appel x402, GMV du service d'agent, volume attribué au constructeur, revenus de l'API.</td></tr>
+        </tbody>
+      </table>
+      <h3>18.3 Conclusion</h3>
+      <p>
+        La valeur de Causeway ne réside pas dans le fait de permettre aux utilisateurs de cliquer plus rapidement sur le bouton de trading, mais dans l'établissement d'une couche d'infrastructure intelligente et fiable pour les marchés de prédiction. Il relie la structure du marché, le raisonnement de l’IA, la prévisualisation des risques, la confirmation des utilisateurs, la certification Arc et le suivi des performances dans une boucle fermée. À court terme, cela permet aux utilisateurs de mieux comprendre et exécuter le marché Polymarket ; à moyen terme, il devient une couche de signaux de marché prévisionnels vérifiable ; à long terme, il peut évoluer vers un moteur de prédiction d'intelligence en essaim, simuler la propagation d'événements réels sur plusieurs marchés et produire des rapports de prédiction professionnels.
+      </p>
+      <div class="callout">
+        <strong>Vision finale :</strong>
+        Causeway n'est pas un « outil de pari automatisé », mais une première forme de « moteur d'intelligence collective qui prédit tout » : l'utilisateur saisit un événement, le système comprend le marché, organise les agents, construit un monde de marché parallèle, vérifie les faits, simule des chemins, génère des signaux, conserve des preuves et l'utilisateur décide d'agir ou non. À long terme, Arc est responsable de la base d'enregistrement et de règlement fiable, x402 est responsable de l'invocation du service d'agent intelligent et Causeway est responsable de l'orchestration intelligente des marchés de prédiction.
+      </div>
+    </section>
+
+    <section>
+      <p class="eyebrow">19 / Références</p>
+      <h2>Références</h2>
+      <div class="source-list">
+        <p>1. Wolfers, Justin et Eric Zitzewitz, <em>Marchés de prédiction</em>, Journal des perspectives économiques, 2004. https://pubs.aeaweb.org/doi/pdfplus/10.1257/0895330041371321</p>
+        <p>2. Snowberg, Erik, Justin Wolfers et Eric Zitzewitz, <em>Marchés de prédiction pour les prévisions économiques</em>, Document de travail du NBER 18222, 2012. https://www.nber.org/system/files/working_papers/w18222/w18222.pdf</p>
+        <p>3. Document de travail du Wharton Rodney L. White Center, étude de marché prévisionnelle, 2006. https://rodneywhitecenter.wharton.upenn.edu/wp-content/uploads/2014/04/0608.pdf</p>
+        <p>4. Cao, document d'étude de marché prédictif, archives de l'Association néo-zélandaise des économistes. https://www.nzae.org.nz/wp-content/uploads/2014/05/Cao.pdf</p>
+        <p>5. Archives d'articles du Journal of Prediction Markets, recherche sur les marchés de prédiction et d'arbitrage. https://www.ubplj.org/index.php/jpm/article/view/1796</p>
+        <p>6. <em>Commerce d'arbitrage sur les marchés de prédiction</em>, archives de recherche. https://www.researchgate.net/publication/262875038_Arbitrage_trade_in_prediction_markets</p>
+        <p>7. Préimpression arXiv sur l'arbitrage de marché prédictif moderne et les dépendances sémantiques du marché. https://arxiv.org/pdf/2508.03474.pdf</p>
+        <p>8. KPMG, <em>Marchés de prédiction : voies d’entrée</em>, 2026. https://kpmg.com/kpmg-us/content/dam/kpmg/pdf/2026/prediction-markets-paths-to-entry.pdf</p>
+        <p>9. CoinDesk, <em>Polymarket résout le contrat pour l'élection présidentielle</em>, 2024. https://www.coondesk.com/markets/2024/11/06/polymarket-resolves-presidential-election-contract</p>
+        <p>10. Axios, <em>Polymarket obtient un gros investissement de la société mère de la Bourse de New York</em>, 2025. https://www.axios.com/2025/10/07/polymarket-new-york-stock-exchange</p>
+        <p>11. Documentation Polymarché, <em>Présentation de l'API Gamma Markets</em>. https://docs.polymarket.com/developers/gamma-markets-api/overview</p>
+        <p>12. Documentation Polymarché, <em>Négocier sur le Polymarket CLOB</em>. https://docs.polymarket.com/developers/CLOB/trades/trades-data-api</p>
+        <p>13. Documentation Polymarché, <em>Programme de construction</em>. https://docs.polymarket.com/developers/builders/examples</p>
+        <p>14. Documents Arc, <em>Connectez-vous à Arc</em>. https://docs.arc.io/integrate/connect-to-arc</p>
+        <p>15. Documents Arc, <em>Réseau d'arcs</em>. https://docs.arc.network/arc-chain</p>
+        <p>16. Protocole x402, <em>Protocole de paiement ouvert pour Internet</em>. https://www.x402.org/</p>
+        <p>17. Plateforme de développement Coinbase, <em>x402</em>. https://www.coinbase.com/developer-platform/products/x402/</p>
+        <p>18. Documents Cloudflare, <em>Agents x402</em>. https://developers.cloudflare.com/agents/x402/</p>
+      </div>
+      <div class="disclaimer">
+        Copyright © 2026 Chaussée. Ce document est un projet de livre blanc sur les produits, la technologie et l’économie et ne constitue pas des conseils en investissement, des conseils juridiques, des services de courtage, des engagements de revenus ou des avis réglementaires. Les données de marché et les informations sur l'industrie mentionnées dans cet article proviennent d'informations publiques. Les données réelles peuvent différer en raison du calibre statistique, de la période, de la définition de la plateforme et des changements du marché. Les utilisateurs doivent porter des jugements indépendants et supporter les risques associés à la prévision du marché.
+      </div>
+    </section>
+  </body>
+</html>

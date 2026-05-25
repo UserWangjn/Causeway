@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Causeway Technical & Economic Whitepaper v0.5 ZH</title>
+    <style>
+      @page { size: A4; margin: 13mm 12mm; }
+      :root {
+        --ink: #081b33;
+        --ink-2: #0a2a52;
+        --blue: #1677ff;
+        --cyan: #22c7e8;
+        --green: #14b87a;
+        --amber: #f59e0b;
+        --red: #ef4444;
+        --muted: #53657d;
+        --line: #d8e6f5;
+        --soft: #f5faff;
+        --paper: #ffffff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+        font-size: 10pt;
+        line-height: 1.56;
+      }
+      h1, h2, h3, h4, p { margin-top: 0; }
+      h1 { margin: 0 0 18px; font-size: 42pt; line-height: .96; letter-spacing: 0; }
+      h2 { margin: 0 0 9px; color: var(--ink); font-size: 18pt; line-height: 1.12; break-after: avoid; }
+      h3 { margin: 13px 0 5px; color: var(--ink-2); font-size: 11.8pt; line-height: 1.22; break-after: avoid; }
+      h4 { margin: 10px 0 4px; color: var(--ink); font-size: 10.6pt; line-height: 1.25; }
+      p { margin-bottom: 6px; }
+      ul, ol { margin: 5px 0 8px 18px; padding: 0; }
+      li { margin: 2px 0; }
+      table { width: 100%; border-collapse: collapse; margin: 8px 0 10px; break-inside: avoid; }
+      th, td { border: 1px solid var(--line); padding: 5px 6px; text-align: left; vertical-align: top; }
+      th { background: var(--soft); color: var(--ink); font-weight: 800; }
+      code { font-family: Consolas, "SFMono-Regular", monospace; font-size: 9.3pt; color: var(--ink-2); }
+      .cover { min-height: 255mm; display: flex; flex-direction: column; justify-content: space-between; break-after: page; position: relative; }
+      .cover::before {
+        content: "";
+        position: absolute;
+        inset: -13mm -12mm;
+        z-index: -1;
+        background:
+          linear-gradient(rgba(8, 27, 51, .035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(8, 27, 51, .035) 1px, transparent 1px),
+          radial-gradient(circle at 76% 16%, rgba(22, 119, 255, .17), transparent 34%),
+          radial-gradient(circle at 22% 82%, rgba(34, 199, 232, .12), transparent 30%),
+          #fff;
+        background-size: 26px 26px, 26px 26px, auto, auto, auto;
+      }
+      .brand img { width: 168px; height: auto; margin-bottom: 46px; }
+      .eyebrow { margin: 0 0 13px; color: var(--blue); font-size: 8.8pt; font-weight: 900; letter-spacing: .11em; text-transform: uppercase; }
+      .subtitle { max-width: 650px; color: #273b57; font-size: 15.2pt; line-height: 1.56; }
+      .meta-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; margin-top: 28px; }
+      .meta-grid div, .callout, .principle, .phase-card, .note, .metric-card, .source-card {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: rgba(245, 250, 255, .82);
+        padding: 8px;
+      }
+      .meta-grid span, .small-label { display: block; color: var(--muted); font-size: 8pt; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+      .meta-grid b { display: block; margin-top: 4px; font-size: 10.5pt; }
+      .page { break-after: auto; margin-bottom: 8mm; }
+      .toc { columns: 2; column-gap: 26px; }
+      .toc p { break-inside: avoid; border-bottom: 1px solid var(--line); margin: 0 0 7px; padding-bottom: 6px; font-weight: 720; }
+      .callout { margin: 8px 0 10px; border-left: 4px solid var(--blue); background: #f5faff; }
+      .callout strong { color: var(--blue); }
+      .warning { border-left-color: var(--amber); background: #fff8ed; }
+      .warning strong { color: #a15c00; }
+      .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+      .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+      .principle, .metric-card { min-height: 88px; break-inside: avoid; }
+      .principle b, .metric-card b, .note b { display: block; margin: 4px 0 6px; color: var(--ink); font-size: 11.2pt; }
+      .principle p, .phase-card p, .note p, .metric-card p, .source-card p { margin-bottom: 0; color: #273b57; font-size: 8.9pt; line-height: 1.45; }
+      .phase-card { break-inside: avoid; margin-bottom: 6px; }
+      .phase-card h3 { margin-top: 4px; }
+      .tag {
+        display: inline-block;
+        margin: 0 5px 5px 0;
+        border: 1px solid #bcd7ff;
+        border-radius: 999px;
+        background: #eef6ff;
+        color: var(--blue);
+        padding: 2px 8px;
+        font-size: 8pt;
+        font-weight: 800;
+      }
+      .tag.dark { border-color: var(--ink); background: var(--ink); color: #fff; }
+      .hero-image { overflow: hidden; border: 1px solid rgba(22,119,255,.22); border-radius: 10px; height: 96mm; margin: 14px 0; background: #06162b; }
+      .hero-image img { width: 100%; height: 100%; object-fit: cover; }
+      .caption { color: var(--muted); font-size: 8pt; }
+      .disclaimer, .footnotes { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 11px; color: var(--muted); font-size: 8.2pt; line-height: 1.52; }
+      .no-break { break-inside: avoid; }
+      .source-list p { margin-bottom: 5px; word-break: break-all; }
+      .kpi td:first-child { width: 24%; font-weight: 800; color: var(--ink-2); }
+      .formula {
+        border: 1px solid var(--line);
+        border-left: 5px solid var(--green);
+        border-radius: 8px;
+        background: #f3fff9;
+        margin: 6px 0 8px;
+        padding: 7px 9px;
+        break-inside: avoid;
+      }
+      .formula code { display: block; margin: 2px 0; color: #07513a; font-size: 8.8pt; }
+      .formula p { margin: 4px 0 0; color: #244a3d; font-size: 8.6pt; line-height: 1.42; }
+    </style>
+  </head>
+  <body>
+    <section class="cover">
+      <div>
+        <div class="brand"><img src="../../public/assets/causeway-lockup-primary.svg" alt="Causeway" /></div>
+        <p class="eyebrow">Technical & Economic Whitepaper</p>
+        <h1>Causeway<br />技术经济白皮书</h1>
+        <p class="subtitle">
+          面向预测市场的 AI 交易智能与可验证推理层：从 Polymarket 市场数据、因果推演、风险预览，走向 Arc 可验证推理、USDC 原生智能体经济与群体智能预测引擎。
+        </p>
+        <div class="meta-grid">
+          <div><span>Version</span><b>v0.5</b></div>
+          <div><span>Date</span><b>2026-05</b></div>
+          <div><span>Status</span><b>Detailed Draft</b></div>
+          <div><span>Scope</span><b>Market + Arc</b></div>
+        </div>
+      </div>
+      <div class="disclaimer">
+        本白皮书用于阐述 Causeway 的市场判断、产品定位、技术架构、Arc 集成、经济模型、风险边界和未来路线图。本文不构成投资建议、法律意见、经纪服务说明、收益承诺或任何形式的自动交易邀约。预测市场具有显著风险，任何真实交易均应由用户基于自身判断主动确认。
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">Table of Contents</p>
+      <h2>目录</h2>
+      <div class="toc">
+        <p>01. 执行摘要</p>
+        <p>02. 市场背景：预测市场进入主流化阶段</p>
+        <p>03. 核心问题：为什么现有预测市场仍缺少智能层</p>
+        <p>04. 学术基础与价值计算框架</p>
+        <p>05. Causeway 的产品定义</p>
+        <p>06. 我们已经解决了什么问题</p>
+        <p>07. 系统架构与数据模型</p>
+        <p>08. AI Trader Intelligence：从概率到行动预览</p>
+        <p>09. Arc Proof：可验证的 AI 推理记录</p>
+        <p>10. Arc USDC Premium：智能体经济与付费能力</p>
+        <p>11. x402 Agent Service Layer：未来智能体服务协议层</p>
+        <p>12. 用户工作流与产品体验</p>
+        <p>13. 风控、治理与合规边界</p>
+        <p>14. 未来需要解决的问题</p>
+        <p>15. 五阶段技术路线图</p>
+        <p>16. 商业模式与价值捕获</p>
+        <p>17. 护城河、指标与结论</p>
+        <p>18. 参考资料</p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">01 / Executive Summary</p>
+      <h2>执行摘要</h2>
+      <p>
+        Causeway 是一个面向预测市场的 AI 交易智能与可验证推理层。它的基本判断是：预测市场正在从“少数加密用户参与的事件下注界面”演化为“面向现实事件、宏观风险、体育、政治、公司事件和链上活动的概率基础设施”。当市场数量、交易量和参与者复杂度上升时，用户需要的不再只是更好看的盘口页面，而是一套能够把事件转化为可审查市场判断的智能系统。
+      </p>
+      <p>
+        当前预测市场界面的核心缺口在于：市场之间的关系没有被结构化，AI 给出的判断缺少可验证推理记录，交易建议缺少风险和仓位约束，用户很难复盘一个信号为什么产生、依据是什么、后来是否正确。Causeway 试图填补这一层空白：从 Polymarket 市场数据出发，构建市场网络，生成因果脚本，输出概率、edge、风险和预览，并把 AI reasoning trace 锚定到 Arc Testnet，使“事前推理”和“事后结果”可以被审计。
+      </p>
+      <div class="callout">
+        <strong>一句话定位：</strong>
+        Causeway turns prediction markets into an AI-readable, AI-reasoned, user-executed, and Arc-verifiable trading intelligence layer.
+      </div>
+      <p>
+        与普通 AI 聊天助手不同，Causeway 的核心产物不是一段无法复盘的自然语言回答，而是结构化的 market intelligence object：根市场、根 outcome token、候选市场、因果边、概率估计、市场隐含概率、edge、BUY / WATCH / AVOID 建议、风险解释、订单预览、用户确认状态、Arc proof hash 和后续绩效记录。系统默认不替用户托管资金，不绕过用户签名，不把 AI 输出包装成投资建议；它提供的是一套可解释、可验证、可治理的预测市场工作流。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">02 / Market Context</p>
+      <h2>市场背景：预测市场进入主流化阶段</h2>
+      <h3>2.1 交易量与机构关注度正在快速上升</h3>
+      <p>
+        预测市场在 2024 年美国大选周期中完成了第一次大规模出圈。CoinDesk 报道称，Polymarket 的 2024 年美国总统选举合约成交量超过 36 亿美元，该市场也使预测市场首次被大规模主流媒体和普通用户关注。到 2025 年，行业增长从单一政治事件扩展到体育、宏观、加密、经济数据、公司事件和文化事件等更多类别。
+      </p>
+      <p>
+        KPMG 在 2026 年关于预测市场进入路径的报告中指出，Kalshi 与 Polymarket 的合计交易量在 2025 年超过 400 亿美元，而 2024 年约为 90 亿美元，年增长超过 400%。该报告还提到，Polymarket 在 2025 年 10 月的月交易量超过 30 亿美元。虽然不同数据源的口径会因平台、成交量定义和时间范围不同而变化，但方向是一致的：预测市场已经从实验性产品进入高增长、强监管关注和机构参与阶段。
+      </p>
+      <h3>2.2 预测市场正在从“交易场所”变成“概率数据层”</h3>
+      <p>
+        ICE（纽约证券交易所母公司）对 Polymarket 的战略投资进一步说明，市场关注的不只是交易手续费，而是事件驱动数据本身。Axios 报道称，ICE 同意向 Polymarket 投资最高 20 亿美元，并将成为 Polymarket 事件驱动数据的全球分销商。这意味着预测市场的价值不只在交易，而在于它把现实世界的不确定性实时转化为可观察的概率数据。
+      </p>
+      <div class="grid-3">
+        <div class="metric-card">
+          <span class="small-label">Market Signal</span>
+          <b>成交量扩大</b>
+          <p>平台交易量从大选周期峰值扩展到多类别常态化交易，市场深度和用户结构更复杂。</p>
+        </div>
+        <div class="metric-card">
+          <span class="small-label">Institutional Signal</span>
+          <b>机构进入</b>
+          <p>交易所、券商、体育平台和金融科技公司正在寻找预测市场入口。</p>
+        </div>
+        <div class="metric-card">
+          <span class="small-label">Data Signal</span>
+          <b>概率数据化</b>
+          <p>预测市场价格正在被重新理解为事件驱动数据，而不只是用户下注结果。</p>
+        </div>
+      </div>
+      <h3>2.3 增长带来的新矛盾</h3>
+      <p>
+        市场扩大后，用户面临的不再是“找不到市场”，而是“无法判断哪些市场值得研究、哪些价格已经反映信息、哪些关联市场存在滞后、哪些信号是噪音”。交易量增长越快，越需要智能层去组织市场关系、解释概率变化、识别错价、控制风险并形成可复盘记录。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">03 / Problem</p>
+      <h2>核心问题：为什么现有预测市场仍缺少智能层</h2>
+      <h3>3.1 问题一：市场是网络，界面却仍是列表</h3>
+      <p>
+        一个现实事件很少只影响一个市场。例如一次美联储表态可能同时影响利率、通胀、美元、加密资产、股指、黄金、选举叙事和相关公司事件；一次体育伤病消息可能影响胜负盘、冠军盘、球员数据盘和同组出线概率。传统界面通常以市场列表、事件页和搜索结果呈现，缺少“事件如何跨市场传播”的结构化表示。
+      </p>
+      <h3>3.2 问题二：市场数据结构复杂，交易对象不是标题</h3>
+      <p>
+        Polymarket 的交易对象不是市场标题，而是 outcome token。官方 Gamma API 中 <code>outcomes</code>、<code>outcomePrices</code> 与 CLOB token ID 存在索引映射关系；同一 event 下也可能存在多个 market。对于用户和 AI 系统而言，如果只理解标题或 Yes/No 文案，就容易在多 outcome 市场、体育市场、区间市场和互斥事件中产生错误映射。
+      </p>
+      <h3>3.3 问题三：AI 推荐缺少可审计性</h3>
+      <p>
+        普通 AI 系统可以生成“建议买 Yes”这样的回答，但这个回答往往缺少输入快照、候选市场范围、prompt 版本、模型版本、输出 schema、推理路径、反例和事后追踪。预测市场的特殊性在于：结果会被未来验证。如果系统无法证明某个判断是在结果发生前生成的，也无法证明后来没有修改推理，那么信号绩效就缺少可信基础。
+      </p>
+      <h3>3.4 问题四：速度与治理之间存在冲突</h3>
+      <p>
+        事件市场的优势在于反应快，但过快也会放大错误信息、幻觉、流动性不足和过度交易风险。一个专业系统不能只追求自动执行，而必须把预览、预算、可交易状态、订单簿刷新、用户确认、审计记录和权限撤销纳入同一流程。
+      </p>
+      <div class="callout warning">
+        <strong>产品判断：</strong>
+        预测市场下一阶段的核心竞争不是“谁有更多市场页面”，而是“谁能把市场价格、AI 推理、真实执行和可验证记录组织成完整智能闭环”。
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">04 / Academic Foundation</p>
+      <h2>学术基础与价值计算框架</h2>
+      <p>
+        预测市场的理论价值来自一个简单但强大的机制：当合约按事件结果支付固定金额时，交易价格可以在一定条件下近似表达市场对事件发生概率的集合判断。Wolfers 与 Zitzewitz 对预测市场的综述指出，预测市场能够把分散信息通过价格聚合成可读信号；Snowberg、Wolfers 与 Zitzewitz 进一步把这种机制用于经济预测场景，说明事件合约价格可以成为宏观和政策不确定性的实时概率表达。Causeway 的价值不是重新发明预测市场，而是在“价格作为概率信号”的基础上，增加 AI 推理、跨市场一致性检测、执行摩擦校正、风险预算和可验证绩效记录。
+      </p>
+      <h3>4.1 价格即概率，但不是无条件真理</h3>
+      <p>
+        对一个二元事件合约而言，如果事件发生时合约支付 1 美元，未发生时支付 0 美元，在风险中性、交易成本较低、流动性充分、参与者能够自由交易的理想条件下，市场价格 <code>p</code> 可以被理解为市场隐含概率。现实预测市场并不总满足这些条件：价差、手续费、滑点、限额、信息噪声、操纵尝试、监管限制和参与者风险偏好都会让价格偏离“真实概率”。因此 Causeway 不把市场价格当作结论，而把它当作第一层可观察信号，再由 AI fair odds、来源求证、流动性检查和风险模型共同解释。
+      </p>
+      <div class="formula">
+        <code>p_mid = (bestBid + bestAsk) / 2</code>
+        <code>p_exec_yes = ask_yes, p_exec_no = ask_no</code>
+        <code>q_ai = calibratedForecast(event | marketSnapshot, sourceObjects, reasoningTrace)</code>
+        <code>rawEdge_mid = q_ai - p_mid</code>
+        <p><code>p_mid</code> 适合展示市场隐含概率，<code>p_exec_yes</code> 才是买入 YES 的真实执行概率门槛。Causeway 应区分“研究用概率”和“可成交概率”，避免用中间价夸大 edge。</p>
+      </div>
+      <h3>4.2 交易价值来自“扣除摩擦后的正期望”</h3>
+      <p>
+        对用户真正有价值的不是“AI 认为概率更高”，而是“在当前可成交价格、手续费、滑点、盘口深度和不确定性折扣之后仍然存在正期望”。这也是预测市场套利研究反复强调的核心：理论上的价格不一致只有在可执行、可结算、扣除成本后仍为正时才构成真实机会。Causeway 因此把机会分成 raw signal、tradable signal 和 executable order preview 三个层级。
+      </p>
+      <div class="formula">
+        <code>EV_token_yes = q_ai * 1 + (1 - q_ai) * 0 - ask_yes - cost_per_token</code>
+        <code>ROI_yes = EV_token_yes / ask_yes</code>
+        <code>edgeNet = q_ai - ask_yes - feeRate - slippageBps - ruleRiskHaircut - sourceRiskHaircut</code>
+        <code>BUY only if edgeNet &gt; minEdge, depthAtLimit &gt; targetSize, timeToClose &gt; minWindow</code>
+        <p>净优势必须同时通过概率、成本、深度和时间窗口约束。若任一约束不足，系统应降级为 WATCH、VERIFY FIRST 或 AVOID。</p>
+      </div>
+      <h3>4.3 仓位建议：用保守 Kelly，而不是冲动下注</h3>
+      <p>
+        在事件合约中，买入价格本身接近最大损失；事件发生时合约价值趋近 1，未发生时趋近 0。Kelly 公式可作为仓位建议的理论起点，但预测市场包含模型误差、流动性不连续、规则解释差异和事件结算风险，因此必须使用折扣版本，并叠加市场容量、组合相关性和用户预算上限。Causeway 输出的是风险预算建议，而不是收益承诺。
+      </p>
+      <div class="formula">
+        <code>q_adj = clamp(0.5 + confidence * (q_ai - 0.5), 0.01, 0.99)</code>
+        <code>b = (1 - p_exec) / p_exec</code>
+        <code>kellyFull = (b * q_adj - (1 - q_adj)) / b = (q_adj - p_exec) / (1 - p_exec)</code>
+        <code>sizeUsd = bankroll * min(max(0, lambda * kellyFull), capMarket, capPortfolio, capCorrelation)</code>
+        <p><code>q_adj</code> 用置信度把模型概率向 50% 回缩，<code>lambda</code> 为 fractional Kelly 折扣。仓位必须再受市场容量、组合相关性、日损失上限和用户预算共同约束。</p>
+      </div>
+      <h3>4.4 互斥完备市场：从价格和识别套利与风险</h3>
+      <p>
+        在总统赢家、冠军归属、区间结果等互斥且完备的多 outcome 市场中，所有 outcome 的真实概率之和应接近 1。套利论文常用这一结构检测价格不一致：如果买入所有 outcome 的总 ask 小于 1，理论上存在“买全篮子”的利润空间；如果可卖出的总 bid 大于 1，则可能存在反向套利或过度定价信号。但真实交易需要考虑是否能同时成交、是否允许做空、是否存在取消/结算风险，以及盘口深度是否足够。
+      </p>
+      <div class="formula">
+        <code>Underround: Σ ask_i + fees + slippage &lt; 1</code>
+        <code>profitFloor_buyBasket = 1 - Σ ask_i - fees - slippage - settlementRisk</code>
+        <code>Overround: Σ bid_i - fees - slippage &gt; 1, if sell/short/redeem path exists</code>
+        <code>executable = profitFloor &gt; 0 and min(depth_i) &gt; targetSize and rules_i are consistent</code>
+        <p>Causeway 不把互斥完备套利简化为数学题，而是把它作为 Market Graph 的一致性检查：先发现价格异常，再验证深度、规则、结算和执行路径。</p>
+      </div>
+      <h3>4.5 跨市场语义一致性：从“同一事件”到“全市场图谱”</h3>
+      <p>
+        现代 Polymarket 不是孤立市场集合，而是一张由事件、实体、时间窗口、规则文本和结果条件构成的语义网络。一个市场可能逻辑蕴含另一个市场：例如“候选人赢得总统大选”蕴含“候选人赢得所在党派提名之后仍有机会进入大选结果”，某个球队“赢得冠军”蕴含其“进入决赛/季后赛”的概率不应更低。若蕴含市场的价格高于被蕴含市场太多，系统应标记为语义不一致或潜在错价。用户提供的 Polymarket 语义套利与预测市场套利文献正好支持 Causeway 的 Market Graph 方向：AI 的优势在于读懂规则文本、识别蕴含关系，并把它们变成可计算约束。
+      </p>
+      <div class="formula">
+        <code>If event B implies event A, then P(B) ≤ P(A)</code>
+        <code>violation = max(0, p_exec(B) - p_exec(A) - costMargin - ruleRiskMargin)</code>
+        <code>semanticEdge = violation * relationConfidence * min(liquidityScore_A, liquidityScore_B)</code>
+        <code>tradeableSemanticEdge = semanticEdge only if both markets share compatible resolution rules</code>
+        <p>这里的关键不是让模型“猜”，而是让模型输出可审查的关系类型：implies、mutually exclusive、correlated、causal、same source 或 unrelated。</p>
+      </div>
+      <h3>4.6 案例：Causeway 如何把论文价值落到产品</h3>
+      <table>
+        <thead><tr><th>学术/市场案例</th><th>传统价值</th><th>Causeway 的产品化方式</th></tr></thead>
+        <tbody>
+          <tr><td>选举市场</td><td>价格把民调、新闻、交易者判断和风险偏好聚合为实时胜率。</td><td>把候选人、州、党派、提名、投票率和宏观事件映射为 market graph，识别哪些盘口已经反映新闻，哪些相关市场滞后。</td></tr>
+          <tr><td>宏观经济发布</td><td>CPI、利率、就业、衰退等事件可用合约价格形成实时预期。</td><td>把数据发布时间、共识预期、历史修正、Fed 表态和资产反应写入 Source Object，生成“数据前/数据后”策略观察清单。</td></tr>
+          <tr><td>体育冠军/赛事赢家</td><td>互斥完备 outcome 的价格和可用于检测 overround、underround 与盘口异常。</td><td>自动计算同组 outcome 的 sumAsk、sumBid、深度和结算规则，给出可执行性而不是只给理论套利。</td></tr>
+          <tr><td>Polymarket 语义套利</td><td>多个标题不同但结果相互蕴含的市场可能出现概率不一致。</td><td>用 AI 解析规则文本，建立 implies / mutually exclusive / correlated 边，再用 violationScore 排序潜在机会。</td></tr>
+          <tr><td>薄流动性与噪声市场</td><td>价格可能因小额交易、价差或信息不足而偏离真实概率。</td><td>把 liquidityScore、spreadRisk、sourceRisk 和 confidence 放入 signalScore，低质量机会自动降级为 WATCH 或 AVOID。</td></tr>
+        </tbody>
+      </table>
+      <h3>4.7 绩效评价：不能只看 PnL</h3>
+      <p>
+        如果只展示赚钱案例，AI 信号很容易变成事后筛选。Causeway 必须用预测市场研究中常用的校准指标和评分函数评估模型，而不仅是账户盈亏。Brier Score 衡量概率预测与实际结果的平方误差；Log Loss 会重罚高置信度错误；calibration bucket 检查“AI 说 70% 的事件是否真的大约发生 70%”。Arc Proof 的意义在这里变得非常直接：它让每个概率判断在事前被锁定，从而让绩效评价更可信。
+      </p>
+      <div class="formula">
+        <code>Brier_mean = mean((q_ai - y)^2)</code>
+        <code>LogLoss_mean = mean(-[y * ln(q_ai + eps) + (1 - y) * ln(1 - q_ai + eps)])</code>
+        <code>CalibrationError = Σ_k n_k / N * |mean(q_ai in bucket k) - mean(y in bucket k)|</code>
+        <code>signalScore = z(edgeNet) + z(confidence) + z(liquidity) - z(spreadRisk) - z(sourceRisk) - z(correlationRisk)</code>
+        <p>长期价值来自可复盘的稳定校准，而不是单次预测命中。Causeway 的 Signal Track Record 应同时展示 accuracy、calibration、PnL、drawdown、执行率和未执行机会的事后表现。</p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">05 / Product Definition</p>
+      <h2>Causeway 的产品定义</h2>
+      <p>
+        Causeway 是一个预测市场 Trader Intelligence Layer。它面向希望理解、研究和执行预测市场机会的用户，提供从全量市场数据到 AI 推理、从交易机会识别到用户确认执行、从 reasoning trace 到 Arc proof、从单次信号到绩效追踪的完整工作流。
+      </p>
+      <table>
+        <thead>
+          <tr><th>层级</th><th>功能</th><th>用户价值</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>市场数据底座</td><td>同步 Polymarket event、market、outcome、token、价格、流动性、规则和状态。</td><td>让 AI 和用户先理解真实可交易对象。</td></tr>
+          <tr><td>市场网络</td><td>基于事件、标签、语义、价格相关性和 AI 推理构建 market graph。</td><td>把市场从列表变成可浏览的概率网络。</td></tr>
+          <tr><td>AI 推理引擎</td><td>从根 outcome 出发生成相关市场、因果路径、置信度和默认动作。</td><td>把“市场想法”转化为可审查脚本。</td></tr>
+          <tr><td>交易智能层</td><td>计算 market odds、AI fair odds、edge、风险、仓位建议和 BUY/WATCH/AVOID。</td><td>让 AI 真正参与交易判断，而不只是解释文本。</td></tr>
+          <tr><td>订单预览层</td><td>生成 dry-run 或真实 CLOB 订单预览，刷新盘口、检查限制、等待用户签名。</td><td>把推理与真实执行连接起来，同时保留控制边界。</td></tr>
+          <tr><td>Arc 可验证层</td><td>把 reasoning trace hash 写入 Arc Testnet，并校验 calldata 与原始 trace 一致。</td><td>证明推理记录在事前存在，减少事后篡改空间。</td></tr>
+          <tr><td>绩效追踪层</td><td>追踪信号、订单、持仓、价格变化、PnL 和最终结果。</td><td>把 AI 能力从演示变成可持续评估的系统。</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Causeway 的边界同样重要。系统默认不保管用户私钥，不替用户绕过签名，不把 AI 输出包装成投资建议。AI 负责扩展市场论点、识别路径、提出风险和生成预览；用户负责确认是否行动、行动多少、何时停止，以及是否在未来开启有限委托。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">06 / What We Have Solved</p>
+      <h2>我们已经解决了什么问题</h2>
+      <h3>6.1 市场数据和 outcome token 映射</h3>
+      <p>
+        Causeway 已经把“市场标题”与“真实可交易 outcome token”明确区分。系统数据模型包含 <code>PolymarketEvent</code>、<code>PolymarketMarket</code>、<code>PolymarketOutcome</code>、<code>clobTokenId</code>、价格、best bid、best ask、last trade、spread、volume、liquidity、order min size 和 tick size 等字段。这解决了 AI 或前端把市场误认为简单 Yes/No 文案的问题。
+      </p>
+      <h3>6.2 从根 outcome 到因果脚本</h3>
+      <p>
+        用户可以选择一个 root market 和 root outcome，系统基于候选市场生成 AI inference run。输出不是单句建议，而是包含 nodes、edges、warnings、impactDirection、confidence、reason 和 outcome recommendation 的结构化结果。后端再将其转化为 causal script、script market 和 script outcome selection，使用户能够逐项审查和修改。
+      </p>
+      <h3>6.3 订单预览与用户确认闭环</h3>
+      <p>
+        Causeway 的订单层区分 <code>dry_run</code> 和 <code>real</code> execution mode。系统可以生成订单预览、刷新 order book、检查余额和交易能力、准备 EIP-712 签名 payload，并通过 Polymarket CLOB 提交真实订单。真实能力不可用时，前后端协议仍保持一致，避免产品因为单一外部依赖而中断演示和开发。
+      </p>
+      <h3>6.4 Polymarket Builder attribution</h3>
+      <p>
+        Polymarket Builder Program 允许应用在订单结构中附加 builder code，以获得订单归因和 builder leaderboard 统计。Causeway 的商业闭环可以建立在“AI 发现和解释机会，用户保留钱包控制权并亲自确认交易，真实成交通过 builder code 归因”之上。这比纯订阅模型更贴合预测市场交易场景。
+      </p>
+      <h3>6.5 Arc reasoning trace proof</h3>
+      <p>
+        Causeway 当前实现版本已经包含 Arc Proof 模块。系统可以读取某个 causal script，构建 <code>causeway.reasoning_trace.v1</code> capsule，将 inference input hash、output hash、模型版本、prompt 版本、市场快照、outcome selection 和脚本图谱打包，生成 trace hash，并通过 Arc Testnet 交易 calldata 锚定。后端会校验交易 signer、chainId 和 calldata，确保链上记录与原始 trace 一致。
+      </p>
+      <h3>6.6 Arc USDC premium payments</h3>
+      <p>
+        Causeway 还实现了 Arc USDC payment intent 和 membership entitlement。用户可以为 premium capability 支付 Arc USDC，后端通过读取 Arc transaction receipt 和 USDC Transfer log 验证付款金额、付款方、收款方、交易状态和时间窗口，再开通 premium membership。该机制可用于高级模型、更深推理、更完整 reasoning trace 和 Arc proof 等能力；未来也可以与在 Arc 上结算的 x402 服务调用结合，使会员订阅、按次报告、API 调用和智能体能力解锁共用同一套可验证支付记录。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">07 / Architecture</p>
+      <h2>系统架构与数据模型</h2>
+      <h3>7.1 技术栈</h3>
+      <table>
+        <thead><tr><th>模块</th><th>当前实现方向</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>Frontend</td><td>React + Vite + RainbowKit + wagmi + viem + React Flow</td><td>市场网络、钱包连接、推理图谱、订单预览、Arc Proof 面板。</td></tr>
+          <tr><td>API</td><td>NestJS + Prisma + PostgreSQL</td><td>市场同步、AI 推理、脚本、订单、投资组合、支付、Arc proof。</td></tr>
+          <tr><td>Polymarket</td><td>Gamma API + CLOB/Data API + Builder Relayer</td><td>市场数据、outcome token、订单簿、签名订单和 builder attribution。</td></tr>
+          <tr><td>AI</td><td>结构化 prompt + output schema + cache</td><td>生成因果图、推荐 outcome、置信度、风险和脚本。</td></tr>
+          <tr><td>Arc</td><td>Arc Testnet + viem public/wallet client + USDC payment verification</td><td>reasoning trace proof、premium payment、智能体经济基础。</td></tr>
+        </tbody>
+      </table>
+      <h3>7.2 数据对象</h3>
+      <p>
+        Causeway 的核心数据对象围绕“可交易市场”和“可审计推理”设计。市场对象负责准确表达 Polymarket 结构，推理对象负责记录 AI 输入输出，脚本对象负责把推理转化为用户可编辑的行动计划，订单对象负责连接真实交易，Arc proof 对象负责证明推理记录在特定时间点存在。
+      </p>
+      <div class="grid-2">
+        <div class="note"><span class="small-label">Market Object</span><b>真实市场结构</b><p>包含 event、market、outcome、conditionId、questionId、clobTokenId、价格、流动性和规则。</p></div>
+        <div class="note"><span class="small-label">Inference Object</span><b>AI 推理记录</b><p>包含 root outcome、candidate set、prompt version、model、inputJson、outputJson、cacheKey。</p></div>
+        <div class="note"><span class="small-label">Causal Script</span><b>可编辑行动脚本</b><p>包含 graphJson、script markets、outcome selections、userAction、orderMode 和理由。</p></div>
+        <div class="note"><span class="small-label">Arc Proof Capsule</span><b>可验证推理证明</b><p>包含 trace hash、calldata、chainId、txHash、ArcScan URL 和 anchor timestamp。</p></div>
+      </div>
+      <h3>7.3 架构原则</h3>
+      <ul>
+        <li><strong>Market-first：</strong>先确保市场结构、outcome token 和订单簿可靠，再扩展外部信息源。</li>
+        <li><strong>Structured AI：</strong>AI 输出必须符合 schema，不能只返回自然语言。</li>
+        <li><strong>Human-governed：</strong>AI 可以生成默认脚本，但用户可以修改、跳过、预览或拒绝。</li>
+        <li><strong>Proof-ready：</strong>关键推理记录应能被 hash、复盘和锚定，支持事后绩效评估。</li>
+        <li><strong>Capability fallback：</strong>真实交易、余额、支付或外部 API 不可用时，系统应返回结构化 capability 状态，而不是崩溃。</li>
+      </ul>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">08 / Trader Intelligence</p>
+      <h2>AI Trader Intelligence：从概率到行动预览</h2>
+      <h3>8.1 信号不应只有“买”或“不买”</h3>
+      <p>
+        一个成熟的预测市场智能系统不应对所有市场给出交易建议。很多市场应该返回 WATCH 或 AVOID：例如 edge 不够、流动性不足、价差太宽、规则不清晰、信息源未求证、用户已有高度相关敞口、市场即将结束或 AI confidence 不足。No Trade Recommended 本身就是能力，因为它表明系统具备克制和风险意识。
+      </p>
+      <h3>8.2 Signal Object</h3>
+      <table>
+        <thead><tr><th>字段</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>signalId</td><td>唯一信号 ID，用于追踪和绩效复盘。</td></tr>
+          <tr><td>marketOdds</td><td>市场价格隐含概率。</td></tr>
+          <tr><td>aiFairOdds</td><td>AI 基于市场数据、推理路径和信息源求证给出的公允概率。</td></tr>
+          <tr><td>edge</td><td>AI fair odds 与 market odds 的差异。</td></tr>
+          <tr><td>confidence</td><td>模型对推理路径和数据质量的置信度。</td></tr>
+          <tr><td>recommendation</td><td>BUY、WATCH、AVOID 或 VERIFY FIRST。</td></tr>
+          <tr><td>riskLevel</td><td>Low、Medium、High，受流动性、规则、来源、波动和相关敞口影响。</td></tr>
+          <tr><td>suggestedSize</td><td>基于保守 Kelly、预算上限和市场容量的建议金额。</td></tr>
+          <tr><td>changeMyMind</td><td>哪些事实变化会推翻当前建议。</td></tr>
+        </tbody>
+      </table>
+      <h3>8.3 从因果图到仓位建议</h3>
+      <p>
+        Causeway 的仓位建议不应是固定金额，而应由多项因素共同决定：edge 大小、confidence、盘口深度、价差、用户风险偏好、市场相关性、单市场上限和总体预算。保守 Kelly 可以作为基础框架，但必须加入折扣因子和上限，避免模型在高不确定场景中过度下注。
+      </p>
+      <div class="callout">
+        <strong>保守原则：</strong>
+        推荐仓位应是“可解释的风险预算”，不是对收益的承诺。系统应明确显示最大损失、成交价格、滑点、过期时间和触发重新评估的条件。
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">09 / Arc Proof</p>
+      <h2>Arc Proof：可验证的 AI 推理记录</h2>
+      <h3>9.1 为什么推理需要上链证明</h3>
+      <p>
+        预测市场的核心是未来会验证今天的判断。因此，AI signal 的可信度不仅来自模型本身，还来自“它是否能证明自己在结果发生前做出了这个判断”。如果系统可以在结果公布后修改历史 reasoning trace，那么任何信号准确率、PnL 或绩效记录都缺少可信基础。
+      </p>
+      <p>
+        Arc Proof 的作用不是替代 Polymarket 交易链路，也不是把用户订单搬到 Arc。Polymarket 仍负责市场和 CLOB 交易；Arc 负责记录 AI reasoning trace 的 hash，作为低成本、快速、稳定币原生的审计层。
+      </p>
+      <h3>9.2 Causeway 的 Arc Proof Capsule</h3>
+      <table>
+        <thead><tr><th>字段</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td>schema</td><td><code>causeway.reasoning_trace.v1</code></td></tr>
+          <tr><td>scriptId / inferenceRunId</td><td>对应的脚本和推理运行。</td></tr>
+          <tr><td>rootMarketId / rootOutcomeId</td><td>用户选择的根市场和根 outcome。</td></tr>
+          <tr><td>inputHash / outputHash</td><td>AI 输入和输出的稳定 JSON hash。</td></tr>
+          <tr><td>model / promptVersion / outputSchemaVersion</td><td>模型、prompt 和输出格式版本。</td></tr>
+          <tr><td>market snapshots</td><td>价格、best bid、best ask、last trade、volume、liquidity、syncedAt。</td></tr>
+          <tr><td>selections</td><td>AI action、user action、order mode、limit price、size、amountUsd 和 reason。</td></tr>
+          <tr><td>traceHash</td><td>整个 capsule 的 hash，用作 Arc transaction calldata。</td></tr>
+        </tbody>
+      </table>
+      <h3>9.3 验证流程</h3>
+      <ol>
+        <li>后端读取用户脚本和推理记录，构建 proof capsule。</li>
+        <li>使用稳定 JSON hash 生成 <code>traceHash</code>。</li>
+        <li>前端请求用户切换到 Arc Testnet，并发送 calldata 为 traceHash 的交易。</li>
+        <li>后端等待交易 receipt，并读取 transaction input。</li>
+        <li>校验 signer 与连接钱包一致、chainId 为 Arc Testnet、calldata 与 traceHash 一致。</li>
+        <li>把 txHash、traceHash、ArcScan URL 和 anchoredAt 写入审计记录。</li>
+      </ol>
+      <div class="callout">
+        <strong>产品意义：</strong>
+        Arc Proof 让 Causeway 能够展示“这个 AI 推理记录在某个时间点已经存在，并且后续没有被静默改写”。这是预测市场 AI 信号绩效可信化的基础。
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">10 / Arc USDC Economy</p>
+      <h2>Arc USDC Premium：会员订阅、可验证支付与智能体经济</h2>
+      <p>
+        Arc 的稳定币原生设计适合低成本、可验证、频繁发生的智能体经济活动。Causeway 当前已经实现 Arc USDC payment intent：用户选择 premium plan 后，系统生成待支付 intent，指定 chainId、USDC token、receiverAddress、amountMicroUsd 和过期时间；用户在 Arc 上完成 USDC 转账后，后端读取 transaction receipt 和 ERC-20 Transfer log 进行验证，并将支付结果映射为会员权益。当前阶段，会员订阅主要用于解锁高级信号、完整推理轨迹、Arc proof 和更高额度的分析能力；未来，Causeway 也可以使用在 Arc 上结算的 x402 服务调用，把订阅、按次付费、报告解锁、API 调用和智能体能力购买统一到更细粒度的支付框架中。
+      </p>
+      <h3>10.1 当前可支持的 Premium 能力</h3>
+      <div class="grid-2">
+        <div class="note"><span class="small-label">Premium Signal</span><b>高级信号</b><p>解锁更深层推理、更高质量模型、更严格置信度和完整候选市场范围。</p></div>
+        <div class="note"><span class="small-label">Full Reasoning Trace</span><b>完整推理轨迹</b><p>查看输入、输出、候选市场、风险、反例和 What Would Change My Mind。</p></div>
+        <div class="note"><span class="small-label">Arc Proof</span><b>链上证明</b><p>将 reasoning trace hash 锚定到 Arc Testnet，并通过 ArcScan 查看交易。</p></div>
+        <div class="note"><span class="small-label">Future x402</span><b>智能体服务调用</b><p>未来可接入在 Arc 上结算的 x402 流程，用于数据购买、报告解锁、API 调用和策略订阅。</p></div>
+      </div>
+      <h3>10.2 Arc：可验证推理与智能体经济的结算层</h3>
+      <p>
+        Arc 对 Causeway 的价值不在于替代 Polymarket 的交易链路，而在于为预测市场 AI 系统提供一个低成本、可验证、稳定币原生的经济与审计层。Polymarket 负责市场撮合、订单簿、结果结算和真实交易执行；Causeway 负责市场理解、AI 推理、风险预览、用户确认和信号追踪；Arc 则适合承载那些频率高、金额小、需要记录、需要验证、并且天然以美元计价的辅助动作，例如 reasoning trace 存证、premium 订阅、报告解锁、API 调用、智能体服务结算和未来的数据源付费。
+      </p>
+      <p>
+        对当前版本而言，Arc 首先解决两个关键问题。第一，AI 推理需要可验证时间戳。预测市场的判断会被未来结果验证，如果系统无法证明某个推理记录是在结果发生前生成的，那么 signal track record 的可信度会明显下降。Causeway 将 reasoning trace 的 hash 写入 Arc，使每一次 AI 判断都可以形成轻量级 proof capsule。第二，AI 能力需要稳定币原生的付费路径。高级推理、完整推理轨迹、市场图谱分析、API 调用和报告服务，都适合以 USDC 进行小额、实时、可验证结算。
+      </p>
+      <p>
+        从中期看，Arc 可以支持 Causeway 形成更完整的 Signal Economy。每一次 AI 推理都可以被视为一个可追踪的信号资产：它有生成时间、输入快照、模型版本、市场价格、AI fair odds、edge、风险解释、用户动作和最终结果。如果这些信号长期积累，并且关键 hash 被锚定到 Arc，Causeway 就可以建立可信的 Signal Track Record。未来，用户不只是购买一次 AI 回答，而是订阅经过验证的策略、报告、市场图谱、数据源和专业智能体能力。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">11 / x402 Agent Service Layer</p>
+      <h2>x402 Agent Service Layer：未来智能体服务协议层</h2>
+      <p>
+        x402 在 Causeway 中不应被定位为交易执行协议，而应被定位为智能体服务调用与微支付协议。它的价值在于让 AI agent、外部 API、数据源和专业分析服务能够通过机器可读的支付请求完成按次结算。对 Causeway 而言，x402 可以成为未来 Agent Service Layer：Arc 提供可验证记录与稳定币结算环境，x402 提供 agent-to-service 的访问和支付流程，Causeway 负责编排市场图谱、权限治理、风险控制、订单预览和绩效追踪。
+      </p>
+      <h3>11.1 数据源、验证与报告的按次付费</h3>
+      <p>
+        Causeway 未来需要新闻流、体育数据、宏观数据、链上数据、监管公告、公司公告、赔率数据和原始来源验证。很多数据并不适合固定包月，而更适合在 AI 推理需要时按次调用：验证一次 CPI 发布、购买一次球队伤病数据、请求一次链上资金流解析、校验一次新闻原始来源、生成一次市场规则差异报告。x402 可以让这些调用变成即时、细粒度、可审计的支付行为，而不是依赖人工 API key、中心化积分或离线结算。
+      </p>
+      <h3>11.2 专业智能体市场</h3>
+      <p>
+        当 Causeway 从单一 AI 推理工具演化为多智能体预测系统时，系统可以引入外部专业智能体：宏观研究 Agent、体育伤病 Agent、政治新闻 Agent、链上资金流 Agent、盘口套利 Agent、Source Verification Agent、Risk Agent 和 Execution Guard。每个智能体都可以通过长期 track record、校准能力、历史收益风险表现、响应速度、数据源覆盖和 Arc proof 记录建立声誉。x402 则可以负责每一次服务调用的访问控制和按次结算。
+      </p>
+      <h3>11.3 信号市场与 API 货币化</h3>
+      <p>
+        未来，Causeway 可以把高质量 signal、market graph、risk report、related markets、semantic arbitrage scan 和 Arc proof status 作为可付费 API 暴露给外部应用或智能体。调用方不一定需要成为完整会员，也可以按请求购买特定能力。Arc 记录 proof、payment 和 reputation，x402 处理付费访问，Causeway 展示信号绩效与校准结果。这样，Causeway 的收入不只来自订阅，还来自可组合的智能服务网络。
+      </p>
+      <h3>11.4 有限 AI 委托交易的长期形态</h3>
+      <p>
+        在更高级的阶段，用户可以指定经过验证的成熟智能体参与自动化 AI 委托交易流程。但 x402 本身不承担资产托管、交易授权或风控职责；它承担的是智能体服务调用和微支付层。真正的委托交易必须由 Causeway 叠加权限边界：允许交易的市场类别、最大单笔金额、每日损失上限、最大相关敞口、最低 edgeNet、最小流动性、最大滑点、必要验证步骤、到期时间、紧急停止和可撤销授权。每一次数据调用、推理生成、验证请求、订单预览或交易执行，都应留下 Arc proof 和 Signal Track Record。
+      </p>
+      <div class="callout">
+        <strong>未来定位：</strong>
+        Arc 是 proof、payment record 和 reputation substrate；x402 是 agent-to-service payment and access protocol；Causeway 是 prediction-market intelligence orchestration layer；Polymarket 是 market execution and settlement venue。
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">12 / Workflow</p>
+      <h2>用户工作流与产品体验</h2>
+      <h3>12.1 标准流程</h3>
+      <ol>
+        <li>用户连接钱包并进入市场网络。</li>
+        <li>系统展示 Polymarket events、markets、outcomes、价格、成交量和相关市场。</li>
+        <li>用户选择一个 root outcome 作为推理起点。</li>
+        <li>系统召回候选市场，并构造 AI prompt input。</li>
+        <li>AI 输出因果图、outcome recommendation、warnings 和 confidence。</li>
+        <li>系统生成 causal script，用户逐项审查、修改或跳过。</li>
+        <li>用户进入订单预览，检查订单簿、金额、最大损失、预估收益和能力状态。</li>
+        <li>用户确认后进行 dry-run 或真实 CLOB 签名提交。</li>
+        <li>用户可将 reasoning trace 锚定到 Arc Testnet。</li>
+        <li>系统在 Signal Track Record 中追踪价格变化、订单状态、PnL 和最终结果。</li>
+      </ol>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">13 / Governance</p>
+      <h2>风控、治理与合规边界</h2>
+      <h3>13.1 风控矩阵</h3>
+      <table>
+        <thead><tr><th>风险类别</th><th>具体问题</th><th>控制方式</th></tr></thead>
+        <tbody>
+          <tr><td>数据风险</td><td>市场数据延迟、outcome 映射错误、订单簿不可用。</td><td>同步时间、tokenId 校验、实时刷新、capability fallback。</td></tr>
+          <tr><td>信息风险</td><td>新闻错误、社交媒体谣言、二手来源误读。</td><td>Source Object、权威源库、冲突检测、新鲜度评分。</td></tr>
+          <tr><td>推理风险</td><td>AI 幻觉、过度自信、遗漏反例。</td><td>候选集约束、结构化校验、skeptic agent、confidence threshold。</td></tr>
+          <tr><td>市场风险</td><td>价差过大、流动性不足、互斥市场相关敞口。</td><td>盘口深度、保守仓位、事件级组合风控、No Trade 状态。</td></tr>
+          <tr><td>执行风险</td><td>用户误签、重复提交、订单过期。</td><td>预览过期、idempotency key、签名前确认、提交状态回写。</td></tr>
+          <tr><td>审计风险</td><td>信号记录无法证明事前存在。</td><td>Arc proof、hash、audit event、Signal Track Record。</td></tr>
+        </tbody>
+      </table>
+      <h3>13.2 默认边界</h3>
+      <ul>
+        <li>AI 输出不构成投资建议。</li>
+        <li>系统不保证预测准确率、收益或市场结果。</li>
+        <li>默认模式为用户确认，而非自动下单。</li>
+        <li>委托执行必须在未来以显式授权、明确预算、范围限制和撤销机制实现。</li>
+        <li>真实交易、模拟交易和未执行信号必须在 UI 和数据中明确区分。</li>
+      </ul>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">14 / Future Problems</p>
+      <h2>未来需要解决的问题，以及我们如何解决</h2>
+      <h3>14.1 问题：外部信息源实时性和真实性不足</h3>
+      <p>
+        当前阶段主要依赖市场数据和受控候选集。下一阶段，Causeway 必须接入实时新闻流、官方公告、链上事件、体育数据和监管文件。但外部信息源越多，噪音越大。解决方案是 Source Object 标准化：把每条信息拆成 claim、origin、timestamp、entities、rawPayload 和 confidence，并通过权威源库和冲突检测进入工作流。
+      </p>
+      <h3>14.2 问题：单模型推理无法覆盖复杂世界</h3>
+      <p>
+        单一模型容易形成单一路径和过度确定性。Causeway 的长期方案是多智能体推理：Research Agent 负责收集市场和事件上下文，Probability Agent 给出概率估计，Skeptic Agent 寻找反例，Risk Agent 判断流动性和仓位，Execution Guard 判断是否允许进入预览。多智能体不是为了炫技，而是为了让分歧、假设和风险显性化。
+      </p>
+      <h3>14.3 问题：信号绩效无法被持续证明</h3>
+      <p>
+        如果没有长期 track record，AI 推荐很容易停留在短期展示。Causeway 需要为每个 signal 记录生成时间、市场价格、AI fair odds、edge、推荐方向、用户是否执行、执行价格、当前价格、未实现盈亏、最终结果和 Arc proof。只有这样，系统才能回答“AI 是否真的有效”。
+      </p>
+      <h3>14.4 问题：自动化执行需要更强治理</h3>
+      <p>
+        第五阶段的委托执行不是让 AI 无限制控制账户，而是让用户在明确规则下选择性授权。授权应包含市场类别、最大单笔金额、每日损失上限、最大相关敞口、可接受数据源、时间窗口、撤销条件和 emergency stop。未来若用户指定成熟智能体参与自动化流程，x402 可承担智能体服务调用与微支付，Arc 承担证明与记录，Causeway 承担权限治理与风控，真实交易仍必须遵守用户授权和可撤销边界。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">15 / Roadmap</p>
+      <h2>五阶段技术路线图</h2>
+      <div class="phase-card">
+        <span class="tag dark">Phase 01</span><span class="tag">Market Data Foundation</span>
+        <h3>先理解市场，再理解世界</h3>
+        <p>
+          第一阶段专注于 Polymarket 市场数据：event、market、outcome、tokenId、价格、成交量、流动性、订单簿、规则和状态。目标是让系统能够稳定表达真实可交易结构，并支持用户从市场详情页选择根 outcome 进入推理。
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag dark">Phase 02</span><span class="tag">Reasoning Model</span>
+        <h3>把一个事件映射到所有相关市场</h3>
+        <p>
+          构建更强的推理模型，对相关市场给出 relevance、direction、confidence、tradability 和 recommendation。引入 BUY / WATCH / AVOID、What Would Change My Mind 和保守仓位建议，让 AI 更像交易研究员，而不是聊天机器人。
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag dark">Phase 03</span><span class="tag">Real-Time Scenario Generation</span>
+        <h3>把新闻流转化为全市场响应剧本</h3>
+        <p>
+          接入实时事件流，自动抽取实体、主题、事件类型和影响路径，在全市场生成响应剧本。系统应输出受影响市场、缺失确认信号、风险状态和建议工作流，而不是直接下单。
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag dark">Phase 04</span><span class="tag">Verification & Arc Proof</span>
+        <h3>下注前求证，推理后存证</h3>
+        <p>
+          构建权威数据源库，自动追溯底层事实；同时把关键 reasoning trace hash 写入 Arc，形成可验证历史记录。该阶段的目标是把速度、真实性和审计能力统一起来。
+        </p>
+      </div>
+      <div class="phase-card">
+        <span class="tag dark">Phase 05</span><span class="tag">Delegated AI Execution</span>
+        <h3>用户可选地委托有限执行</h3>
+        <p>
+          在权限、预算、时间、市场范围和撤销机制成熟后，用户可选择让 AI 在限定条件下执行。未来用户也可以指定经过验证的成熟智能体参与委托流程，通过 x402 完成数据验证、风险评估和执行辅助的按次结算；该能力必须默认关闭，并通过 Arc proof、完整审计、紧急停止和权限过期机制治理。
+        </p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">16 / Economic Model</p>
+      <h2>商业模式与价值捕获</h2>
+      <h3>16.1 收入模型</h3>
+      <table>
+        <thead><tr><th>模式</th><th>说明</th><th>适用阶段</th></tr></thead>
+        <tbody>
+          <tr><td>Premium Subscription</td><td>当前以 Arc USDC payment intent 解锁高级模型、更深推理、完整 reasoning trace、Arc proof 和监控能力；未来可扩展到基于 Arc 结算的 x402 按次调用和能力包。</td><td>Phase 1-3</td></tr>
+          <tr><td>Builder Attribution</td><td>用户通过 Causeway 确认真实 Polymarket 订单，成交通过 builder code 归因。</td><td>Phase 1-5</td></tr>
+          <tr><td>Signal API</td><td>向研究者、终端和策略系统提供结构化 signal、market graph 和 track record API。</td><td>Phase 2-4</td></tr>
+          <tr><td>Team Workspace</td><td>为团队提供协作、权限、审计、报告、风险预算和策略库。</td><td>Phase 3-5</td></tr>
+          <tr><td>x402 Agent Service Layer</td><td>未来允许外部数据源、验证服务、专业智能体和深度报告通过 x402 进行机器可读的按次访问和微支付。</td><td>Phase 3-5</td></tr>
+          <tr><td>Agent Marketplace</td><td>未来允许专业 agent、验证源、报告模板和策略模块通过 Arc USDC 与 x402 结算，并根据可验证 track record 建立声誉。</td><td>Phase 4-5</td></tr>
+        </tbody>
+      </table>
+      <h3>16.2 价值飞轮</h3>
+      <p>
+        更多市场数据带来更完整的市场图谱；更完整的图谱提高 AI 推理质量；更高质量的推理吸引更多用户生成真实反馈；更多反馈形成 signal track record；可验证 track record 提升信任；信任带来 premium、API、团队、x402 智能体服务和 builder attribution 收入；收入反过来支持更好的数据源、模型、验证智能体和风控系统。
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">17 / Moat & KPI</p>
+      <h2>护城河、指标与结论</h2>
+      <h3>17.1 护城河</h3>
+      <ul>
+        <li><strong>市场结构理解：</strong>对 event、market、outcome token、CLOB 和订单限制的深度建模。</li>
+        <li><strong>推理数据闭环：</strong>从 inference run 到 causal script、order intent、Arc proof 和 track record 的完整链路。</li>
+        <li><strong>可验证历史：</strong>Arc proof 让信号绩效不只是后台记录，而是可审计对象。</li>
+        <li><strong>用户治理边界：</strong>不以黑箱自动交易为核心，而以用户可控的智能执行为方向。</li>
+        <li><strong>智能体经济入口：</strong>Arc USDC premium 与未来 x402 Agent Service Layer 为小额、频繁、可验证的 AI 能力结算提供基础。</li>
+      </ul>
+      <h3>17.2 核心指标</h3>
+      <table class="kpi">
+        <tbody>
+          <tr><td>Market Coverage</td><td>同步市场数量、active market 覆盖率、outcome token 映射准确率。</td></tr>
+          <tr><td>Inference Quality</td><td>推理成功率、schema 校验通过率、有效 signal 比例、No Trade 比例。</td></tr>
+          <tr><td>User Funnel</td><td>市场查看、推理启动、脚本保存、订单预览、用户确认、真实成交。</td></tr>
+          <tr><td>Arc Proof Adoption</td><td>proof 生成数、anchor 数、验证成功率、ArcScan 点击率。</td></tr>
+          <tr><td>Signal Track Record</td><td>信号后价格变化、最终准确率、PnL、用户执行率、退出建议命中率。</td></tr>
+          <tr><td>Economics</td><td>Premium 转化率、USDC 支付成功率、x402 调用次数、agent service GMV、builder-attributed volume、API 收入。</td></tr>
+        </tbody>
+      </table>
+      <h3>17.3 结论</h3>
+      <p>
+        Causeway 的价值不在于让用户更快点击交易按钮，而在于为预测市场建立一层可信的智能基础设施。它把市场结构、AI 推理、风险预览、用户确认、Arc 存证和绩效追踪连成一个闭环。短期，它让用户更好地理解和执行 Polymarket 市场；中期，它成为可验证的 prediction-market signal layer；长期，它可以演化为群体智能预测引擎，模拟现实事件在多市场中的传播，并输出专业预测报告。
+      </p>
+      <div class="callout">
+        <strong>最终愿景：</strong>
+        Causeway 不是“自动下注工具”，而是“预测万物的群体智能引擎”的早期形态：用户输入一个事件，系统理解市场、组织智能体、求证事实、模拟路径、生成信号、保留证明，并由用户决定是否行动。长期看，Arc 负责可信记录与结算底座，x402 负责智能体服务调用，Causeway 负责预测市场智能编排。
+      </div>
+    </section>
+
+    <section>
+      <p class="eyebrow">18 / References</p>
+      <h2>参考资料</h2>
+      <div class="source-list">
+        <p>1. Wolfers, Justin, and Eric Zitzewitz, <em>Prediction Markets</em>, Journal of Economic Perspectives, 2004. https://pubs.aeaweb.org/doi/pdfplus/10.1257/0895330041371321</p>
+        <p>2. Snowberg, Erik, Justin Wolfers, and Eric Zitzewitz, <em>Prediction Markets for Economic Forecasting</em>, NBER Working Paper 18222, 2012. https://www.nber.org/system/files/working_papers/w18222/w18222.pdf</p>
+        <p>3. Wharton Rodney L. White Center working paper, prediction-market research, 2006. https://rodneywhitecenter.wharton.upenn.edu/wp-content/uploads/2014/04/0608.pdf</p>
+        <p>4. Cao, prediction-market research paper, New Zealand Association of Economists archive. https://www.nzae.org.nz/wp-content/uploads/2014/05/Cao.pdf</p>
+        <p>5. Journal of Prediction Markets article archive, prediction-market and arbitrage research. https://www.ubplj.org/index.php/jpm/article/view/1796</p>
+        <p>6. <em>Arbitrage trade in prediction markets</em>, research archive. https://www.researchgate.net/publication/262875038_Arbitrage_trade_in_prediction_markets</p>
+        <p>7. arXiv preprint on modern prediction-market arbitrage and semantic market dependencies. https://arxiv.org/pdf/2508.03474.pdf</p>
+        <p>8. KPMG, <em>Prediction markets: Paths to entry</em>, 2026. https://kpmg.com/kpmg-us/content/dam/kpmg/pdf/2026/prediction-markets-paths-to-entry.pdf</p>
+        <p>9. CoinDesk, <em>Polymarket Resolves Presidential Election Contract</em>, 2024. https://www.coindesk.com/markets/2024/11/06/polymarket-resolves-presidential-election-contract</p>
+        <p>10. Axios, <em>Polymarket gets big investment from New York Stock Exchange parent company</em>, 2025. https://www.axios.com/2025/10/07/polymarket-new-york-stock-exchange</p>
+        <p>11. Polymarket Documentation, <em>Gamma Markets API Overview</em>. https://docs.polymarket.com/developers/gamma-markets-api/overview</p>
+        <p>12. Polymarket Documentation, <em>Trading on the Polymarket CLOB</em>. https://docs.polymarket.com/developers/CLOB/trades/trades-data-api</p>
+        <p>13. Polymarket Documentation, <em>Builder Program</em>. https://docs.polymarket.com/developers/builders/examples</p>
+        <p>14. Arc Docs, <em>Connect to Arc</em>. https://docs.arc.io/integrate/connect-to-arc</p>
+        <p>15. Arc Docs, <em>Arc Network</em>. https://docs.arc.network/arc-chain</p>
+        <p>16. x402 Protocol, <em>Open payment protocol for the internet</em>. https://www.x402.org/</p>
+        <p>17. Coinbase Developer Platform, <em>x402</em>. https://www.coinbase.com/developer-platform/products/x402/</p>
+        <p>18. Cloudflare Docs, <em>Agents x402</em>. https://developers.cloudflare.com/agents/x402/</p>
+      </div>
+      <div class="disclaimer">
+        Copyright © 2026 Causeway. 本文档为产品、技术与经济白皮书草案，不构成投资建议、法律建议、经纪服务、收益承诺或监管意见。本文提及的市场数据和行业信息来自公开资料，实际数据可能因统计口径、时间范围、平台定义和市场变化而不同。用户应独立判断并自行承担预测市场相关风险。
+      </div>
+    </section>
+  </body>
+</html>

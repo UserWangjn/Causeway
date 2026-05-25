@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Causeway Technical & Economic Whitepaper v1.1 EN</title>
+    <style>
+      @page { size: A4; margin: 18mm 16mm; }
+      :root {
+        --ink: #081b33;
+        --ink-2: #0a2a52;
+        --blue: #1677ff;
+        --cyan: #22c7e8;
+        --green: #14b87a;
+        --muted: #53657d;
+        --line: #d8e6f5;
+        --soft: #f5faff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: Inter, "Segoe UI", Arial, sans-serif;
+        font-size: 10.7pt;
+        line-height: 1.62;
+      }
+      h1, h2, h3, h4, p { margin-top: 0; }
+      h1 { margin: 0 0 18px; font-size: 40pt; line-height: .96; letter-spacing: -0.02em; }
+      h2 { margin: 0 0 14px; font-size: 22pt; line-height: 1.1; break-after: avoid; }
+      h3 { margin: 22px 0 8px; color: var(--ink-2); font-size: 14pt; line-height: 1.25; break-after: avoid; }
+      p { margin-bottom: 9px; }
+      ul, ol { margin: 8px 0 12px 22px; padding: 0; }
+      li { margin: 4px 0; }
+      table { width: 100%; border-collapse: collapse; margin: 12px 0 16px; break-inside: avoid; }
+      th, td { border: 1px solid var(--line); padding: 8px 9px; text-align: left; vertical-align: top; }
+      th { background: var(--soft); font-weight: 800; }
+      .cover { min-height: 255mm; display: flex; flex-direction: column; justify-content: space-between; break-after: page; position: relative; }
+      .cover::before {
+        content: ""; position: absolute; inset: -18mm -16mm; z-index: -1;
+        background:
+          linear-gradient(rgba(8, 27, 51, .035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(8, 27, 51, .035) 1px, transparent 1px),
+          radial-gradient(circle at 78% 18%, rgba(22, 119, 255, .16), transparent 32%),
+          #fff;
+        background-size: 26px 26px, 26px 26px, auto, auto;
+      }
+      .brand img { width: 168px; height: auto; margin-bottom: 48px; }
+      .eyebrow { margin: 0 0 14px; color: var(--blue); font-size: 9pt; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+      .subtitle { max-width: 620px; color: #273b57; font-size: 15pt; line-height: 1.5; }
+      .meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 28px; }
+      .meta-grid div, .callout, .principle, .phase-card, .note {
+        border: 1px solid var(--line); border-radius: 8px; background: rgba(245, 250, 255, .78); padding: 12px;
+      }
+      .meta-grid span, .small-label { display: block; color: var(--muted); font-size: 8pt; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+      .meta-grid b { display: block; margin-top: 4px; font-size: 11pt; }
+      .page { break-after: page; }
+      .toc { columns: 2; column-gap: 28px; }
+      .toc p { break-inside: avoid; border-bottom: 1px solid var(--line); margin: 0 0 8px; padding-bottom: 7px; font-weight: 720; }
+      .callout { margin: 14px 0 18px; border-left: 5px solid var(--blue); background: #f5faff; }
+      .callout strong { color: var(--blue); }
+      .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .principle { min-height: 118px; }
+      .principle b { display: block; margin: 4px 0 6px; font-size: 12pt; }
+      .principle p, .phase-card p, .note p { margin-bottom: 0; color: #273b57; font-size: 9.7pt; line-height: 1.54; }
+      .phase-card { break-inside: avoid; margin-bottom: 10px; }
+      .phase-card h3 { margin-top: 4px; }
+      .phase-card .tag { display: inline-block; margin-right: 6px; border: 1px solid #bcd7ff; border-radius: 999px; background: #eef6ff; color: var(--blue); padding: 2px 8px; font-size: 8pt; font-weight: 800; }
+      .hero-image { overflow: hidden; border: 1px solid rgba(22, 119, 255, .22); border-radius: 10px; height: 108mm; margin: 16px 0; background: #06162b; }
+      .hero-image img { width: 100%; height: 100%; object-fit: cover; }
+      .caption { color: var(--muted); font-size: 8pt; }
+      .disclaimer { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 12px; color: var(--muted); font-size: 8.2pt; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <section class="cover">
+      <div>
+        <div class="brand"><img src="../../public/assets/causeway-lockup-primary.svg" alt="Causeway" /></div>
+        <p class="eyebrow">Technical & Economic Whitepaper</p>
+        <h1>Causeway<br />Technical & Economic Whitepaper</h1>
+        <p class="subtitle">
+          A market intelligence layer for prediction markets: from market-data reasoning to source verification,
+          swarm simulation, and user-governed decision workflows.
+        </p>
+        <div class="meta-grid">
+          <div><span>Version</span><b>v1.1</b></div>
+          <div><span>Date</span><b>2026-05</b></div>
+          <div><span>Status</span><b>Professional Draft</b></div>
+        </div>
+      </div>
+      <div class="disclaimer">
+        This whitepaper describes Causeway's product thesis, technical architecture, roadmap, economic model, and governance boundary. It is not investment advice, legal advice, brokerage material, or a promise of return. Prediction markets are risky; any real action should remain user-directed and user-confirmed.
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">Table of Contents</p>
+      <h2>Contents</h2>
+      <div class="toc">
+        <p>01. Executive Summary</p>
+        <p>02. Market Problem and Product Thesis</p>
+        <p>03. Product Definition</p>
+        <p>04. System Architecture</p>
+        <p>05. AI Reasoning and Market Shadows</p>
+        <p>06. Source Objects and Verification</p>
+        <p>07. Swarm Intelligence Vision</p>
+        <p>08. Five-Phase Roadmap</p>
+        <p>09. Governance, Risk, and Control</p>
+        <p>10. Economic Model</p>
+        <p>11. Data, Audit, and Compliance Boundary</p>
+        <p>12. Risks and Conclusion</p>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">01 / Executive Summary</p>
+      <h2>Executive Summary</h2>
+      <p>
+        Causeway is a market intelligence layer for prediction markets. Its core thesis is that prediction markets are not isolated pages; they are networks of probability shaped by real-world events. A policy signal, sports result, company announcement, legal filing, or on-chain event rarely affects only one market. It casts a market shadow across related narratives, assets, and participant expectations.
+      </p>
+      <p>
+        Current prediction-market interfaces expose prices, titles, volume, and rules, but they do not provide the reasoning layer between an event and a reviewable decision. Users need structured inference: what may be affected, through which path, with what confidence, which assumptions remain unverified, and which actions should be previewed rather than executed immediately.
+      </p>
+      <div class="callout">
+        <strong>Causeway's role:</strong> Causeway is not an autonomous betting bot. It is a system for event reasoning, market mapping, source verification, simulation, previews, and user-governed decision workflows.
+      </div>
+      <p>
+        Version 1.1 expands the original technical-economic whitepaper with three major additions: the market-shadow thesis, a five-phase roadmap from market data to optional delegated execution, and the long-term vision of a swarm intelligence prediction engine that turns multi-agent simulations into professional prediction reports.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">02 / Market Thesis</p>
+      <h2>Market Problem and Product Thesis</h2>
+      <h3>2.1 The Interface Gap</h3>
+      <p>
+        Prediction-market prices aggregate expectations, but most interfaces remain market-by-market. For complex events, the real user problem is cross-market: did the event change related probabilities, has that change already been priced in, which markets lag, and which links are merely narrative noise?
+      </p>
+      <h3>2.2 Causeway's Principles</h3>
+      <div class="grid-3">
+        <div class="principle"><span class="small-label">Principle 01</span><b>Every event has a market shadow</b><p>A single event can ripple through policy, macro, sports, crypto, election, and company narratives.</p></div>
+        <div class="principle"><span class="small-label">Principle 02</span><b>Reasoning must be visible</b><p>Useful AI should expose assumptions, confidence, uncertainty, and the reasoning path behind each market connection.</p></div>
+        <div class="principle"><span class="small-label">Principle 03</span><b>Speed needs governance</b><p>Fast reaction is valuable only when preview, confirmation, audit, and permission boundaries remain clear.</p></div>
+      </div>
+      <h3>2.3 Target Outcome</h3>
+      <p>
+        Causeway organizes event sensing, market mapping, AI reasoning, source verification, action previews, and user confirmation into one workflow. The near-term objective is better prediction-market analysis and previews. The mid-term objective is a verifiable intelligence layer. The long-term objective is a swarm intelligence engine capable of simulating how the world may move.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">03 / Product Definition</p>
+      <h2>Product Definition</h2>
+      <p>
+        Causeway starts with Polymarket market data and turns a user-selected thesis or event into a structured market response plan. The plan includes related markets, impact paths, reasoning, confidence, risk warnings, source state, preview limits, and audit records.
+      </p>
+      <table>
+        <thead><tr><th>Layer</th><th>Function</th><th>User Value</th></tr></thead>
+        <tbody>
+          <tr><td>Market Data</td><td>Normalize market structure, prices, liquidity, rules, and book state.</td><td>Understand the market before touching the world.</td></tr>
+          <tr><td>Market Shadow</td><td>Map an event into related markets and causal paths.</td><td>See cross-market motion instead of isolated pages.</td></tr>
+          <tr><td>Reasoning</td><td>Generate assumptions, confidence, direction, and review states.</td><td>Make AI outputs auditable and reviewable.</td></tr>
+          <tr><td>Source Verification</td><td>Trace claims to authoritative sources and detect conflicts.</td><td>Reduce false information and model hallucination risk.</td></tr>
+          <tr><td>Governed Preview</td><td>Convert scenarios into guarded previews and user-confirmed actions.</td><td>Preserve control while increasing speed.</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <strong>Boundary:</strong> Causeway v1.x does not default to autonomous execution. AI may reason, simulate, score, and preview, but custody, confirmation, and final action remain user governed.
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">04 / Architecture</p>
+      <h2>System Architecture</h2>
+      <h3>4.1 Six Layers</h3>
+      <ol>
+        <li><strong>Market Data Foundation:</strong> a normalized, queryable, auditable market data base.</li>
+        <li><strong>Market Graph:</strong> relationships based on categories, semantics, historical behavior, liquidity, and AI reasoning.</li>
+        <li><strong>Reasoning Engine:</strong> multi-layer impact paths, scores, explanations, and review states.</li>
+        <li><strong>Source Object Layer:</strong> normalized objects for news, filings, chain data, sports data, and official releases.</li>
+        <li><strong>Verification Layer:</strong> authority-source checks, conflict detection, and freshness validation.</li>
+        <li><strong>Governed Preview & Execution:</strong> previews, constraints, audit records, and user confirmation.</li>
+      </ol>
+      <h3>4.2 Core Objects</h3>
+      <table>
+        <thead><tr><th>Object</th><th>Meaning</th><th>Key Fields</th></tr></thead>
+        <tbody>
+          <tr><td>Market</td><td>A tradable or observable prediction-market unit.</td><td>marketId, question, category, rules, volume, liquidity, status.</td></tr>
+          <tr><td>Thesis</td><td>The event, hypothesis, or market idea the user wants to understand.</td><td>title, scope, timeWindow, riskMode, rootContext.</td></tr>
+          <tr><td>Market Shadow</td><td>The set of markets and paths affected by an event.</td><td>nodes, edges, impactDirection, confidence, reason.</td></tr>
+          <tr><td>Source Object</td><td>A traceable and verifiable information object.</td><td>origin, timestamp, entity, claim, rawPayload, confidence.</td></tr>
+          <tr><td>Preview</td><td>A reviewable plan before real action.</td><td>actionType, limits, checks, expiresAt, auditTrail.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">05 / Reasoning</p>
+      <h2>AI Reasoning and Market Shadows</h2>
+      <p>
+        Causeway's AI layer should not merely produce an answer. It should produce a reviewable market-shadow graph that describes which markets are affected, how they are connected, why the link matters, how confident the system is, and what remains uncertain.
+      </p>
+      <h3>5.1 Scoring Dimensions</h3>
+      <div class="grid-2">
+        <div class="note"><span class="small-label">Relevance</span><p>Whether the event has a clear entity, theme, or economic relation to the market.</p></div>
+        <div class="note"><span class="small-label">Direction</span><p>Whether the event supports, opposes, hedges, contradicts, or correlates with a market path.</p></div>
+        <div class="note"><span class="small-label">Confidence</span><p>The strength of evidence, comparability, and source quality.</p></div>
+        <div class="note"><span class="small-label">Tradability</span><p>Whether the market is active, liquid, understandable, and previewable.</p></div>
+      </div>
+      <h3>5.2 From Single Model to Agent Teams</h3>
+      <p>
+        Early versions may rely on a single model for structured outputs. Later versions should introduce agents with roles: analyst, skeptic, verifier, risk officer, and report writer. The result becomes a collective reasoning trace with visible consensus and conflict.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">06 / Verification</p>
+      <h2>Source Objects and Verification</h2>
+      <p>
+        Speed is not useful if the source is wrong. Causeway's verification layer traces claims back to primary or authoritative sources: official releases, regulatory filings, sports-league data, court documents, government databases, company statements, and on-chain records.
+      </p>
+      <table>
+        <thead><tr><th>Field</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>origin</td><td>The original information source.</td></tr>
+          <tr><td>claim</td><td>A concrete factual claim to verify.</td></tr>
+          <tr><td>timestamp</td><td>Published, fetched, and last-updated time.</td></tr>
+          <tr><td>entities</td><td>People, organizations, markets, assets, teams, or regions.</td></tr>
+          <tr><td>confidence</td><td>A combined source-quality, freshness, and conflict score.</td></tr>
+          <tr><td>rawPayload</td><td>The original data retained for audit and replay.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Verification should affect workflow state. Low-confidence claims enter verify mode. Conflicting claims trigger warnings. High-impact but unverified claims may only enter dry-run preview. Expired sources require refresh.
+      </p>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">07 / Swarm Intelligence</p>
+      <h2>Swarm Intelligence Prediction Engine</h2>
+      <div class="hero-image"><img src="../../public/assets/swarm-intelligence-bg.png" alt="Swarm intelligence" /></div>
+      <p class="caption">Concept visual: multi-agent reasoning across simulated market worlds.</p>
+      <p>
+        Causeway's long-term goal is not a faster trading button. It is a living intelligence layer for predicting how the world may move. Inspired by multi-agent simulation, the system can start from a seed event, build parallel market worlds, let agents with roles and memory interact, and turn consensus and conflict into a professional prediction report.
+      </p>
+      <div class="grid-3">
+        <div class="principle"><span class="small-label">Simulate</span><b>Build parallel market worlds</b><p>Model how events, narratives, incentives, and participants interact across environments.</p></div>
+        <div class="principle"><span class="small-label">Evolve</span><b>Let many agents reason together</b><p>Specialized agents expose hidden paths, disagreements, and risks.</p></div>
+        <div class="principle"><span class="small-label">Predict</span><b>Turn simulation into decision intelligence</b><p>Output possible futures, probability shifts, assumptions, source confidence, and review paths.</p></div>
+      </div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">08 / Roadmap</p>
+      <h2>Five-Phase Roadmap</h2>
+      <div class="phase-card"><span class="tag">Phase 01</span><span class="tag">Now</span><h3>Market Data Foundation</h3><p>Phase one focuses on Polymarket market data first. External sources are a later source-object layer. The system must understand market structure, prices, liquidity, books, rules, and state before ingesting external noise.</p></div>
+      <div class="phase-card"><span class="tag">Phase 02</span><span class="tag">Reasoning</span><h3>Reasoning Model</h3><p>Build a stronger model that maps one event into all relevant markets and scores relevance, direction, confidence, risk, and suggested review action.</p></div>
+      <div class="phase-card"><span class="tag">Phase 03</span><span class="tag">Real-time</span><h3>Real-Time Scenario Generation</h3><p>Ingest real-time news streams and generate cross-market scripts: what happened, which themes matter, which markets are affected, and which confirmation signals are missing.</p></div>
+      <div class="phase-card"><span class="tag">Phase 04</span><span class="tag">Verification</span><h3>Source Verification Layer</h3><p>Before action, trace claims to primary sources, detect conflicts, check freshness, and reduce hallucination and misinformation risk.</p></div>
+      <div class="phase-card"><span class="tag">Phase 05</span><span class="tag">Future</span><h3>Delegated AI Execution</h3><p>Users may optionally delegate bounded authority to AI under explicit limits: market categories, order size, loss budget, data-source requirements, expiry, revocation, and audit.</p></div>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">09 / Governance</p>
+      <h2>Governance, Risk, and Control</h2>
+      <ul>
+        <li>AI may reason, rank, simulate, and preview, but should not bypass user confirmation.</li>
+        <li>Every real action requires a preview with path, risk checks, limits, and audit summary.</li>
+        <li>The system must distinguish dry-run, guarded preview, user-confirmed action, and delegated execution.</li>
+        <li>Delegation must be optional, bounded, revocable, expiring, and auditable.</li>
+      </ul>
+      <table>
+        <thead><tr><th>Risk</th><th>Control</th></tr></thead>
+        <tbody>
+          <tr><td>Information risk</td><td>Source Objects, authority-source verification, conflict detection.</td></tr>
+          <tr><td>Reasoning risk</td><td>Confidence thresholds, skeptic agents, review states, path explanations.</td></tr>
+          <tr><td>Market risk</td><td>Liquidity, slippage, market state, rules, and freshness checks.</td></tr>
+          <tr><td>Execution risk</td><td>User confirmation, permission boundaries, budgets, expiry, and revocation.</td></tr>
+          <tr><td>System risk</td><td>Structured validation, idempotency, audit logs, and capability fallback.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">10 / Economic Model</p>
+      <h2>Economic Model</h2>
+      <h3>10.1 Target Users</h3>
+      <ul>
+        <li>Advanced prediction-market users who need to understand event impact quickly.</li>
+        <li>Researchers and strategy builders who need replayable reasoning and audit records.</li>
+        <li>Small funds or trading teams requiring collaboration, limits, previews, and reporting.</li>
+        <li>Developers who need market graph, source object, and simulation APIs.</li>
+      </ul>
+      <h3>10.2 Revenue Lines</h3>
+      <table>
+        <thead><tr><th>Model</th><th>Description</th><th>Phase</th></tr></thead>
+        <tbody>
+          <tr><td>Subscription</td><td>Market-shadow maps, inference runs, monitoring, and reports.</td><td>1-3</td></tr>
+          <tr><td>API / Data</td><td>Market graph, source verification, and prediction-report endpoints.</td><td>2-4</td></tr>
+          <tr><td>Team Workspace</td><td>Collaboration, audit, permissioning, and report export.</td><td>3-5</td></tr>
+          <tr><td>Strategy Infrastructure</td><td>Structured strategies with mandates, eligibility rules, risk budgets, and reporting.</td><td>4-5</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page">
+      <p class="eyebrow">11 / Compliance Boundary</p>
+      <h2>Data, Audit, and Compliance Boundary</h2>
+      <p>
+        Causeway should be designed as workflow software, a market intelligence system, and a user-governed decision tool. It should not be framed as a return-guaranteeing system or default autonomous trader.
+      </p>
+      <ul>
+        <li>No AI output should be framed as investment advice.</li>
+        <li>No prediction, strategy, or market outcome should be guaranteed.</li>
+        <li>Simulation, preview, and real action must remain clearly distinct.</li>
+        <li>Delegated execution requires explicit permission, scope, budget, expiry, and revocation.</li>
+      </ul>
+    </section>
+
+    <section>
+      <p class="eyebrow">12 / Conclusion</p>
+      <h2>Risks and Conclusion</h2>
+      <table>
+        <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+        <tbody>
+          <tr><td>False or stale information</td><td>Authority-source verification and source trails.</td></tr>
+          <tr><td>AI hallucination</td><td>Candidate-set constraints and structured output validation.</td></tr>
+          <tr><td>Insufficient liquidity</td><td>Fresh book checks and preview limits.</td></tr>
+          <tr><td>Over-automation</td><td>Human confirmation by default and bounded delegation.</td></tr>
+          <tr><td>Regulatory uncertainty</td><td>Clear disclaimers, configurable capabilities, and jurisdiction-aware deployment.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Causeway's value is not merely faster trading. It is a trustworthy intelligence infrastructure for prediction markets: market-data first, reasoning-visible, source-verifiable, simulation-aware, and user governed.
+      </p>
+      <div class="callout">
+        <strong>Long-term vision:</strong> Causeway evolves from a market reasoning tool into a swarm intelligence prediction engine. A user seeds an event; the system simulates possible worlds, organizes agent consensus and conflict, and outputs a professional prediction report.
+      </div>
+      <div class="disclaimer">
+        Copyright © 2026 Causeway. This document is a product and technical-economic whitepaper draft. It is not investment advice, legal advice, brokerage material, or a promise of return.
+      </div>
+    </section>
+  </body>
+</html>
