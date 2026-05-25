@@ -8,8 +8,51 @@
       content="Causeway connects real-world information, prediction-market structure, and user-governed execution into auditable infrastructure."
     />
     <title>Causeway | Prediction Market Infrastructure</title>
-    <script type="module" crossorigin src="/assets/index-BW6N43Fo-e1f3f38.js"></script>
+    <script type="module" crossorigin src="/assets/index-BW6N43Fo-social.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-C87lX4sI.css">
+    <style>
+      .site-footer {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 28px;
+      }
+
+      .site-footer .footer-links {
+        align-items: center;
+      }
+
+      .site-footer .social-links {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .site-footer .social-icon {
+        display: inline-grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 999px;
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 11px;
+        font-weight: 850;
+        line-height: 1;
+      }
+
+      .site-footer .social-icon svg {
+        width: 15px;
+        height: 15px;
+        fill: currentColor;
+      }
+
+      @media (max-width: 700px) {
+        .site-footer {
+          grid-template-columns: 1fr;
+          justify-items: center;
+        }
+      }
+    </style>
     <script type="module">
       const wireAppLinks = () => {
         document.querySelectorAll('a.nav-cta, .hero .actions .button.primary').forEach((link) => {
