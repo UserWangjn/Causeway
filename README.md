@@ -17,26 +17,27 @@ ARC is the trust and payment rail in this architecture. Causeway uses ARC for ve
   <img src="public/assets/causeway-swarm-prediction-engine-concept.png" alt="Causeway ARC proof, market graph, and agent service overview" width="100%" />
 </p>
 
-Causeway keeps ARC proof traces, signal records, market graph exploration, and agent-service access visible in one review surface.
+Causeway keeps ARC proof traces, signal records, market graph exploration, and agent-service access visible in one interface.
 
 ## ARC in Causeway
 
-The whitepaper and the product both point to the same operating model:
+Causeway uses a clear split of responsibilities:
 
 - ARC is the audit and payment substrate for Causeway.
 - Polymarket is still the market data and trade execution venue.
 - Causeway is the orchestration layer that turns market structure, AI reasoning, and user review into tradable intelligence.
+- x402-style services can use ARC as the settlement rail as the service layer expands.
 
-In practice, that means:
+More concretely:
 
-- `Implemented now`: Arc USDC payment intents and backend verification for premium membership flows.
-- `Designed for`: reasoning records, signal history, and stronger auditability when a run needs an ARC-backed record.
-- `Future direction`: x402-style agent, data, verification, and report services settled through ARC.
-- `Default boundary`: user signatures and user review stay in control; ARC does not replace Polymarket order flow.
+- `Premium payments`: Arc USDC payment intents and backend verification unlock premium capability without changing Polymarket order flow.
+- `Review records`: inference runs preserve structured reasoning context so signal quality and decision paths can be reviewed over time.
+- `Service settlement`: data, verification, and specialized agent services can settle through ARC as the product grows.
+- `Execution boundary`: user signatures and user review stay in control; ARC does not replace Polymarket trade execution.
 
 ## Product Principles
 
-These are the core ideas repeated across the README and whitepaper:
+Causeway is built on three product principles:
 
 - `Market-native`: Causeway models real events, markets, outcomes, liquidity, and rules instead of treating a market as plain text.
 - `Reasoning-visible`: AI output is expected to preserve assumptions, confidence, risk flags, and the path from market data to a recommendation.
@@ -59,15 +60,15 @@ These are the core ideas repeated across the README and whitepaper:
 
 From one root market, Causeway expands related events, outcomes, and causal links into a market network that can be reviewed before action.
 
-## Whitepaper Alignment
+## Whitepaper Themes
 
-The whitepaper has moved beyond a static PDF and now also lives as chaptered docs under `/docs/`. Its ARC-related emphasis is:
+The whitepaper is available both as a PDF and as chaptered docs under `/docs/`. It focuses on three ARC themes:
 
 - `Arc Proof and Signal Track Record`: prediction-market reasoning should be reviewable before outcomes resolve.
 - `Arc USDC Economy`: premium capabilities and verifiable payments should use a stablecoin-native payment rail.
-- `x402 Agent Service Layer`: future data, verification, and specialized-agent calls should use machine-readable paid access, not trading execution.
+- `x402 Agent Service Layer`: data, verification, and specialized-agent calls should use machine-readable paid access, not trading execution.
 
-This README stays implementation-oriented, while the whitepaper explains the broader product thesis and long-term shape.
+Together, these themes define how Causeway combines market intelligence, reviewable reasoning, and verifiable payment rails.
 
 ## Repository Layout
 
